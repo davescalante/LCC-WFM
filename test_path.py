@@ -137,6 +137,23 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path stem
+def test_file_has_stem():
+    from pathlib import Path
+    stem = Path(os.path.join(PATH, "test_path.py")).stem
+    assert stem, "File has no stem"
+
+def test_file_stem_is_correct():
+    from pathlib import Path
+    stem = Path(os.path.join(PATH, "test_path.py")).stem
+    assert stem == "test_path", f"Expected 'test_path', got: {stem}"
+
+def test_file_stem_has_no_spaces():
+    from pathlib import Path
+    stem = Path(os.path.join(PATH, "test_path.py")).stem
+    assert " " not in stem, f"Stem contains spaces: {stem}"
+
+
 # File path basename
 def test_path_has_basename():
     basename = os.path.basename(PATH)
