@@ -137,6 +137,23 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path normalization
+def test_path_is_normalized():
+    assert os.path.normpath(PATH) == PATH, f"Path is not normalized: {PATH}"
+
+def test_normalized_path_removes_double_slashes():
+    messy = "/Users/denisetijerina//Documents/LCC-WFM"
+    assert os.path.normpath(messy) == PATH, f"normpath did not clean double slashes: {messy}"
+
+def test_normalized_path_removes_dotdot():
+    messy = "/Users/denisetijerina/Documents/LCC-WFM/../LCC-WFM"
+    assert os.path.normpath(messy) == PATH, f"normpath did not resolve '..': {messy}"
+
+def test_normalized_path_removes_dot():
+    messy = "/Users/denisetijerina/Documents/./LCC-WFM"
+    assert os.path.normpath(messy) == PATH, f"normpath did not resolve '.': {messy}"
+
+
 # File path resolution
 def test_path_resolves_to_itself():
     from pathlib import Path
