@@ -137,6 +137,20 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path depth
+def test_path_depth_is_positive():
+    parts = [p for p in PATH.split(os.sep) if p]
+    assert len(parts) > 0, f"Path has no depth: {PATH}"
+
+def test_path_depth_within_limit():
+    parts = [p for p in PATH.split(os.sep) if p]
+    assert len(parts) <= 20, f"Path is too deep ({len(parts)} levels): {PATH}"
+
+def test_path_depth_is_expected():
+    parts = [p for p in PATH.split(os.sep) if p]
+    assert len(parts) == 4, f"Expected depth of 4, got {len(parts)}: {PATH}"
+
+
 # File path separator
 def test_path_uses_correct_separator():
     assert os.sep == "/", f"Expected '/' separator on this OS, got: {os.sep}"
