@@ -137,6 +137,20 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path basename
+def test_path_has_basename():
+    basename = os.path.basename(PATH)
+    assert basename, f"Path has no basename: {PATH}"
+
+def test_path_basename_is_correct():
+    basename = os.path.basename(PATH)
+    assert basename == "LCC-WFM", f"Expected 'LCC-WFM', got: {basename}"
+
+def test_path_basename_has_no_spaces():
+    basename = os.path.basename(PATH)
+    assert " " not in basename, f"Basename contains spaces: {basename}"
+
+
 # File path root directory
 def test_path_has_root():
     root = os.path.splitdrive(PATH)[1][0] if os.path.splitdrive(PATH)[0] else PATH[0]
