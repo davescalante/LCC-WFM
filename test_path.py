@@ -137,6 +137,24 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path comparison
+def test_path_equals_itself():
+    from pathlib import Path
+    assert Path(PATH) == Path(PATH), "Path does not equal itself"
+
+def test_path_equals_string_constructed_path():
+    from pathlib import Path
+    assert Path(PATH) == Path("/Users/denisetijerina/Documents/LCC-WFM"), "Path does not equal equivalent path"
+
+def test_path_not_equal_to_parent():
+    from pathlib import Path
+    assert Path(PATH) != Path(PATH).parent, "Path should not equal its parent"
+
+def test_path_not_equal_to_different_path():
+    from pathlib import Path
+    assert Path(PATH) != Path("/tmp"), "Path should not equal /tmp"
+
+
 # File path string representation
 def test_path_str_is_string():
     from pathlib import Path
