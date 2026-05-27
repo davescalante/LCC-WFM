@@ -137,6 +137,26 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File line count
+def test_file_has_lines():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+    assert len(lines) > 0, f"File has no lines: {filepath}"
+
+def test_file_line_count_within_limit():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+    assert len(lines) <= 1000, f"File exceeds 1000 lines: {len(lines)}"
+
+def test_file_has_no_blank_only_lines_at_end():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        content = f.read()
+    assert not content.endswith("\n\n"), f"File ends with multiple blank lines: {filepath}"
+
+
 # File encoding
 def test_file_is_utf8_encoded():
     import codecs
