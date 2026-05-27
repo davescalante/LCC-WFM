@@ -113,6 +113,18 @@ def test_file_modified_after_created():
     assert mtime >= birthtime, f"File modification date is before creation date: {filepath}"
 
 
+# File extension
+def test_file_has_extension():
+    filepath = os.path.join(PATH, "test_path.py")
+    _, ext = os.path.splitext(filepath)
+    assert ext, f"File has no extension: {filepath}"
+
+def test_file_has_correct_extension():
+    filepath = os.path.join(PATH, "test_path.py")
+    _, ext = os.path.splitext(filepath)
+    assert ext == ".py", f"Expected .py extension, got: {ext}"
+
+
 # File size
 def test_directory_size_within_limit():
     total = sum(
