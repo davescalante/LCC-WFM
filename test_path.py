@@ -137,6 +137,25 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path resolution
+def test_path_resolves_to_itself():
+    from pathlib import Path
+    assert Path(PATH).resolve() == Path(PATH), "Path does not resolve to itself"
+
+def test_resolved_path_is_absolute():
+    from pathlib import Path
+    assert Path(PATH).resolve().is_absolute(), "Resolved path is not absolute"
+
+def test_resolved_path_has_no_dotdot():
+    from pathlib import Path
+    assert ".." not in str(Path(PATH).resolve()), "Resolved path contains '..'"
+
+def test_resolved_path_has_no_dot():
+    from pathlib import Path
+    parts = Path(PATH).resolve().parts
+    assert "." not in parts, "Resolved path contains '.'"
+
+
 # File path comparison
 def test_path_equals_itself():
     from pathlib import Path
