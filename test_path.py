@@ -113,6 +113,23 @@ def test_file_modified_after_created():
     assert mtime >= birthtime, f"File modification date is before creation date: {filepath}"
 
 
+# File name
+def test_file_has_name():
+    filepath = os.path.join(PATH, "test_path.py")
+    name = os.path.basename(filepath)
+    assert name, f"File has no name: {filepath}"
+
+def test_file_has_correct_name():
+    filepath = os.path.join(PATH, "test_path.py")
+    name = os.path.basename(filepath)
+    assert name == "test_path.py", f"Expected test_path.py, got: {name}"
+
+def test_file_name_has_no_spaces():
+    filepath = os.path.join(PATH, "test_path.py")
+    name = os.path.basename(filepath)
+    assert " " not in name, f"File name contains spaces: {name}"
+
+
 # File extension
 def test_file_has_extension():
     filepath = os.path.join(PATH, "test_path.py")
