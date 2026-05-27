@@ -137,6 +137,20 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path parent directory
+def test_parent_directory_exists():
+    parent = os.path.dirname(PATH)
+    assert os.path.exists(parent), f"Parent directory does not exist: {parent}"
+
+def test_parent_directory_is_correct():
+    parent = os.path.dirname(PATH)
+    assert parent == "/Users/denisetijerina/Documents", f"Unexpected parent directory: {parent}"
+
+def test_parent_directory_is_directory():
+    parent = os.path.dirname(PATH)
+    assert os.path.isdir(parent), f"Parent is not a directory: {parent}"
+
+
 # File path depth
 def test_path_depth_is_positive():
     parts = [p for p in PATH.split(os.sep) if p]
