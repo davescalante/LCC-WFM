@@ -137,6 +137,18 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path drive
+def test_path_drive_is_empty_on_macos():
+    from pathlib import Path
+    drive = Path(PATH).drive
+    assert drive == "", f"Expected no drive on macOS, got: {drive}"
+
+def test_path_splitdrive_returns_expected():
+    drive, tail = os.path.splitdrive(PATH)
+    assert drive == "", f"Expected empty drive on macOS, got: {drive}"
+    assert tail == PATH, f"Expected tail to be full path, got: {tail}"
+
+
 # File path suffix
 def test_file_has_suffix():
     from pathlib import Path
