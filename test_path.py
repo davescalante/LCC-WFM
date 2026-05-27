@@ -137,6 +137,28 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path parts
+def test_path_has_parts():
+    from pathlib import Path
+    parts = Path(PATH).parts
+    assert len(parts) > 0, f"Path has no parts: {PATH}"
+
+def test_path_parts_are_correct():
+    from pathlib import Path
+    parts = Path(PATH).parts
+    assert parts == ("/", "Users", "denisetijerina", "Documents", "LCC-WFM"), f"Unexpected parts: {parts}"
+
+def test_path_parts_first_is_root():
+    from pathlib import Path
+    parts = Path(PATH).parts
+    assert parts[0] == "/", f"First part is not root: {parts[0]}"
+
+def test_path_parts_last_is_basename():
+    from pathlib import Path
+    parts = Path(PATH).parts
+    assert parts[-1] == "LCC-WFM", f"Last part is not basename: {parts[-1]}"
+
+
 # File path anchor
 def test_path_has_anchor():
     from pathlib import Path
