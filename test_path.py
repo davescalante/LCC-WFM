@@ -137,6 +137,23 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path suffix
+def test_file_has_suffix():
+    from pathlib import Path
+    suffix = Path(os.path.join(PATH, "test_path.py")).suffix
+    assert suffix, "File has no suffix"
+
+def test_file_suffix_is_correct():
+    from pathlib import Path
+    suffix = Path(os.path.join(PATH, "test_path.py")).suffix
+    assert suffix == ".py", f"Expected '.py', got: {suffix}"
+
+def test_file_suffix_starts_with_dot():
+    from pathlib import Path
+    suffix = Path(os.path.join(PATH, "test_path.py")).suffix
+    assert suffix.startswith("."), f"Suffix does not start with a dot: {suffix}"
+
+
 # File path stem
 def test_file_has_stem():
     from pathlib import Path
