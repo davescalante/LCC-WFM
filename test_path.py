@@ -137,6 +137,20 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File word count
+def test_file_has_words():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        words = f.read().split()
+    assert len(words) > 0, f"File has no words: {filepath}"
+
+def test_file_word_count_within_limit():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        words = f.read().split()
+    assert len(words) <= 10000, f"File exceeds 10000 words: {len(words)}"
+
+
 # File line count
 def test_file_has_lines():
     filepath = os.path.join(PATH, "test_path.py")
