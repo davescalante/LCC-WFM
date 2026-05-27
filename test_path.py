@@ -137,6 +137,18 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path root directory
+def test_path_has_root():
+    root = os.path.splitdrive(PATH)[1][0] if os.path.splitdrive(PATH)[0] else PATH[0]
+    assert root == "/", f"Path does not start from root: {PATH}"
+
+def test_root_directory_exists():
+    assert os.path.exists("/"), "Root directory does not exist"
+
+def test_root_directory_is_directory():
+    assert os.path.isdir("/"), "Root is not a directory"
+
+
 # File path parent directory
 def test_parent_directory_exists():
     parent = os.path.dirname(PATH)
