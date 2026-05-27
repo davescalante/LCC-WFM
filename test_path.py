@@ -113,6 +113,30 @@ def test_file_modified_after_created():
     assert mtime >= birthtime, f"File modification date is before creation date: {filepath}"
 
 
+# File content
+def test_file_is_not_empty():
+    filepath = os.path.join(PATH, "test_path.py")
+    assert os.path.getsize(filepath) > 0, f"File is empty: {filepath}"
+
+def test_file_contains_expected_content():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        content = f.read()
+    assert "def test_" in content, "File does not contain any test functions"
+
+def test_file_is_valid_utf8():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r", encoding="utf-8") as f:
+        f.read()
+
+def test_file_is_valid_python():
+    import ast
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        source = f.read()
+    ast.parse(source)
+
+
 # File name
 def test_file_has_name():
     filepath = os.path.join(PATH, "test_path.py")
