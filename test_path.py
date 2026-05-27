@@ -137,6 +137,23 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path anchor
+def test_path_has_anchor():
+    from pathlib import Path
+    anchor = Path(PATH).anchor
+    assert anchor, f"Path has no anchor: {PATH}"
+
+def test_path_anchor_is_correct():
+    from pathlib import Path
+    anchor = Path(PATH).anchor
+    assert anchor == "/", f"Expected '/' anchor on macOS, got: {anchor}"
+
+def test_path_starts_with_anchor():
+    from pathlib import Path
+    p = Path(PATH)
+    assert PATH.startswith(p.anchor), f"Path does not start with its anchor: {PATH}"
+
+
 # File path drive
 def test_path_drive_is_empty_on_macos():
     from pathlib import Path
