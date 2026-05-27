@@ -137,6 +137,20 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File character count
+def test_file_has_characters():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        content = f.read()
+    assert len(content) > 0, f"File has no characters: {filepath}"
+
+def test_file_character_count_within_limit():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "r") as f:
+        content = f.read()
+    assert len(content) <= 100000, f"File exceeds 100,000 characters: {len(content)}"
+
+
 # File word count
 def test_file_has_words():
     filepath = os.path.join(PATH, "test_path.py")
