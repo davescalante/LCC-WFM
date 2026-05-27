@@ -92,6 +92,27 @@ def test_file_creation_date_is_recent():
     assert age_days < 365, f"File is older than 1 year: {filepath}"
 
 
+# File modification date
+def test_file_modification_date_is_in_the_past():
+    filepath = os.path.join(PATH, "test_path.py")
+    import time
+    mtime = os.path.getmtime(filepath)
+    assert mtime < time.time(), f"File modification date is in the future: {filepath}"
+
+def test_file_modification_date_is_recent():
+    filepath = os.path.join(PATH, "test_path.py")
+    import time
+    mtime = os.path.getmtime(filepath)
+    age_days = (time.time() - mtime) / 86400
+    assert age_days < 365, f"File was not modified in the last year: {filepath}"
+
+def test_file_modified_after_created():
+    filepath = os.path.join(PATH, "test_path.py")
+    birthtime = os.stat(filepath).st_birthtime  # macOS actual creation time
+    mtime = os.path.getmtime(filepath)
+    assert mtime >= birthtime, f"File modification date is before creation date: {filepath}"
+
+
 # File size
 def test_directory_size_within_limit():
     total = sum(
