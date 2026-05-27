@@ -62,6 +62,21 @@ def test_path_owned_by_current_user():
     assert stat.st_uid == os.getuid(), "Path is not owned by the current user"
 
 
+# File permissions
+def test_file_is_readable():
+    filepath = os.path.join(PATH, "test_path.py")
+    assert os.access(filepath, os.R_OK), f"File is not readable: {filepath}"
+
+def test_file_is_writable():
+    filepath = os.path.join(PATH, "test_path.py")
+    assert os.access(filepath, os.W_OK), f"File is not writable: {filepath}"
+
+def test_file_permissions_not_world_writable():
+    filepath = os.path.join(PATH, "test_path.py")
+    mode = os.stat(filepath).st_mode
+    assert not (mode & 0o002), f"File is world-writable: {filepath}"
+
+
 # File size
 def test_directory_size_within_limit():
     total = sum(
