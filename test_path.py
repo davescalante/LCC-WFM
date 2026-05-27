@@ -137,6 +137,24 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path string representation
+def test_path_str_is_string():
+    from pathlib import Path
+    assert isinstance(str(Path(PATH)), str), "Path string representation is not a string"
+
+def test_path_str_is_correct():
+    from pathlib import Path
+    assert str(Path(PATH)) == PATH, f"Path string mismatch: {str(Path(PATH))}"
+
+def test_path_repr_contains_path():
+    from pathlib import Path
+    assert PATH in repr(Path(PATH)), f"Path not found in repr: {repr(Path(PATH))}"
+
+def test_path_str_has_no_trailing_slash():
+    from pathlib import Path
+    assert not str(Path(PATH)).endswith("/"), f"Path has trailing slash: {PATH}"
+
+
 # File path parts
 def test_path_has_parts():
     from pathlib import Path
