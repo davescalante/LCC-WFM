@@ -137,6 +137,29 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File encoding
+def test_file_is_utf8_encoded():
+    import codecs
+    filepath = os.path.join(PATH, "test_path.py")
+    try:
+        with codecs.open(filepath, encoding="utf-8", errors="strict") as f:
+            f.read()
+    except UnicodeDecodeError:
+        assert False, f"File is not UTF-8 encoded: {filepath}"
+
+def test_file_has_no_null_bytes():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "rb") as f:
+        content = f.read()
+    assert b"\x00" not in content, f"File contains null bytes: {filepath}"
+
+def test_file_has_consistent_line_endings():
+    filepath = os.path.join(PATH, "test_path.py")
+    with open(filepath, "rb") as f:
+        content = f.read()
+    assert b"\r\n" not in content, f"File contains Windows-style line endings: {filepath}"
+
+
 # File name
 def test_file_has_name():
     filepath = os.path.join(PATH, "test_path.py")
