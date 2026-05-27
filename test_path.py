@@ -137,6 +137,19 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path separator
+def test_path_uses_correct_separator():
+    assert os.sep == "/", f"Expected '/' separator on this OS, got: {os.sep}"
+
+def test_path_contains_no_backslashes():
+    assert "\\" not in PATH, f"Path contains backslashes: {PATH}"
+
+def test_path_components_are_non_empty():
+    parts = PATH.split(os.sep)
+    non_empty = [p for p in parts if p]
+    assert len(non_empty) > 0, f"Path has no valid components: {PATH}"
+
+
 # File character count
 def test_file_has_characters():
     filepath = os.path.join(PATH, "test_path.py")
