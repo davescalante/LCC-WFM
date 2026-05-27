@@ -60,3 +60,13 @@ def test_expected_file_exists():
 def test_path_owned_by_current_user():
     stat = os.stat(PATH)
     assert stat.st_uid == os.getuid(), "Path is not owned by the current user"
+
+
+# File size
+def test_directory_size_within_limit():
+    total = sum(
+        os.path.getsize(os.path.join(dirpath, f))
+        for dirpath, _, files in os.walk(PATH)
+        for f in files
+    )
+    assert total < 1 * 1024 ** 3, f"Directory exceeds 1GB: {total} bytes"
