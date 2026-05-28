@@ -43,7 +43,7 @@
         <tbody>
             {% for agent in agents %}
             <tr>
-                <td><a href="{% url 'agent_detail' agent.pk %}">{{ agent.user.get_full_name }}</a></td>
+                <td><a href="{% url 'agent_detail' agent.pk %}">{{ agent.agent_name|default:agent.user.get_full_name }}</a></td>
                 <td><span class="badge badge-blue">{{ agent.get_role_display }}</span></td>
                 <td>{{ agent.get_role_type_display|default:"—" }}</td>
                 <td style="color:#555;font-size:13px;">{{ agent.supervisor|default:"—" }}</td>

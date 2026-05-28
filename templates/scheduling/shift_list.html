@@ -9,13 +9,36 @@
 
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 
+<!-- Supervisor filter -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <form method="get" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Filter by Supervisor:</label>
+        <select name="supervisor" onchange="this.form.submit()"
+            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+            <option value="">All</option>
+            {% for sup in supervisors %}
+            <option value="{{ sup.pk }}" {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>
+                {{ sup }}
+            </option>
+            {% endfor %}
+        </select>
+        {% if selected_supervisor %}
+        <a href="?week_start={{ week_start|date:'Y-m-d' }}&supervisor=" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear</a>
+        {% endif %}
+    </form>
+</div>
+
 <!-- Week navigation -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <a href="?week_start={{ prev_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+           class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
-        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+           class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
         <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+            {% if selected_supervisor %}<input type="hidden" name="supervisor" value="{{ selected_supervisor }}">{% endif %}
             <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"

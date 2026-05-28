@@ -210,7 +210,22 @@ def shift_list(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
 
+    supervisors = Agent.objects.filter(
+        role_type='supervisor', status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    if 'supervisor' in request.GET:
+        supervisor_id = request.GET.get('supervisor', '')
+        request.session['shift_supervisor_filter'] = supervisor_id
+    else:
+        supervisor_id = request.session.get('shift_supervisor_filter', '')
+
     agents = Agent.objects.filter(status='active').select_related('user').order_by('user__last_name', 'user__first_name')
+    if supervisor_id:
+        try:
+            agents = agents.filter(supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
 
     prev_week_start = week_start - timedelta(days=7)
     prev_week_dates = [prev_week_start + timedelta(days=i) for i in range(7)]
@@ -260,6 +275,8 @@ def shift_list(request):
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'has_prev_week': has_prev_week,
         'has_this_week': has_this_week,
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
     })
 
 
