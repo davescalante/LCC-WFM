@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% block title %} - Payroll Export{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Payroll Export</h1>
+    <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Back to Adherence</a>
+</div>
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
+                onchange="this.form.submit()">
+        </form>
+    </div>
+</div>
+
+<form method="post">
+{% csrf_token %}
+<input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="min-width:900px;border-collapse:collapse;">
+    <thead>
+        <tr style="background:#f0f4f8;">
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Legal Name</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Agent Name</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Five9 Username</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Sched Hrs</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Login Hrs</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Coded Hrs</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Total Hrs</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Commission<br>Deduction</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Bonus</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 12px;font-size:13px;">{{ row.agent.user.get_full_name }}</td>
+            <td style="padding:10px 12px;font-size:13px;">{{ row.agent.agent_name|default:"—" }}</td>
+            <td style="padding:10px 12px;font-size:13px;color:#555;">{{ row.agent.five9_username|default:"—" }}</td>
+            <td style="padding:10px 12px;text-align:center;font-size:13px;">{{ row.sched_hours }}</td>
+            <td style="padding:10px 12px;text-align:center;font-size:13px;
+                {% if row.actual_hours and row.sched_hours %}
+                    {% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:600;
+                    {% else %}color:#e67e22;font-weight:600;{% endif %}
+                {% endif %}">
+                {{ row.actual_hours|default:"0.00" }}
+            </td>
+            <td style="padding:10px 12px;text-align:center;font-size:13px;">{{ row.coded_hours|default:"0.00" }}</td>
+            <td style="padding:10px 12px;text-align:center;font-size:13px;font-weight:600;
+                {% if row.adjusted_total and row.sched_hours %}
+                    {% if row.adjusted_total >= row.sched_hours %}color:#27ae60;
+                    {% else %}color:#e67e22;{% endif %}
+                {% endif %}">
+                {{ row.adjusted_total|default:"0.00" }}
+            </td>
+            <td style="padding:8px 12px;text-align:center;">
+                <input type="number" name="deduction_{{ row.agent.pk }}"
+                    value="{{ row.commission_deduction }}"
+                    min="0" step="0.01"
+                    style="width:80px;text-align:center;padding:4px 6px;font-size:13px;border:1px solid #ddd;border-radius:4px;margin:0;">
+            </td>
+            <td style="padding:10px 12px;text-align:center;">
+                {% if row.bonus == 'Yes' %}
+                    <span class="badge badge-green">Yes</span>
+                {% elif row.bonus == 'No' %}
+                    <span class="badge badge-red">No</span>
+                {% else %}
+                    <span style="color:#aaa;font-size:12px;">—</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="9" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div style="margin-top:16px;display:flex;gap:12px;align-items:center;">
+    <button type="submit" class="btn" style="background:#27ae60;color:white;font-size:15px;padding:10px 24px;">
+        &#8595; Save &amp; Download CSV
+    </button>
+    <span style="font-size:12px;color:#888;">Commission deductions are saved for this week. The CSV can be opened in Excel.</span>
+</div>
+</form>
+
+<div class="card" style="margin-top:20px;background:#f8f9fa;border:1px solid #e9ecef;">
+    <p style="font-size:13px;color:#666;margin:0;">
+        <strong>Export includes:</strong> Legal Name, Agent Name, Five9 Username, Scheduled Hours, Actual Login Hours (from Five9 as entered in the adherence sheet), Coded Non-System Hours, Adjusted Total Hours (login + coded), Commission Deduction, and Adherence Bonus eligibility (Yes/No). Ensure all adherence statuses and actual hours are entered before exporting.
+    </p>
+</div>
+{% endblock %}

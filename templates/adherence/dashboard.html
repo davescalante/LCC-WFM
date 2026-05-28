@@ -1,32 +1,170 @@
 {% extends 'base.html' %}
 {% block title %} - Adherence{% endblock %}
 {% block content %}
-<h1>Adherence — {{ today }}</h1>
-<div class="card">
-    <h2>Today's Adherence Log</h2>
-    <table>
-        <thead>
-            <tr><th>Agent</th><th>Scheduled</th><th>Actual</th><th>Status</th><th>Notes</th></tr>
-        </thead>
-        <tbody>
-            {% for record in records %}
-            <tr>
-                <td>{{ record.shift.agent.user.get_full_name }}</td>
-                <td>{{ record.shift.start_time }} - {{ record.shift.end_time }}</td>
-                <td>{{ record.actual_start|default:"-" }} - {{ record.actual_end|default:"-" }}</td>
-                <td>
-                    {% if record.status == 'on_time' %}<span class="badge badge-green">On Time</span>
-                    {% elif record.status == 'absent' %}<span class="badge badge-red">Absent</span>
-                    {% elif record.status == 'late' %}<span class="badge badge-yellow">Late</span>
-                    {% else %}<span class="badge badge-blue">{{ record.get_status_display }}</span>{% endif %}
-                </td>
-                <td>{{ record.notes }}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5" style="color:#888;">No adherence records for today.</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Adherence</h1>
+    <div style="display:flex;gap:10px;">
+        <a href="{% url 'codings_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">+ Codings</a>
+        <a href="{% url 'payroll_export' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#27ae60;color:white;">Payroll Export</a>
+    </div>
 </div>
-<a href="{% url 'log_adherence' %}" class="btn btn-primary">Log Adherence</a>
+
+{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+            <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
+                onchange="this.form.submit()">
+        </form>
+    </div>
+</div>
+
+<form method="post">
+{% csrf_token %}
+<input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="table-layout:auto;min-width:1100px;border-collapse:collapse;">
+    <thead>
+        <tr style="background:#f0f4f8;">
+            <th style="width:150px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+            {% for d in week_dates %}
+            <th style="min-width:110px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
+                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
+                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+            </th>
+            {% endfor %}
+            <!-- Totals headers -->
+            <th style="min-width:46px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:11px;color:#555;">Present</th>
+            <th style="min-width:46px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Absent</th>
+            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Sched<br>Hrs</th>
+            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Login<br>Hrs</th>
+            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Coded<br>Hrs</th>
+            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Total<br>Hrs</th>
+            <th style="min-width:50px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Bonus</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr style="border-bottom:1px solid #e8e8e8;">
+            <!-- Agent name cell -->
+            <td style="padding:8px 10px;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
+                <div style="font-size:13px;font-weight:600;line-height:1.3;">{{ row.agent }}</div>
+                {% if row.agent.five9_username %}
+                <div style="font-size:11px;color:#888;margin-top:2px;">{{ row.agent.five9_username }}</div>
+                {% endif %}
+            </td>
+
+            <!-- Day cells -->
+            {% for cell in row.cells %}
+            <td style="padding:4px 3px;vertical-align:top;text-align:center;background:{{ cell.color }};">
+                {% if cell.scheduled %}
+                <div style="font-size:10px;color:#777;margin-bottom:2px;white-space:nowrap;">
+                    {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
+                    {% else %}{{ cell.scheduled }}{% endif %}
+                </div>
+                {% endif %}
+                {% if not cell.is_off %}
+                <select name="{{ cell.key }}"
+                    style="width:100%;font-size:11px;padding:2px 2px;border:1px solid #ccc;border-radius:3px;background:transparent;"
+                    onchange="updateColor(this)">
+                    <option value="">—</option>
+                    {% for val, label in status_choices %}
+                    <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{{ val }}</option>
+                    {% endfor %}
+                </select>
+                <input type="number" name="{{ cell.hours_key }}"
+                    value="{{ cell.actual_hrs }}"
+                    min="0" max="24" step="0.25"
+                    placeholder="hrs"
+                    style="width:100%;font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:3px;margin-top:2px;background:transparent;">
+                {% endif %}
+            </td>
+            {% endfor %}
+
+            <!-- Totals -->
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;border-left:2px solid #ddd;font-size:13px;font-weight:600;color:#27ae60;">{{ row.total_present }}</td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:13px;font-weight:600;{% if row.total_absent > 0 %}color:#c0392b;{% else %}color:#aaa;{% endif %}">{{ row.total_absent }}</td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;color:#555;">{{ row.sched_hours }}</td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;
+                {% if row.actual_hours and row.sched_hours %}
+                    {% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:600;
+                    {% else %}color:#e67e22;font-weight:600;{% endif %}
+                {% else %}color:#555;{% endif %}">
+                {{ row.actual_hours|default:"—" }}
+            </td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;color:#555;">
+                {% if row.coded_hours %}{{ row.coded_hours }}{% else %}—{% endif %}
+            </td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;font-weight:600;
+                {% if row.adjusted_total and row.sched_hours %}
+                    {% if row.adjusted_total >= row.sched_hours %}color:#27ae60;
+                    {% else %}color:#e67e22;{% endif %}
+                {% else %}color:#555;{% endif %}">
+                {% if row.adjusted_total %}{{ row.adjusted_total }}{% else %}—{% endif %}
+            </td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;">
+                {% if row.bonus == 'Yes' %}
+                    <span class="badge badge-green">Yes</span>
+                {% elif row.bonus == 'No' %}
+                    <span class="badge badge-red">No</span>
+                {% else %}
+                    <span style="color:#aaa;font-size:12px;">—</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="16" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div style="margin-top:14px;display:flex;gap:12px;align-items:center;">
+    <button type="submit" class="btn btn-primary">Save Adherence</button>
+    <span style="font-size:12px;color:#888;">Changes save all agents for this week at once.</span>
+</div>
+</form>
+
+<!-- Status legend -->
+<div class="card" style="margin-top:20px;padding:14px 20px;">
+    <h3 style="font-size:13px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;">Status Codes</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:4px 20px;font-size:12px;color:#555;line-height:2;">
+        {% for val, label in status_choices %}
+        <span>
+            <strong style="background:#f0f4f8;padding:1px 6px;border-radius:3px;font-size:11px;">{{ val }}</strong>
+            &nbsp;{{ label }}
+        </span>
+        {% endfor %}
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:#888;border-top:1px solid #eee;padding-top:10px;">
+        <strong style="color:#27ae60;">Green</strong> = met scheduled hours &nbsp;|&nbsp;
+        <strong style="color:#e67e22;">Orange</strong> = short on hours &nbsp;|&nbsp;
+        <strong style="color:#c0392b;">Red</strong> = absence/NCNS &nbsp;|&nbsp;
+        Bonus = all scheduled days coded P / OT / MUT / VTO / P+VTO
+    </div>
+</div>
+
+<script>
+const STATUS_COLORS = {
+    'P':     '#e8f5e9', 'OT':    '#c8e6c9', 'MUT':   '#dcedc8',
+    'VTO':   '#f1f8e9', 'P+VTO': '#e8f5e9',
+    'T':     '#fff3e0', 'T+VTO': '#fff8e1',
+    'Absent':'#ffebee', 'NCNS':  '#ffcdd2',
+    'I':     '#fce4ec', 'Quit':  '#eeeeee', 'Baja':  '#eeeeee',
+    'V':     '#e3f2fd', 'IMSS':  '#e0f2f1',
+};
+function updateColor(sel) {
+    const td = sel.closest('td');
+    td.style.background = STATUS_COLORS[sel.value] || '#fff';
+}
+</script>
 {% endblock %}

@@ -1,15 +1,16 @@
 {% extends 'base.html' %}
 {% block title %} - Shifts{% endblock %}
 {% block content %}
+
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>Shifts</h1>
-    <a href="{% url 'shift_week' %}" class="btn btn-primary">+ Add Weekly Schedule</a>
+    <a href="{% url 'shift_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">+ Add / Edit Weekly Schedule</a>
 </div>
 
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 
-<!-- Week filter -->
-<div class="card" style="margin-bottom:20px;">
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
         <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
@@ -17,38 +18,68 @@
         <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
             <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
-                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
     </div>
 </div>
 
-<div class="card">
-    <table>
-        <thead>
-            <tr><th>User</th><th>Date</th><th>Day</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
-        </thead>
-        <tbody>
-            {% for shift in shifts %}
-            <tr>
-                <td>{{ shift.agent }}</td>
-                <td>{{ shift.date|date:"M d, Y" }}</td>
-                <td style="color:#888;font-size:13px;">{{ shift.date|date:"l" }}</td>
-                <td>{% if not shift.is_off %}{{ shift.start_time }}{% else %}—{% endif %}</td>
-                <td>{% if not shift.is_off %}{{ shift.end_time }}{% else %}—{% endif %}</td>
-                <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
-                <td>{{ shift.notes }}</td>
-                <td>
-                    <a href="{% url 'shift_edit' shift.pk %}" class="btn btn-primary" style="padding:4px 10px;font-size:12px;">Edit</a>
-                    <a href="{% url 'shift_delete' shift.pk %}" class="btn" style="padding:4px 10px;font-size:12px;background:#c0392b;color:white;">Delete</a>
-                </td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="8" style="color:#888;padding:20px;">
-                No shifts for this week. <a href="{% url 'shift_week' %}?week_start={{ week_start|date:'Y-m-d' }}">Add a weekly schedule.</a>
-            </td></tr>
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="table-layout:auto;min-width:900px;border-collapse:collapse;">
+    <thead>
+        <tr style="background:#f0f4f8;">
+            <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+            {% for d in week_dates %}
+            <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
+                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
+                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+            </th>
             {% endfor %}
-        </tbody>
-    </table>
+            <th style="width:100px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Edit</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr style="border-bottom:1px solid #e8e8e8;">
+            <td style="padding:10px 12px;font-weight:600;font-size:13px;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
+                <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
+                {% if row.agent.status == 'inactive' %}
+                <span class="badge badge-red" style="font-size:10px;margin-left:4px;">Inactive</span>
+                {% endif %}
+            </td>
+            {% for cell in row.cells %}
+            <td style="padding:6px 4px;text-align:center;vertical-align:middle;
+                {% if cell.shift %}
+                    {% if cell.shift.is_off %}background:#fafafa;{% else %}background:#f0fdf4;{% endif %}
+                {% endif %}">
+                {% if cell.shift %}
+                    {% if cell.shift.is_off %}
+                        <span style="font-size:12px;color:#aaa;font-weight:600;">OFF</span>
+                    {% else %}
+                        <div style="font-size:12px;font-weight:600;color:#1a7a40;white-space:nowrap;">
+                            {{ cell.shift.start_time|time:"H:i" }}–{{ cell.shift.end_time|time:"H:i" }}
+                        </div>
+                        {% if cell.shift.notes %}
+                        <div style="font-size:10px;color:#888;margin-top:2px;">{{ cell.shift.notes|truncatechars:20 }}</div>
+                        {% endif %}
+                    {% endif %}
+                    <a href="{% url 'shift_edit' cell.shift.pk %}" style="font-size:10px;color:#aaa;display:block;margin-top:2px;">edit</a>
+                {% else %}
+                    <span style="color:#ddd;font-size:12px;">—</span>
+                {% endif %}
+            </td>
+            {% endfor %}
+            <td style="padding:8px 10px;text-align:center;border-left:2px solid #eee;">
+                <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
+                   class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;">Edit Week</a>
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" style="padding:30px;color:#888;text-align:center;">
+            No agents found.
+        </td></tr>
+        {% endfor %}
+    </tbody>
+</table>
 </div>
 {% endblock %}

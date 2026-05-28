@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+{% block title %} - Codings{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Codings — Non-System Time</h1>
+    <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Back to Adherence</a>
+</div>
+
+{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
+                onchange="this.form.submit()">
+        </form>
+    </div>
+</div>
+
+<!-- Add coding form -->
+<div class="card" style="margin-bottom:20px;">
+    <h2 style="margin-bottom:16px;">Add Non-System Time Entry</h2>
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        <input type="hidden" name="action" value="add">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 2fr auto;gap:12px;align-items:end;">
+            <div>
+                <label>Agent</label>
+                <select name="agent_id" required style="margin:0;">
+                    <option value="">— Select agent —</option>
+                    {% for agent in agents %}
+                    <option value="{{ agent.pk }}">{{ agent }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Date</label>
+                <input type="date" name="coding_date" required
+                    min="{{ week_start|date:'Y-m-d' }}" max="{{ week_end|date:'Y-m-d' }}"
+                    value="{{ week_start|date:'Y-m-d' }}" style="margin:0;">
+            </div>
+            <div>
+                <label>Start Time</label>
+                <input type="time" name="start_time" required style="margin:0;">
+            </div>
+            <div>
+                <label>End Time</label>
+                <input type="time" name="end_time" required style="margin:0;">
+            </div>
+            <div>
+                <label>Notes (e.g. Team meeting, Training, Outage)</label>
+                <input type="text" name="notes" placeholder="Required — describe the activity" style="margin:0;">
+            </div>
+            <div>
+                <button type="submit" class="btn btn-primary" style="white-space:nowrap;">Add Entry</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- Coding entries table -->
+<div class="card">
+    <h2 style="margin-bottom:12px;">Week of {{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Agent</th>
+                <th>Date</th>
+                <th>Start</th>
+                <th>End</th>
+                <th style="text-align:center;">Total Time</th>
+                <th>Notes</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for coding in codings %}
+            <tr>
+                <td style="font-weight:600;">{{ coding.agent }}</td>
+                <td>{{ coding.date|date:"D, M d" }}</td>
+                <td>{{ coding.start_time|time:"H:i" }}</td>
+                <td>{{ coding.end_time|time:"H:i" }}</td>
+                <td style="text-align:center;">
+                    <strong>{{ coding.total_minutes }} min</strong>
+                    <span style="color:#888;font-size:12px;">({{ coding.total_hours }}h)</span>
+                </td>
+                <td style="color:#555;font-size:13px;">{{ coding.notes|default:"—" }}</td>
+                <td>
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Delete this entry?')">
+                        {% csrf_token %}
+                        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="coding_id" value="{{ coding.pk }}">
+                        <button type="submit" class="btn" style="background:#c0392b;color:white;padding:4px 10px;font-size:12px;">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" style="color:#888;padding:24px;text-align:center;">
+                No codings for this week yet. Add entries above for meetings, training, or outages not captured in Five9.
+            </td></tr>
+            {% endfor %}
+        </tbody>
+        {% if codings %}
+        <tfoot>
+            <tr style="background:#f0f4f8;">
+                <td colspan="4" style="font-weight:600;padding:10px 12px;">Totals for this week</td>
+                <td style="text-align:center;font-weight:700;">
+                    {% with total_min=0 %}
+                    <!-- computed per-agent summaries shown on adherence dashboard -->
+                    {% endwith %}
+                </td>
+                <td colspan="2"></td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+</div>
+
+<div class="card" style="background:#f8f9fa;border:1px solid #e9ecef;">
+    <p style="font-size:13px;color:#666;margin:0;">
+        <strong>What is a coding?</strong> A coding entry logs time an agent was working or occupied but not captured by Five9 — for example: team meetings, training sessions, or system outages when agents couldn't log in. This time is added to their actual hours when calculating totals and is included in the payroll export.
+    </p>
+</div>
+{% endblock %}

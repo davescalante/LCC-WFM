@@ -106,13 +106,27 @@ def shift_list(request):
     except ValueError:
         week_start = default_week_start
 
-    week_end = week_start + timedelta(days=6)
-    shifts = Shift.objects.filter(
-        date__gte=week_start, date__lte=week_end
-    ).select_related('agent__user').order_by('date', 'start_time')
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    week_end = week_dates[-1]
+
+    agents = Agent.objects.select_related('user').order_by('user__last_name', 'user__first_name')
+
+    shifts_qs = Shift.objects.filter(
+        date__in=week_dates, agent__in=agents
+    ).select_related('agent__user')
+    shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
+
+    rows = []
+    for agent in agents:
+        cells = []
+        for day_date in week_dates:
+            shift = shift_map.get((agent.pk, day_date))
+            cells.append({'date': day_date, 'shift': shift})
+        rows.append({'agent': agent, 'cells': cells})
 
     return render(request, 'scheduling/shift_list.html', {
-        'shifts': shifts,
+        'rows': rows,
+        'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
