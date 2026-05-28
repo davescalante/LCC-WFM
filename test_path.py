@@ -137,6 +137,34 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path hardlink
+def test_hardlink_can_be_created():
+    src = os.path.join(PATH, "test_path.py")
+    hardlink = os.path.join(PATH, ".test_hardlink")
+    os.link(src, hardlink)
+    assert os.path.exists(hardlink), "Hardlink was not created"
+    os.remove(hardlink)
+
+def test_hardlink_shares_inode():
+    src = os.path.join(PATH, "test_path.py")
+    hardlink = os.path.join(PATH, ".test_hardlink")
+    os.link(src, hardlink)
+    assert os.stat(src).st_ino == os.stat(hardlink).st_ino, "Hardlink does not share inode"
+    os.remove(hardlink)
+
+def test_hardlink_is_not_symlink():
+    from pathlib import Path
+    src = os.path.join(PATH, "test_path.py")
+    hardlink = os.path.join(PATH, ".test_hardlink")
+    os.link(src, hardlink)
+    assert not Path(hardlink).is_symlink(), "Hardlink should not be a symlink"
+    os.remove(hardlink)
+
+def test_file_link_count():
+    src = os.path.join(PATH, "test_path.py")
+    assert os.stat(src).st_nlink >= 1, "File should have at least 1 link"
+
+
 # File path symlink
 def test_path_is_not_symlink():
     from pathlib import Path
