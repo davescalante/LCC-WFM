@@ -298,7 +298,6 @@ def save_adherence_cell(request):
     agent_id = data.get('agent_id')
     date_str = data.get('date')
     status = data.get('status', '')
-    hours_str = data.get('actual_hours', '')
 
     try:
         day_date = date.fromisoformat(date_str)
@@ -306,16 +305,18 @@ def save_adherence_cell(request):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
 
     agent = get_object_or_404(Agent, pk=agent_id)
-    actual_hrs = _parse_hours_input(hours_str)
 
-    if status or actual_hrs is not None:
+    if status:
         AdherenceRecord.objects.update_or_create(
             agent=agent,
             date=day_date,
-            defaults={'status': status, 'actual_hours': actual_hrs},
+            defaults={'status': status},
         )
     else:
-        AdherenceRecord.objects.filter(agent=agent, date=day_date).delete()
+        # Only delete if there are no system-written hours to preserve
+        AdherenceRecord.objects.filter(
+            agent=agent, date=day_date, actual_hours__isnull=True
+        ).delete()
 
     return JsonResponse({'ok': True})
 

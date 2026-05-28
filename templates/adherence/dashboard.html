@@ -81,11 +81,9 @@
                     <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{{ val }}</option>
                     {% endfor %}
                 </select>
-                <input type="text" onblur="onHoursBlur(this)"
-                    value="{{ cell.actual_hrs|to_hhmmss }}"
-                    placeholder="HH:MM:SS"
-                    maxlength="8"
-                    style="width:100%;font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:3px;margin-top:2px;background:transparent;font-family:monospace;">
+                <div style="font-size:11px;padding:2px 4px;margin-top:2px;font-family:monospace;color:#555;min-height:18px;">
+                    {{ cell.actual_hrs|to_hhmmss }}
+                </div>
                 {% if cell.missing_hrs %}
                 <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:2px;">−{{ cell.missing_hrs|to_hhmm }} short</div>
                 {% endif %}
@@ -159,7 +157,7 @@ function showStatus(msg, color, bg) {
     el.style.display = 'inline';
 }
 
-async function saveCell(agentId, dateStr, status, hours) {
+async function saveCell(agentId, dateStr, status) {
     pendingSaves++;
     showStatus('Saving…', '#b45309', '#fef3c7');
 
@@ -167,7 +165,7 @@ async function saveCell(agentId, dateStr, status, hours) {
         const resp = await fetch('/adherence/save-cell/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
-            body: JSON.stringify({agent_id: agentId, date: dateStr, status, actual_hours: hours}),
+            body: JSON.stringify({agent_id: agentId, date: dateStr, status}),
         });
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || 'error');
@@ -187,14 +185,7 @@ async function saveCell(agentId, dateStr, status, hours) {
 function onStatusChange(sel) {
     const td = sel.closest('td');
     td.style.background = STATUS_COLORS[sel.value] || '#fff';
-    const inp = td.querySelector('input');
-    saveCell(td.dataset.agent, td.dataset.date, sel.value, inp ? inp.value : '');
-}
-
-function onHoursBlur(inp) {
-    const td = inp.closest('td');
-    const sel = td.querySelector('select');
-    saveCell(td.dataset.agent, td.dataset.date, sel ? sel.value : '', inp.value);
+    saveCell(td.dataset.agent, td.dataset.date, sel.value);
 }
 
 async function saveCommission(agentId, weekStart, inp) {
