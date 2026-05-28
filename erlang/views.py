@@ -27,7 +27,6 @@ def _parse_five9_csv(file):
         day = row.get('DAY OF WEEK', '').strip()
         hour_str = row.get('HOUR OF DAY', '').strip()
         calls_str = row.get('CALLS', '0').strip().replace(',', '')
-        aht_str = row.get('Average HANDLE TIME', '').strip()
 
         if not day or not hour_str:
             continue
@@ -43,14 +42,11 @@ def _parse_five9_csv(file):
         if calls <= 0:
             continue
 
-        aht_seconds = parse_aht(aht_str)
-
         rows.append({
             'day': day,
             'hour': hour,
             'total_calls': calls,
             'avg_calls': round(calls / 3, 1),
-            'aht_seconds': aht_seconds,
         })
 
     return rows
@@ -106,6 +102,7 @@ def erlang_calculator(request):
             'target_sl': float(request.POST.get('target_sl', 80)),
             'target_seconds': int(request.POST.get('target_seconds', 20)),
             'shrinkage': float(request.POST.get('shrinkage', 0)),
+            'aht_seconds': int(request.POST.get('aht_seconds', 420)),
         }
 
         if not error:
@@ -116,6 +113,7 @@ def erlang_calculator(request):
         'target_sl': 80,
         'target_seconds': 20,
         'shrinkage': 0,
+        'aht_seconds': 420,
     })
 
     days = []
@@ -125,6 +123,7 @@ def erlang_calculator(request):
             params['target_sl'],
             params['target_seconds'],
             params['shrinkage'],
+            params['aht_seconds'],
         )
         days = _build_days(calculated, params)
 
@@ -144,7 +143,7 @@ def erlang_download(request):
 
     raw_rows = request.session.get('erlang_rows', [])
     params = request.session.get('erlang_params', {
-        'target_sl': 80, 'target_seconds': 20, 'shrinkage': 0,
+        'target_sl': 80, 'target_seconds': 20, 'shrinkage': 0, 'aht_seconds': 420,
     })
 
     if not raw_rows:
@@ -155,6 +154,7 @@ def erlang_download(request):
         params['target_sl'],
         params['target_seconds'],
         params['shrinkage'],
+        params['aht_seconds'],
     )
 
     # Collect current staffing values from POST
@@ -169,8 +169,10 @@ def erlang_download(request):
     response = HttpResponse(content_type='text/csv')
     response['Content-Disposition'] = 'attachment; filename="staffing_plan.csv"'
     writer = csv.writer(response)
+    from .calculator import format_aht
+    aht_display = format_aht(params['aht_seconds'])
     writer.writerow([
-        'Day', 'Hour', 'Avg Calls', 'Avg Handle Time',
+        'Day', 'Hour', 'Avg Calls', f'Avg Handle Time ({aht_display})',
         'Agents Required', f'Agents w/ {params["shrinkage"]}% Shrinkage',
         'Current Staffing', 'Variance', 'Service Level %',
     ])

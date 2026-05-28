@@ -74,11 +74,12 @@ def format_aht(seconds):
     return f"{m}m {s:02d}s"
 
 
-def calculate_staffing(rows, target_sl_pct, target_seconds, shrinkage_pct):
+def calculate_staffing(rows, target_sl_pct, target_seconds, shrinkage_pct, aht_seconds):
     """
     Run Erlang C on each row and return enriched results.
 
-    rows: list of {day, hour, avg_calls, aht_seconds}
+    rows: list of {day, hour, avg_calls}
+    aht_seconds: global average handle time in seconds, applied to all rows
     Returns same list with calculated fields added.
     """
     shrinkage = shrinkage_pct / 100.0
@@ -86,15 +87,14 @@ def calculate_staffing(rows, target_sl_pct, target_seconds, shrinkage_pct):
     result = []
     for row in rows:
         calls = row['avg_calls']
-        aht = row['aht_seconds']
 
-        if calls <= 0 or aht <= 0:
+        if calls <= 0 or aht_seconds <= 0:
             n_req = 1
             n_shrink = 1
             sl_achieved = 100.0
         else:
-            n_req = agents_required(calls, aht, target_sl_pct, target_seconds)
-            sl_achieved = service_level(n_req, calls, aht, target_seconds)
+            n_req = agents_required(calls, aht_seconds, target_sl_pct, target_seconds)
+            sl_achieved = service_level(n_req, calls, aht_seconds, target_seconds)
             if 0 < shrinkage < 1:
                 n_shrink = math.ceil(n_req / (1 - shrinkage))
             else:
@@ -103,7 +103,6 @@ def calculate_staffing(rows, target_sl_pct, target_seconds, shrinkage_pct):
         result.append({
             **row,
             'hour_label': hour_label(row['hour']),
-            'aht_display': format_aht(aht),
             'agents_required': n_req,
             'agents_shrinkage': n_shrink,
             'service_level_achieved': round(sl_achieved, 1),
