@@ -137,6 +137,28 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path existence check
+def test_pathlib_path_exists():
+    from pathlib import Path
+    assert Path(PATH).exists(), f"Path does not exist: {PATH}"
+
+def test_pathlib_file_exists():
+    from pathlib import Path
+    assert Path(os.path.join(PATH, "test_path.py")).exists(), "test_path.py does not exist"
+
+def test_nonexistent_path_does_not_exist():
+    from pathlib import Path
+    assert not Path(os.path.join(PATH, "nonexistent_file.txt")).exists(), "Nonexistent file should not exist"
+
+def test_pathlib_is_file():
+    from pathlib import Path
+    assert Path(os.path.join(PATH, "test_path.py")).is_file(), "test_path.py should be a file"
+
+def test_pathlib_dir_is_not_file():
+    from pathlib import Path
+    assert not Path(PATH).is_file(), "Directory should not be a file"
+
+
 # File path iteration
 def test_iterdir_returns_results():
     from pathlib import Path
