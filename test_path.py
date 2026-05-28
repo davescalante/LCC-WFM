@@ -137,6 +137,26 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path expansion
+def test_expanduser_resolves_tilde():
+    expanded = os.path.expanduser("~")
+    assert expanded != "~", "expanduser did not resolve '~'"
+    assert os.path.isabs(expanded), f"Expanded home is not absolute: {expanded}"
+
+def test_expanduser_builds_correct_path():
+    expanded = os.path.expanduser("~/Documents/LCC-WFM")
+    assert expanded == PATH, f"Expected {PATH}, got: {expanded}"
+
+def test_expandvars_resolves_home():
+    import subprocess
+    expanded = os.path.expandvars("$HOME/Documents/LCC-WFM")
+    assert expanded == PATH, f"Expected {PATH}, got: {expanded}"
+
+def test_path_does_not_need_expansion():
+    assert os.path.expanduser(PATH) == PATH, "Path unexpectedly contains '~'"
+    assert os.path.expandvars(PATH) == PATH, "Path unexpectedly contains env vars"
+
+
 # File path join
 def test_path_join_produces_correct_path():
     joined = os.path.join(PATH, "test_path.py")
