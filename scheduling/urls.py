@@ -11,6 +11,7 @@ urlpatterns = [
     path('shifts/', views.shift_list, name='shift_list'),
     path('shifts/week/', views.shift_week, name='shift_week'),
     path('shifts/copy-from-prev/', views.shift_copy_from_prev, name='shift_copy_from_prev'),
+    path('shifts/copy-agent-from-prev/', views.shift_copy_agent_from_prev, name='shift_copy_agent_from_prev'),
     path('shifts/<int:pk>/edit/', views.shift_edit, name='shift_edit'),
     path('shifts/<int:pk>/delete/', views.shift_delete, name='shift_delete'),
 ]

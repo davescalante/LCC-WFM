@@ -45,7 +45,7 @@
                 <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
             </th>
             {% endfor %}
-            <th style="width:100px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Edit</th>
+            <th style="min-width:160px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -80,8 +80,24 @@
             </td>
             {% endfor %}
             <td style="padding:8px 10px;text-align:center;border-left:2px solid #eee;">
-                <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
-                   class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;">Edit Week</a>
+                <div style="display:flex;flex-direction:column;gap:6px;align-items:center;">
+                    <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
+                       class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;width:100%;">Edit Week</a>
+                    {% if row.has_prev_week_shifts %}
+                    <form method="post" action="{% url 'shift_copy_agent_from_prev' %}"
+                          id="agent-copy-form-{{ row.agent.pk }}" style="margin:0;width:100%;">
+                        {% csrf_token %}
+                        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+                        <input type="hidden" name="agent_id" value="{{ row.agent.pk }}">
+                        <button type="button"
+                            onclick="confirmAgentCopy('{{ row.agent|escapejs }}', {{ row.has_this_week_shifts|yesno:'true,false' }}, {{ row.agent.pk }})"
+                            style="width:100%;padding:4px 10px;font-size:11px;white-space:nowrap;
+                                   background:#f59e0b;color:white;border:none;border-radius:4px;cursor:pointer;">
+                            &#x2398; Copy prev week{% if row.has_this_week_shifts %} (overwrite){% endif %}
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
             </td>
         </tr>
         {% empty %}
@@ -99,6 +115,13 @@ function confirmCopy() {
     if (!confirm("This will overwrite this week's existing schedule with last week's. Continue?")) return;
     {% endif %}
     document.getElementById('copy-form').submit();
+}
+
+function confirmAgentCopy(agentName, hasExisting, agentId) {
+    if (hasExisting) {
+        if (!confirm(`This will overwrite ${agentName}'s schedule this week with last week's. Continue?`)) return;
+    }
+    document.getElementById('agent-copy-form-' + agentId).submit();
 }
 </script>
 {% endblock %}

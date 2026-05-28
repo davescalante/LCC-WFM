@@ -134,9 +134,8 @@ def shift_list(request):
     agents = Agent.objects.filter(status='active').select_related('user').order_by('user__last_name', 'user__first_name')
 
     prev_week_start = week_start - timedelta(days=7)
-    has_prev_week = Shift.objects.filter(
-        date__range=(prev_week_start, prev_week_start + timedelta(days=6))
-    ).exists()
+    prev_week_dates = [prev_week_start + timedelta(days=i) for i in range(7)]
+    has_prev_week = Shift.objects.filter(date__in=prev_week_dates).exists()
     has_this_week = Shift.objects.filter(date__in=week_dates).exists()
 
     shifts_qs = Shift.objects.filter(
@@ -144,13 +143,25 @@ def shift_list(request):
     ).select_related('agent__user')
     shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
 
+    # Per-agent: which agents have data in the previous week / this week
+    prev_week_agent_ids = set(
+        Shift.objects.filter(date__in=prev_week_dates)
+        .values_list('agent_id', flat=True)
+    )
+    this_week_agent_ids = set(s.agent_id for s in shifts_qs)
+
     rows = []
     for agent in agents:
         cells = []
         for day_date in week_dates:
             shift = shift_map.get((agent.pk, day_date))
             cells.append({'date': day_date, 'shift': shift})
-        rows.append({'agent': agent, 'cells': cells})
+        rows.append({
+            'agent': agent,
+            'cells': cells,
+            'has_prev_week_shifts': agent.pk in prev_week_agent_ids,
+            'has_this_week_shifts': agent.pk in this_week_agent_ids,
+        })
 
     return render(request, 'scheduling/shift_list.html', {
         'rows': rows,
@@ -202,6 +213,49 @@ def shift_copy_from_prev(request):
     ])
 
     messages.success(request, f"Schedule copied from week of {prev_week_start.strftime('%B %d')} to {week_start.strftime('%B %d, %Y')}.")
+    return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
+
+
+@login_required
+def shift_copy_agent_from_prev(request):
+    """Copy one specific agent's shifts from the previous week to the target week."""
+    if request.method != 'POST':
+        return redirect('shift_list')
+
+    week_start_str = request.POST.get('week_start')
+    agent_id = request.POST.get('agent_id')
+    try:
+        week_start = date.fromisoformat(week_start_str)
+        week_start = week_start - timedelta(days=week_start.weekday())
+        agent = get_object_or_404(Agent, pk=agent_id)
+    except (ValueError, TypeError):
+        messages.error(request, "Invalid parameters.")
+        return redirect('shift_list')
+
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    prev_week_start = week_start - timedelta(days=7)
+    prev_week_dates = [prev_week_start + timedelta(days=i) for i in range(7)]
+
+    prev_shifts = list(Shift.objects.filter(agent=agent, date__in=prev_week_dates))
+    if not prev_shifts:
+        messages.warning(request, f"No shifts found for {agent} in the previous week.")
+        return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
+
+    Shift.objects.filter(agent=agent, date__in=week_dates).delete()
+    day_offset_map = {src: tgt for src, tgt in zip(prev_week_dates, week_dates)}
+    Shift.objects.bulk_create([
+        Shift(
+            agent=agent,
+            date=day_offset_map[s.date],
+            start_time=s.start_time,
+            end_time=s.end_time,
+            is_off=s.is_off,
+            notes=s.notes,
+        )
+        for s in prev_shifts
+    ])
+
+    messages.success(request, f"Copied last week's schedule for {agent} to {week_start.strftime('%B %d, %Y')}.")
     return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
 
 
