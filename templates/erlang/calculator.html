@@ -4,7 +4,6 @@
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1 style="margin:0;">Erlang C — Weekly Staffing Calculator</h1>
-    {% if has_data %}
     <div style="display:flex;align-items:center;gap:8px;">
         <a href="?week_start={{ prev_week|date:'Y-m-d' }}"
             style="padding:6px 14px;border:1px solid #ddd;border-radius:4px;font-size:13px;color:#333;text-decoration:none;background:#fff;">← Prev</a>
@@ -18,7 +17,6 @@
             style="padding:6px 14px;border:1px solid #3b82f6;border-radius:4px;font-size:12px;color:#3b82f6;text-decoration:none;">Today</a>
         {% endif %}
     </div>
-    {% endif %}
 </div>
 
 {% if error %}
