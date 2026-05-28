@@ -99,10 +99,10 @@ def _build_maps(agents, week_dates):
     record_map = {(r.agent_id, r.date): r for r in records_qs}
 
     codings_qs = Coding.objects.filter(date__in=week_dates, agent__in=agents)
-    coded_map = {}
+    coded_map = {}  # (agent_id, date) -> Decimal hours
     for c in codings_qs:
-        h = Decimal(str(c.total_hours()))
-        coded_map[c.agent_id] = coded_map.get(c.agent_id, Decimal('0')) + h
+        key = (c.agent_id, c.date)
+        coded_map[key] = coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
 
     return shift_map, record_map, coded_map
 
@@ -162,18 +162,19 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                 status = ''
                 actual_hrs = record.actual_hours if record else None
 
-            # Cell color
+            cell_coded_hrs = coded_map.get((agent.pk, day_date), Decimal('0'))
+
+            # Cell color — use total (login + codings) vs scheduled for color logic
+            cell_total = (actual_hrs or Decimal('0')) + cell_coded_hrs
             if not has_shift:
                 cell_color = '#fafafa'
             elif is_off:
-                # Use status color if supervisor recorded something (e.g. OT on day off)
                 cell_color = STATUS_COLORS.get(status, '#f0f0f0') if status else '#f0f0f0'
             elif status:
                 base = STATUS_COLORS.get(status, '#fff')
-                # Override with hours-based color if actual hours are entered
-                if actual_hrs is not None and sched_hrs > 0:
-                    if actual_hrs >= sched_hrs:
-                        cell_color = '#e8f5e9'   # green — met hours
+                if (actual_hrs is not None or cell_coded_hrs) and sched_hrs > 0:
+                    if cell_total >= sched_hrs:
+                        cell_color = '#e8f5e9'
                     else:
                         cell_color = '#fff3e0' if status not in ('Absent', 'NCNS') else '#ffcdd2'
                 else:
@@ -182,8 +183,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                 cell_color = '#fff'
 
             cell_sched_hrs = sched_hrs if has_shift and not is_off else None
-            if cell_sched_hrs and actual_hrs is not None and cell_sched_hrs > actual_hrs:
-                missing_hrs = cell_sched_hrs - actual_hrs
+            if cell_sched_hrs and (actual_hrs is not None or cell_coded_hrs) and cell_sched_hrs > cell_total:
+                missing_hrs = cell_sched_hrs - cell_total
             else:
                 missing_hrs = None
 
@@ -200,12 +201,13 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                 'has_shift': has_shift,
                 'status': status,
                 'actual_hrs': actual_hrs if actual_hrs is not None else '',
+                'cell_coded_hrs': cell_coded_hrs if cell_coded_hrs else None,
                 'color': cell_color,
                 'key': f'status_{agent.pk}_{day_date.isoformat()}',
                 'hours_key': f'hours_{agent.pk}_{day_date.isoformat()}',
             })
 
-        coded = coded_map.get(agent.pk, Decimal('0'))
+        coded = sum(coded_map.get((agent.pk, d), Decimal('0')) for d in week_dates)
         adjusted = actual_total + coded
 
         if bonus is False:
