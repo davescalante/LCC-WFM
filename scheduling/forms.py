@@ -37,7 +37,7 @@ class AgentForm(forms.ModelForm):
         model = Agent
         fields = [
             'agent_name', 'employee_id', 'role', 'role_type', 'status', 'supervisor',
-            'start_date', 'phone_number',
+            'start_date', 'termination_date', 'phone_number',
             'five9_username', 'five9_password', 'teams_password', 'notes',
         ]
         widgets = {
@@ -45,6 +45,7 @@ class AgentForm(forms.ModelForm):
         }
         widgets = {
             'start_date': forms.DateInput(attrs={'type': 'date'}),
+            'termination_date': forms.DateInput(attrs={'type': 'date'}),
             'five9_password': forms.PasswordInput(render_value=True),
             'teams_password': forms.PasswordInput(render_value=True),
         }

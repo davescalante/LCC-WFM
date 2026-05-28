@@ -34,6 +34,7 @@ class Agent(models.Model):
     agent_name = models.CharField(max_length=100, blank=True, help_text="Display/call center name")
     employee_id = models.CharField(max_length=50, blank=True, unique=True, null=True)
     start_date = models.DateField(null=True, blank=True)
+    termination_date = models.DateField(null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
     five9_username = models.CharField(max_length=150, blank=True)
     five9_password = models.CharField(max_length=150, blank=True)
