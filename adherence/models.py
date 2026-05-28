@@ -25,7 +25,7 @@ class AdherenceRecord(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='adherence_records')
     date = models.DateField()
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, blank=True)
-    actual_hours = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    actual_hours = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     notes = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -58,6 +58,13 @@ class Coding(models.Model):
 
     def total_hours(self):
         return round(self.total_minutes() / 60, 2)
+
+    def total_hhmmss(self):
+        total_sec = self.total_minutes() * 60
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        s = total_sec % 60
+        return f'{h:02d}:{m:02d}:{s:02d}'
 
     def __str__(self):
         return f"{self.agent} — {self.date} — {self.start_time}–{self.end_time}"

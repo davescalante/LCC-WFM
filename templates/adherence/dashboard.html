@@ -1,16 +1,18 @@
 {% extends 'base.html' %}
+{% load adherence_filters %}
 {% block title %} - Adherence{% endblock %}
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <h1>Adherence</h1>
+    <div style="display:flex;align-items:center;gap:16px;">
+        <h1 style="margin:0;">Adherence</h1>
+        <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+    </div>
     <div style="display:flex;gap:10px;">
         <a href="{% url 'codings_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">+ Codings</a>
         <a href="{% url 'payroll_export' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#27ae60;color:white;">Payroll Export</a>
     </div>
 </div>
-
-{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Week navigation -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
@@ -27,10 +29,6 @@
     </div>
 </div>
 
-<form method="post">
-{% csrf_token %}
-<input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-
 <div class="card" style="overflow-x:auto;padding:0;">
 <table style="table-layout:auto;min-width:1100px;border-collapse:collapse;">
     <thead>
@@ -42,30 +40,28 @@
                 <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
             </th>
             {% endfor %}
-            <!-- Totals headers -->
             <th style="min-width:46px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:11px;color:#555;">Present</th>
             <th style="min-width:46px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Absent</th>
-            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Sched<br>Hrs</th>
-            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Login<br>Hrs</th>
-            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Coded<br>Hrs</th>
-            <th style="min-width:56px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Total<br>Hrs</th>
+            <th style="min-width:68px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Sched<br>Hrs</th>
+            <th style="min-width:68px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Login<br>Hrs</th>
+            <th style="min-width:68px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Coded<br>Hrs</th>
+            <th style="min-width:68px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Total<br>Hrs</th>
             <th style="min-width:50px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Bonus</th>
         </tr>
     </thead>
     <tbody>
         {% for row in rows %}
         <tr style="border-bottom:1px solid #e8e8e8;">
-            <!-- Agent name cell -->
             <td style="padding:8px 10px;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 <div style="font-size:13px;font-weight:600;line-height:1.3;">{{ row.agent }}</div>
-                {% if row.agent.five9_username %}
-                <div style="font-size:11px;color:#888;margin-top:2px;">{{ row.agent.five9_username }}</div>
-                {% endif %}
+                {% if row.agent.five9_username %}<div style="font-size:11px;color:#888;margin-top:2px;">{{ row.agent.five9_username }}</div>{% endif %}
             </td>
 
-            <!-- Day cells -->
             {% for cell in row.cells %}
-            <td style="padding:4px 3px;vertical-align:top;text-align:center;background:{{ cell.color }};">
+            <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                data-agent="{{ row.agent.pk }}"
+                data-date="{{ cell.date|date:'Y-m-d' }}"
+                style="padding:4px 3px;vertical-align:top;text-align:center;background:{{ cell.color }};">
                 {% if cell.scheduled %}
                 <div style="font-size:10px;color:#777;margin-bottom:2px;white-space:nowrap;">
                     {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
@@ -73,52 +69,32 @@
                 </div>
                 {% endif %}
                 {% if not cell.is_off %}
-                <select name="{{ cell.key }}"
-                    style="width:100%;font-size:11px;padding:2px 2px;border:1px solid #ccc;border-radius:3px;background:transparent;"
-                    onchange="updateColor(this)">
+                <select onchange="onStatusChange(this)"
+                    style="width:100%;font-size:11px;padding:2px 2px;border:1px solid #ccc;border-radius:3px;background:transparent;">
                     <option value="">—</option>
                     {% for val, label in status_choices %}
                     <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{{ val }}</option>
                     {% endfor %}
                 </select>
-                <input type="number" name="{{ cell.hours_key }}"
-                    value="{{ cell.actual_hrs }}"
-                    min="0" max="24" step="0.25"
-                    placeholder="hrs"
-                    style="width:100%;font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:3px;margin-top:2px;background:transparent;">
+                <input type="text" onblur="onHoursBlur(this)"
+                    value="{{ cell.actual_hrs|to_hhmmss }}"
+                    placeholder="HH:MM:SS"
+                    maxlength="8"
+                    style="width:100%;font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:3px;margin-top:2px;background:transparent;font-family:monospace;">
                 {% endif %}
             </td>
             {% endfor %}
 
-            <!-- Totals -->
             <td style="padding:8px 6px;text-align:center;vertical-align:middle;border-left:2px solid #ddd;font-size:13px;font-weight:600;color:#27ae60;">{{ row.total_present }}</td>
             <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:13px;font-weight:600;{% if row.total_absent > 0 %}color:#c0392b;{% else %}color:#aaa;{% endif %}">{{ row.total_absent }}</td>
-            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;color:#555;">{{ row.sched_hours }}</td>
-            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;
-                {% if row.actual_hours and row.sched_hours %}
-                    {% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:600;
-                    {% else %}color:#e67e22;font-weight:600;{% endif %}
-                {% else %}color:#555;{% endif %}">
-                {{ row.actual_hours|default:"—" }}
-            </td>
-            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;color:#555;">
-                {% if row.coded_hours %}{{ row.coded_hours }}{% else %}—{% endif %}
-            </td>
-            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:12px;font-weight:600;
-                {% if row.adjusted_total and row.sched_hours %}
-                    {% if row.adjusted_total >= row.sched_hours %}color:#27ae60;
-                    {% else %}color:#e67e22;{% endif %}
-                {% else %}color:#555;{% endif %}">
-                {% if row.adjusted_total %}{{ row.adjusted_total }}{% else %}—{% endif %}
-            </td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:11px;font-family:monospace;color:#555;">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:11px;font-family:monospace;{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:600;{% else %}color:#e67e22;font-weight:600;{% endif %}{% else %}color:#555;{% endif %}">{{ row.actual_hours|to_hhmmss|default:"—" }}</td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:11px;font-family:monospace;color:#555;">{{ row.coded_hours|to_hhmmss|default:"—" }}</td>
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;font-size:11px;font-family:monospace;font-weight:600;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#e67e22;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
             <td style="padding:8px 6px;text-align:center;vertical-align:middle;">
-                {% if row.bonus == 'Yes' %}
-                    <span class="badge badge-green">Yes</span>
-                {% elif row.bonus == 'No' %}
-                    <span class="badge badge-red">No</span>
-                {% else %}
-                    <span style="color:#aaa;font-size:12px;">—</span>
-                {% endif %}
+                {% if row.bonus == 'Yes' %}<span class="badge badge-green">Yes</span>
+                {% elif row.bonus == 'No' %}<span class="badge badge-red">No</span>
+                {% else %}<span style="color:#aaa;font-size:12px;">—</span>{% endif %}
             </td>
         </tr>
         {% empty %}
@@ -128,21 +104,12 @@
 </table>
 </div>
 
-<div style="margin-top:14px;display:flex;gap:12px;align-items:center;">
-    <button type="submit" class="btn btn-primary">Save Adherence</button>
-    <span style="font-size:12px;color:#888;">Changes save all agents for this week at once.</span>
-</div>
-</form>
-
 <!-- Status legend -->
 <div class="card" style="margin-top:20px;padding:14px 20px;">
     <h3 style="font-size:13px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;">Status Codes</h3>
     <div style="display:flex;flex-wrap:wrap;gap:4px 20px;font-size:12px;color:#555;line-height:2;">
         {% for val, label in status_choices %}
-        <span>
-            <strong style="background:#f0f4f8;padding:1px 6px;border-radius:3px;font-size:11px;">{{ val }}</strong>
-            &nbsp;{{ label }}
-        </span>
+        <span><strong style="background:#f0f4f8;padding:1px 6px;border-radius:3px;font-size:11px;">{{ val }}</strong>&nbsp;{{ label }}</span>
         {% endfor %}
     </div>
     <div style="margin-top:10px;font-size:12px;color:#888;border-top:1px solid #eee;padding-top:10px;">
@@ -155,16 +122,61 @@
 
 <script>
 const STATUS_COLORS = {
-    'P':     '#e8f5e9', 'OT':    '#c8e6c9', 'MUT':   '#dcedc8',
-    'VTO':   '#f1f8e9', 'P+VTO': '#e8f5e9',
-    'T':     '#fff3e0', 'T+VTO': '#fff8e1',
-    'Absent':'#ffebee', 'NCNS':  '#ffcdd2',
-    'I':     '#fce4ec', 'Quit':  '#eeeeee', 'Baja':  '#eeeeee',
-    'V':     '#e3f2fd', 'IMSS':  '#e0f2f1',
+    'P':'#e8f5e9','OT':'#c8e6c9','MUT':'#dcedc8','VTO':'#f1f8e9','P+VTO':'#e8f5e9',
+    'T':'#fff3e0','T+VTO':'#fff8e1','Absent':'#ffebee','NCNS':'#ffcdd2',
+    'I':'#fce4ec','Quit':'#eeeeee','Baja':'#eeeeee','V':'#e3f2fd','IMSS':'#e0f2f1',
 };
-function updateColor(sel) {
+
+function csrfToken() {
+    return document.querySelector('meta[name="csrf-token"]').content;
+}
+
+let pendingSaves = 0;
+
+function showStatus(msg, color, bg) {
+    const el = document.getElementById('save-status');
+    el.textContent = msg;
+    el.style.color = color;
+    el.style.background = bg;
+    el.style.display = 'inline';
+}
+
+async function saveCell(agentId, dateStr, status, hours) {
+    pendingSaves++;
+    showStatus('Saving…', '#b45309', '#fef3c7');
+
+    try {
+        const resp = await fetch('/adherence/save-cell/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({agent_id: agentId, date: dateStr, status, actual_hours: hours}),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+    } catch (e) {
+        showStatus('⚠ Save failed — check your connection', '#991b1b', '#fee2e2');
+        return;
+    } finally {
+        pendingSaves--;
+    }
+
+    if (pendingSaves === 0) {
+        showStatus('✓ Saved', '#166534', '#dcfce7');
+        setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
+    }
+}
+
+function onStatusChange(sel) {
     const td = sel.closest('td');
     td.style.background = STATUS_COLORS[sel.value] || '#fff';
+    const inp = td.querySelector('input');
+    saveCell(td.dataset.agent, td.dataset.date, sel.value, inp ? inp.value : '');
+}
+
+function onHoursBlur(inp) {
+    const td = inp.closest('td');
+    const sel = td.querySelector('select');
+    saveCell(td.dataset.agent, td.dataset.date, sel ? sel.value : '', inp.value);
 }
 </script>
 {% endblock %}

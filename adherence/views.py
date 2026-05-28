@@ -1,12 +1,14 @@
 from datetime import date, timedelta, datetime
 from decimal import Decimal, InvalidOperation
 import csv
+import json
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST
 from django.urls import reverse
 from django.utils import timezone
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 
 from scheduling.models import Shift, Agent
 from .models import AdherenceRecord, Coding, PayrollAdjustment
@@ -33,11 +35,35 @@ STATUS_COLORS = {
 }
 
 
-def _parse_decimal(val):
-    try:
-        return Decimal(val.strip()) if val and val.strip() else None
-    except (InvalidOperation, AttributeError):
+def _parse_hours_input(val):
+    """Accept HH:MM:SS, HH:MM, or plain decimal hours string."""
+    if not val or not val.strip():
         return None
+    val = val.strip()
+    if ':' in val:
+        parts = val.split(':')
+        try:
+            h = int(parts[0]) if parts[0] else 0
+            m = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+            s = int(parts[2]) if len(parts) > 2 and parts[2] else 0
+            return (Decimal(h) + Decimal(m) / 60 + Decimal(s) / 3600).quantize(Decimal('0.000001'))
+        except (ValueError, IndexError, InvalidOperation):
+            return None
+    try:
+        return Decimal(val)
+    except InvalidOperation:
+        return None
+
+
+def _decimal_to_hhmmss(value):
+    """Decimal hours → HH:MM:SS string for CSV export."""
+    if not value:
+        return '00:00:00'
+    total_seconds = round(float(value) * 3600)
+    h = total_seconds // 3600
+    m = (total_seconds % 3600) // 60
+    s = total_seconds % 60
+    return f'{h:02d}:{m:02d}:{s:02d}'
 
 
 def _scheduled_hours(shift):
@@ -187,6 +213,82 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
     return rows
 
 
+# ── AJAX endpoints ────────────────────────────────────────────────────────────
+
+@login_required
+@require_POST
+def save_adherence_cell(request):
+    data = json.loads(request.body)
+    agent_id = data.get('agent_id')
+    date_str = data.get('date')
+    status = data.get('status', '')
+    hours_str = data.get('actual_hours', '')
+
+    try:
+        day_date = date.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
+
+    agent = get_object_or_404(Agent, pk=agent_id)
+    actual_hrs = _parse_hours_input(hours_str)
+
+    if status or actual_hrs is not None:
+        AdherenceRecord.objects.update_or_create(
+            agent=agent,
+            date=day_date,
+            defaults={'status': status, 'actual_hours': actual_hrs},
+        )
+    else:
+        AdherenceRecord.objects.filter(agent=agent, date=day_date).delete()
+
+    return JsonResponse({'ok': True})
+
+
+@login_required
+@require_POST
+def add_coding_ajax(request):
+    data = json.loads(request.body)
+    agent_id = data.get('agent_id')
+    date_str = data.get('date')
+    start_time = data.get('start_time')
+    end_time = data.get('end_time')
+    notes = data.get('notes', '')
+
+    if not all([agent_id, date_str, start_time, end_time]):
+        return JsonResponse({'ok': False, 'error': 'missing fields'}, status=400)
+
+    try:
+        coding = Coding.objects.create(
+            agent_id=agent_id,
+            date=date_str,
+            start_time=start_time,
+            end_time=end_time,
+            notes=notes,
+        )
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)}, status=400)
+
+    return JsonResponse({
+        'ok': True,
+        'id': coding.pk,
+        'hhmmss': coding.total_hhmmss(),
+        'start': coding.start_time.strftime('%H:%M'),
+        'end': coding.end_time.strftime('%H:%M'),
+        'notes': coding.notes,
+    })
+
+
+@login_required
+@require_POST
+def delete_coding_ajax(request):
+    data = json.loads(request.body)
+    coding_id = data.get('coding_id')
+    Coding.objects.filter(pk=coding_id).delete()
+    return JsonResponse({'ok': True})
+
+
+# ── Page views ────────────────────────────────────────────────────────────────
+
 @login_required
 def adherence_week(request):
     week_start = _get_week_start(request)
@@ -203,7 +305,7 @@ def adherence_week(request):
             for day_date in week_dates:
                 status_val = request.POST.get(f'status_{agent.pk}_{day_date.isoformat()}', '')
                 hours_val = request.POST.get(f'hours_{agent.pk}_{day_date.isoformat()}', '')
-                actual_hrs = _parse_decimal(hours_val)
+                actual_hrs = _parse_hours_input(hours_val)
 
                 if status_val or actual_hrs is not None:
                     AdherenceRecord.objects.update_or_create(
@@ -267,16 +369,42 @@ def codings_week(request):
 
         return redirect(reverse('codings_week') + f'?week_start={week_start.isoformat()}')
 
-    codings = (
+    # Build coding map: {(agent_id, date): [coding, ...]}
+    codings_qs = (
         Coding.objects
-        .filter(date__in=week_dates)
+        .filter(date__in=week_dates, agent__in=agents)
         .select_related('agent__user')
-        .order_by('date', 'agent__user__last_name', 'start_time')
+        .order_by('start_time')
     )
+    coding_map = {}
+    for c in codings_qs:
+        key = (c.agent_id, c.date)
+        coding_map.setdefault(key, []).append(c)
 
+    rows = []
+    for agent in agents:
+        cells = []
+        agent_total_minutes = 0
+        for day_date in week_dates:
+            entries = coding_map.get((agent.pk, day_date), [])
+            day_minutes = sum(e.total_minutes() for e in entries)
+            agent_total_minutes += day_minutes
+            cells.append({
+                'date': day_date,
+                'entries': entries,
+                'total_minutes': day_minutes,
+                'total_hours': round(day_minutes / 60, 2) if day_minutes else 0,
+            })
+        rows.append({
+            'agent': agent,
+            'cells': cells,
+            'total_minutes': agent_total_minutes,
+            'total_hours': round(agent_total_minutes / 60, 2) if agent_total_minutes else 0,
+        })
+
+    # Only include rows that have at least one coding OR always show all — show all for adding
     return render(request, 'adherence/codings.html', {
-        'codings': codings,
-        'agents': agents,
+        'rows': rows,
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
@@ -296,16 +424,51 @@ def payroll_export(request):
     )
 
     if request.method == 'POST':
-        # Save commission deductions
+        action = request.POST.get('action', 'export_payroll')
+
+        # Save commission deductions regardless of which export is triggered
         for agent in agents:
             val = request.POST.get(f'deduction_{agent.pk}', '0')
-            deduction = _parse_decimal(val) or Decimal('0')
+            deduction = _parse_hours_input(val) or Decimal('0')
             PayrollAdjustment.objects.update_or_create(
                 agent=agent,
                 week_start=week_start,
                 defaults={'commission_deduction': deduction},
             )
 
+        if action == 'export_codings':
+            codings_qs = (
+                Coding.objects
+                .filter(date__in=week_dates, agent__in=agents)
+                .select_related('agent__user')
+                .order_by('date', 'agent__user__last_name', 'agent__user__first_name', 'start_time')
+            )
+
+            response = HttpResponse(content_type='text/csv')
+            filename = f'codings_{week_start.isoformat()}_to_{week_end.isoformat()}.csv'
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+            writer = csv.writer(response)
+            writer.writerow([
+                'Legal Name', 'Agent Name', 'Five9 Username',
+                'Date', 'Day', 'Start Time', 'End Time',
+                'Total Coded Time', 'Notes',
+            ])
+            for c in codings_qs:
+                writer.writerow([
+                    c.agent.user.get_full_name(),
+                    c.agent.agent_name or '',
+                    c.agent.five9_username or '',
+                    c.date.strftime('%Y-%m-%d'),
+                    c.date.strftime('%A'),
+                    c.start_time.strftime('%H:%M'),
+                    c.end_time.strftime('%H:%M'),
+                    c.total_hhmmss(),
+                    c.notes,
+                ])
+            return response
+
+        # Default: export payroll summary
         shift_map, record_map, coded_map = _build_maps(agents, week_dates)
         adj_map = {
             pa.agent_id: pa.commission_deduction
@@ -355,10 +518,10 @@ def payroll_export(request):
                 agent.user.get_full_name(),
                 agent.agent_name or '',
                 agent.five9_username or '',
-                f'{sched_total:.2f}',
-                f'{actual_total:.2f}',
-                f'{coded:.2f}',
-                f'{adjusted:.2f}',
+                _decimal_to_hhmmss(sched_total),
+                _decimal_to_hhmmss(actual_total),
+                _decimal_to_hhmmss(coded),
+                _decimal_to_hhmmss(adjusted),
                 f'{commission:.2f}',
                 bonus_label,
             ])

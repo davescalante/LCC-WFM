@@ -1,13 +1,15 @@
 {% extends 'base.html' %}
+{% load adherence_filters %}
 {% block title %} - Codings{% endblock %}
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <h1>Codings — Non-System Time</h1>
+    <div style="display:flex;align-items:center;gap:16px;">
+        <h1 style="margin:0;">Codings — Non-System Time</h1>
+        <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+    </div>
     <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Back to Adherence</a>
 </div>
-
-{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Week navigation -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
@@ -23,110 +25,255 @@
     </div>
 </div>
 
-<!-- Add coding form -->
-<div class="card" style="margin-bottom:20px;">
-    <h2 style="margin-bottom:16px;">Add Non-System Time Entry</h2>
-    <form method="post">
-        {% csrf_token %}
-        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-        <input type="hidden" name="action" value="add">
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 2fr auto;gap:12px;align-items:end;">
-            <div>
-                <label>Agent</label>
-                <select name="agent_id" required style="margin:0;">
-                    <option value="">— Select agent —</option>
-                    {% for agent in agents %}
-                    <option value="{{ agent.pk }}">{{ agent }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label>Date</label>
-                <input type="date" name="coding_date" required
-                    min="{{ week_start|date:'Y-m-d' }}" max="{{ week_end|date:'Y-m-d' }}"
-                    value="{{ week_start|date:'Y-m-d' }}" style="margin:0;">
-            </div>
-            <div>
-                <label>Start Time</label>
-                <input type="time" name="start_time" required style="margin:0;">
-            </div>
-            <div>
-                <label>End Time</label>
-                <input type="time" name="end_time" required style="margin:0;">
-            </div>
-            <div>
-                <label>Notes (e.g. Team meeting, Training, Outage)</label>
-                <input type="text" name="notes" placeholder="Required — describe the activity" style="margin:0;">
-            </div>
-            <div>
-                <button type="submit" class="btn btn-primary" style="white-space:nowrap;">Add Entry</button>
-            </div>
-        </div>
-    </form>
-</div>
-
-<!-- Coding entries table -->
-<div class="card">
-    <h2 style="margin-bottom:12px;">Week of {{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Agent</th>
-                <th>Date</th>
-                <th>Start</th>
-                <th>End</th>
-                <th style="text-align:center;">Total Time</th>
-                <th>Notes</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for coding in codings %}
-            <tr>
-                <td style="font-weight:600;">{{ coding.agent }}</td>
-                <td>{{ coding.date|date:"D, M d" }}</td>
-                <td>{{ coding.start_time|time:"H:i" }}</td>
-                <td>{{ coding.end_time|time:"H:i" }}</td>
-                <td style="text-align:center;">
-                    <strong>{{ coding.total_minutes }} min</strong>
-                    <span style="color:#888;font-size:12px;">({{ coding.total_hours }}h)</span>
-                </td>
-                <td style="color:#555;font-size:13px;">{{ coding.notes|default:"—" }}</td>
-                <td>
-                    <form method="post" style="display:inline;" onsubmit="return confirm('Delete this entry?')">
-                        {% csrf_token %}
-                        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-                        <input type="hidden" name="action" value="delete">
-                        <input type="hidden" name="coding_id" value="{{ coding.pk }}">
-                        <button type="submit" class="btn" style="background:#c0392b;color:white;padding:4px 10px;font-size:12px;">Delete</button>
-                    </form>
-                </td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="7" style="color:#888;padding:24px;text-align:center;">
-                No codings for this week yet. Add entries above for meetings, training, or outages not captured in Five9.
-            </td></tr>
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="table-layout:auto;min-width:1000px;border-collapse:collapse;">
+    <thead>
+        <tr style="background:#f0f4f8;">
+            <th style="width:150px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+            {% for d in week_dates %}
+            <th style="min-width:140px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
+                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
+                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+            </th>
             {% endfor %}
-        </tbody>
-        {% if codings %}
-        <tfoot>
-            <tr style="background:#f0f4f8;">
-                <td colspan="4" style="font-weight:600;padding:10px 12px;">Totals for this week</td>
-                <td style="text-align:center;font-weight:700;">
-                    {% with total_min=0 %}
-                    <!-- computed per-agent summaries shown on adherence dashboard -->
-                    {% endwith %}
-                </td>
-                <td colspan="2"></td>
-            </tr>
-        </tfoot>
-        {% endif %}
-    </table>
+            <th style="width:70px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:11px;color:#555;">Total<br>Coded</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr style="border-bottom:1px solid #e8e8e8;">
+            <td style="padding:8px 10px;font-size:13px;font-weight:600;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
+                {{ row.agent }}
+            </td>
+
+            {% for cell in row.cells %}
+            <td style="padding:4px 4px;vertical-align:top;{% if cell.entries %}background:#fffde7;{% endif %}"
+                data-agent="{{ row.agent.pk }}" data-date="{{ cell.date|date:'Y-m-d' }}">
+
+                <!-- Existing entries -->
+                <div id="cell-entries-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}">
+                {% for entry in cell.entries %}
+                <div id="coding-entry-{{ entry.pk }}" style="display:flex;justify-content:space-between;align-items:flex-start;background:white;border:1px solid #e0e0e0;border-radius:3px;padding:3px 5px;margin-bottom:3px;font-size:11px;">
+                    <div>
+                        <div style="font-weight:600;color:#333;white-space:nowrap;">{{ entry.start_time|time:"H:i" }}–{{ entry.end_time|time:"H:i" }}</div>
+                        <div class="entry-duration" style="color:#888;font-family:monospace;font-size:11px;">{{ entry.total_hhmmss }}</div>
+                        {% if entry.notes %}<div style="color:#555;font-size:10px;margin-top:1px;">{{ entry.notes|truncatechars:24 }}</div>{% endif %}
+                    </div>
+                    <button onclick="deleteCoding({{ entry.pk }}, '{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                        style="border:none;background:none;color:#ccc;cursor:pointer;font-size:15px;padding:0 2px;line-height:1;" title="Delete">&times;</button>
+                </div>
+                {% endfor %}
+                </div>
+
+                <!-- Cell total -->
+                <div id="cell-total-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                    style="font-size:10px;color:#888;text-align:right;margin-bottom:3px;font-family:monospace;{% if not cell.total_minutes %}display:none;{% endif %}">
+                    {{ cell.total_minutes|minutes_to_hhmmss }}
+                </div>
+
+                <!-- Inline add form (hidden by default) -->
+                <div id="add-form-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}" style="display:none;">
+                    <div style="display:flex;gap:2px;margin-bottom:2px;">
+                        <input type="time" id="start-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                            style="flex:1;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0;min-width:0;">
+                        <input type="time" id="end-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                            style="flex:1;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0;min-width:0;">
+                    </div>
+                    <input type="text" id="notes-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}" placeholder="Notes"
+                        style="width:100%;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0 0 3px 0;">
+                    <div style="display:flex;gap:3px;">
+                        <button onclick="submitCoding('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                            style="flex:1;font-size:11px;padding:3px;background:#1a3a5c;color:white;border:none;border-radius:3px;cursor:pointer;">Save</button>
+                        <button onclick="toggleAddForm('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                            style="font-size:11px;padding:3px 6px;background:#eee;border:none;border-radius:3px;cursor:pointer;">✕</button>
+                    </div>
+                </div>
+
+                <!-- Add button -->
+                <button id="add-btn-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                    onclick="toggleAddForm('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                    style="width:100%;font-size:11px;padding:3px;background:#f5f5f5;border:1px dashed #ccc;border-radius:3px;cursor:pointer;color:#888;margin-top:1px;">
+                    + add
+                </button>
+            </td>
+            {% endfor %}
+
+            <!-- Row total -->
+            <td style="padding:8px 6px;text-align:center;vertical-align:middle;border-left:2px solid #eee;">
+                <span id="row-total-{{ row.agent.pk }}"
+                    style="font-size:11px;font-family:monospace;font-weight:{% if row.total_minutes %}600{% else %}400{% endif %};color:{% if row.total_minutes %}#5d6d7e{% else %}#ccc{% endif %};">
+                    {{ row.total_minutes|minutes_to_hhmmss|default:"—" }}
+                </span>
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
 </div>
 
-<div class="card" style="background:#f8f9fa;border:1px solid #e9ecef;">
+<div class="card" style="margin-top:20px;background:#f8f9fa;border:1px solid #e9ecef;padding:14px 20px;">
     <p style="font-size:13px;color:#666;margin:0;">
-        <strong>What is a coding?</strong> A coding entry logs time an agent was working or occupied but not captured by Five9 — for example: team meetings, training sessions, or system outages when agents couldn't log in. This time is added to their actual hours when calculating totals and is included in the payroll export.
+        <strong>What is a coding?</strong> Time an agent was working but not captured in Five9 — team meetings, training, system outages. Click <strong>+ add</strong> in any cell. All changes save instantly.
     </p>
 </div>
+
+<script>
+function csrfToken() {
+    return document.querySelector('meta[name="csrf-token"]').content;
+}
+
+function showStatus(msg, color, bg) {
+    const el = document.getElementById('save-status');
+    el.textContent = msg;
+    el.style.color = color;
+    el.style.background = bg;
+    el.style.display = 'inline';
+}
+
+function parseHHMMSS(str) {
+    if (!str || str === '—') return 0;
+    const p = str.split(':');
+    return (parseInt(p[0]||0)*3600 + parseInt(p[1]||0)*60 + parseInt(p[2]||0));
+}
+
+function secondsToHHMMSS(secs) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function updateCellTotal(agentId, dateStr) {
+    const entriesDiv = document.getElementById(`cell-entries-${agentId}-${dateStr}`);
+    const totalEl   = document.getElementById(`cell-total-${agentId}-${dateStr}`);
+    const cellTd    = entriesDiv ? entriesDiv.closest('td') : null;
+    if (!entriesDiv || !totalEl) return;
+
+    let secs = 0;
+    entriesDiv.querySelectorAll('.entry-duration').forEach(el => {
+        secs += parseHHMMSS(el.textContent.trim());
+    });
+
+    if (secs > 0) {
+        totalEl.textContent = secondsToHHMMSS(secs);
+        totalEl.style.display = 'block';
+        if (cellTd) cellTd.style.background = '#fffde7';
+    } else {
+        totalEl.style.display = 'none';
+        if (cellTd) cellTd.style.background = '';
+    }
+}
+
+function updateRowTotal(agentId) {
+    const rowTotalEl = document.getElementById(`row-total-${agentId}`);
+    if (!rowTotalEl) return;
+    let secs = 0;
+    document.querySelectorAll(`[data-agent="${agentId}"] .entry-duration`).forEach(el => {
+        secs += parseHHMMSS(el.textContent.trim());
+    });
+    if (secs > 0) {
+        rowTotalEl.textContent = secondsToHHMMSS(secs);
+        rowTotalEl.style.color = '#5d6d7e';
+        rowTotalEl.style.fontWeight = '600';
+    } else {
+        rowTotalEl.textContent = '—';
+        rowTotalEl.style.color = '#ccc';
+        rowTotalEl.style.fontWeight = '400';
+    }
+}
+
+function toggleAddForm(agentId, dateStr) {
+    const form = document.getElementById(`add-form-${agentId}-${dateStr}`);
+    const btn  = document.getElementById(`add-btn-${agentId}-${dateStr}`);
+    const show = form.style.display === 'none';
+    form.style.display = show ? 'block' : 'none';
+    btn.style.display  = show ? 'none'  : 'block';
+    if (show) {
+        const start = document.getElementById(`start-${agentId}-${dateStr}`);
+        if (start) start.focus();
+    }
+}
+
+async function submitCoding(agentId, dateStr) {
+    const start = document.getElementById(`start-${agentId}-${dateStr}`).value;
+    const end   = document.getElementById(`end-${agentId}-${dateStr}`).value;
+    const notes = document.getElementById(`notes-${agentId}-${dateStr}`).value;
+
+    if (!start || !end) {
+        alert('Please enter both a start time and an end time.');
+        return;
+    }
+
+    showStatus('Saving…', '#b45309', '#fef3c7');
+
+    try {
+        const resp = await fetch('/adherence/add-coding/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({agent_id: agentId, date: dateStr, start_time: start, end_time: end, notes}),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+
+        // Add entry card to DOM
+        const entriesDiv = document.getElementById(`cell-entries-${agentId}-${dateStr}`);
+        const card = document.createElement('div');
+        card.id = `coding-entry-${data.id}`;
+        card.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;background:white;border:1px solid #e0e0e0;border-radius:3px;padding:3px 5px;margin-bottom:3px;font-size:11px;';
+        card.innerHTML = `
+            <div>
+                <div style="font-weight:600;color:#333;white-space:nowrap;">${data.start}–${data.end}</div>
+                <div class="entry-duration" style="color:#888;font-family:monospace;font-size:11px;">${data.hhmmss}</div>
+                ${data.notes ? `<div style="color:#555;font-size:10px;margin-top:1px;">${escHtml(data.notes).substring(0,24)}</div>` : ''}
+            </div>
+            <button onclick="deleteCoding(${data.id}, '${agentId}', '${dateStr}')"
+                style="border:none;background:none;color:#ccc;cursor:pointer;font-size:15px;padding:0 2px;line-height:1;" title="Delete">&times;</button>
+        `;
+        entriesDiv.appendChild(card);
+
+        // Reset form fields
+        document.getElementById(`start-${agentId}-${dateStr}`).value = '';
+        document.getElementById(`end-${agentId}-${dateStr}`).value   = '';
+        document.getElementById(`notes-${agentId}-${dateStr}`).value = '';
+
+        toggleAddForm(agentId, dateStr);
+        updateCellTotal(agentId, dateStr);
+        updateRowTotal(agentId);
+        showStatus('✓ Saved', '#166534', '#dcfce7');
+        setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
+
+    } catch (e) {
+        showStatus('⚠ Save failed — check your connection', '#991b1b', '#fee2e2');
+    }
+}
+
+async function deleteCoding(codingId, agentId, dateStr) {
+    if (!confirm('Delete this entry?')) return;
+
+    try {
+        const resp = await fetch('/adherence/delete-coding/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({coding_id: codingId}),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error();
+
+        document.getElementById(`coding-entry-${codingId}`).remove();
+        updateCellTotal(agentId, dateStr);
+        updateRowTotal(agentId);
+        showStatus('✓ Deleted', '#166534', '#dcfce7');
+        setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2000);
+
+    } catch (e) {
+        showStatus('⚠ Delete failed — check your connection', '#991b1b', '#fee2e2');
+    }
+}
+
+function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
 {% endblock %}
