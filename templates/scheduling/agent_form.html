@@ -7,32 +7,72 @@
 </div>
 <form method="post">
     {% csrf_token %}
+
     <div class="grid-2">
         <div class="card">
-            <h2>Account Info</h2>
-            {% for field in user_form %}
-            <div>
-                <label>{{ field.label }}</label>
-                {{ field }}
-                {% if field.errors %}<div style="color:#c0392b;font-size:12px;">{{ field.errors }}</div>{% endif %}
-            </div>
-            {% endfor %}
+            <h2>Personal Info</h2>
+            <label>Legal First Name</label>
+            {{ user_form.first_name }}
+            <label>Legal Last Name</label>
+            {{ user_form.last_name }}
+            <label>Email</label>
+            {{ user_form.email }}
+            <label>Phone Number</label>
+            {{ agent_form.phone_number }}
+            <label>Start Date</label>
+            {{ agent_form.start_date }}
         </div>
+
         <div class="card">
             <h2>Agent Details</h2>
-            {% for field in agent_form %}
-            <div>
-                <label>{{ field.label }}</label>
-                {{ field }}
-                {% if field.errors %}<div style="color:#c0392b;font-size:12px;">{{ field.errors }}</div>{% endif %}
-            </div>
-            {% endfor %}
+            <label>Agent Name</label>
+            {{ agent_form.agent_name }}
+            <label>Employee ID</label>
+            {{ agent_form.employee_id }}
+            <label>Role</label>
+            {{ agent_form.role }}
+            <label>Supervisor</label>
+            {{ agent_form.supervisor }}
         </div>
     </div>
-    <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save Agent</button>
+
+    <div class="grid-2">
+        <div class="card">
+            <h2>System Login</h2>
+            <label>Username</label>
+            {{ user_form.username }}
+            <label>Password</label>
+            {{ user_form.password }}
+            {% if user_form.password.help_text %}<p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">{{ user_form.password.help_text }}</p>{% endif %}
+        </div>
+
+        <div class="card">
+            <h2>Five9 & Teams</h2>
+            <label>Five9 Username</label>
+            {{ agent_form.five9_username }}
+            <label>Five9 Password</label>
+            {{ agent_form.five9_password }}
+            <label>Teams Password</label>
+            {{ agent_form.teams_password }}
+        </div>
+    </div>
+
+    {% for form in user_form,agent_form %}
+        {% for field in form %}
+            {% if field.errors %}
+            <div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+
+    <button type="submit" class="btn btn-primary" style="margin-top:12px;">Save Agent</button>
 </form>
+
 <style>
-    .form-input { width:100%; padding:8px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px; margin-bottom:14px; }
-    label { display:block; font-size:13px; font-weight:600; margin-bottom:4px; color:#555; }
+    input, select, textarea {
+        width: 100%; padding: 8px 10px; border: 1px solid #ddd;
+        border-radius: 4px; font-size: 14px; margin-bottom: 14px;
+    }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
 </style>
 {% endblock %}

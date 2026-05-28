@@ -10,11 +10,19 @@ class Agent(models.Model):
     ]
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='agent')
-    team = models.CharField(max_length=100, blank=True)
-    phone_ext = models.CharField(max_length=10, blank=True)
+    agent_name = models.CharField(max_length=100, blank=True, help_text="Display/call center name")
+    employee_id = models.CharField(max_length=50, blank=True, unique=True, null=True)
+    start_date = models.DateField(null=True, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    five9_username = models.CharField(max_length=150, blank=True)
+    five9_password = models.CharField(max_length=150, blank=True)
+    teams_password = models.CharField(max_length=150, blank=True)
+    supervisor = models.ForeignKey(
+        'self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_reports'
+    )
 
     def __str__(self):
-        return f"{self.user.get_full_name()} ({self.role})"
+        return self.agent_name or self.user.get_full_name() or self.user.username
 
 
 class Shift(models.Model):

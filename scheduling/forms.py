@@ -4,31 +4,41 @@ from .models import Agent, Shift, Break
 
 
 class AgentUserForm(forms.ModelForm):
-    first_name = forms.CharField(max_length=150)
-    last_name = forms.CharField(max_length=150)
+    first_name = forms.CharField(max_length=150, label="Legal First Name")
+    last_name = forms.CharField(max_length=150, label="Legal Last Name")
     email = forms.EmailField()
-    password = forms.CharField(widget=forms.PasswordInput, required=False,
-                               help_text="Leave blank to keep existing password.")
+    password = forms.CharField(
+        widget=forms.PasswordInput, required=False,
+        help_text="Leave blank to keep existing password."
+    )
 
     class Meta:
         model = User
         fields = ['username', 'first_name', 'last_name', 'email']
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            field.widget.attrs['class'] = 'form-input'
-
 
 class AgentForm(forms.ModelForm):
     class Meta:
         model = Agent
-        fields = ['role', 'team', 'phone_ext']
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            field.widget.attrs['class'] = 'form-input'
+        fields = [
+            'agent_name', 'employee_id', 'role', 'supervisor',
+            'start_date', 'phone_number',
+            'five9_username', 'five9_password', 'teams_password',
+        ]
+        widgets = {
+            'start_date': forms.DateInput(attrs={'type': 'date'}),
+            'five9_password': forms.PasswordInput(render_value=True),
+            'teams_password': forms.PasswordInput(render_value=True),
+        }
+        labels = {
+            'agent_name': 'Agent Name',
+            'employee_id': 'Employee ID',
+            'five9_username': 'Five9 Username',
+            'five9_password': 'Five9 Password',
+            'teams_password': 'Teams Password',
+            'phone_number': 'Phone Number',
+            'start_date': 'Start Date',
+        }
 
 
 class ShiftForm(forms.ModelForm):
@@ -36,12 +46,10 @@ class ShiftForm(forms.ModelForm):
         model = Shift
         fields = ['agent', 'date', 'start_time', 'end_time', 'is_off', 'notes']
         widgets = {
-            'date': forms.DateInput(attrs={'type': 'date', 'class': 'form-input'}),
-            'start_time': forms.TimeInput(attrs={'type': 'time', 'class': 'form-input'}),
-            'end_time': forms.TimeInput(attrs={'type': 'time', 'class': 'form-input'}),
-            'notes': forms.Textarea(attrs={'rows': 3, 'class': 'form-input'}),
-            'agent': forms.Select(attrs={'class': 'form-input'}),
-            'is_off': forms.CheckboxInput(),
+            'date': forms.DateInput(attrs={'type': 'date'}),
+            'start_time': forms.TimeInput(attrs={'type': 'time'}),
+            'end_time': forms.TimeInput(attrs={'type': 'time'}),
+            'notes': forms.Textarea(attrs={'rows': 3}),
         }
 
 
@@ -50,7 +58,6 @@ class BreakForm(forms.ModelForm):
         model = Break
         fields = ['break_type', 'start_time', 'end_time']
         widgets = {
-            'start_time': forms.TimeInput(attrs={'type': 'time', 'class': 'form-input'}),
-            'end_time': forms.TimeInput(attrs={'type': 'time', 'class': 'form-input'}),
-            'break_type': forms.Select(attrs={'class': 'form-input'}),
+            'start_time': forms.TimeInput(attrs={'type': 'time'}),
+            'end_time': forms.TimeInput(attrs={'type': 'time'}),
         }

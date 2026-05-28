@@ -8,37 +8,52 @@
         <a href="{% url 'agent_delete' agent.pk %}" class="btn" style="background:#c0392b;color:white;margin-left:8px;">Delete</a>
     </div>
 </div>
+
 <div class="grid-2">
     <div class="card">
-        <h2>Agent Info</h2>
+        <h2>Personal Info</h2>
         <table>
-            <tr><td><strong>Role</strong></td><td>{{ agent.get_role_display }}</td></tr>
-            <tr><td><strong>Team</strong></td><td>{{ agent.team }}</td></tr>
+            <tr><td><strong>Legal Name</strong></td><td>{{ agent.user.get_full_name }}</td></tr>
+            <tr><td><strong>Agent Name</strong></td><td>{{ agent.agent_name|default:"—" }}</td></tr>
+            <tr><td><strong>Employee ID</strong></td><td>{{ agent.employee_id|default:"—" }}</td></tr>
             <tr><td><strong>Email</strong></td><td>{{ agent.user.email }}</td></tr>
-            <tr><td><strong>Extension</strong></td><td>{{ agent.phone_ext|default:"—" }}</td></tr>
+            <tr><td><strong>Phone</strong></td><td>{{ agent.phone_number|default:"—" }}</td></tr>
+            <tr><td><strong>Start Date</strong></td><td>{{ agent.start_date|default:"—" }}</td></tr>
+            <tr><td><strong>Role</strong></td><td>{{ agent.get_role_display }}</td></tr>
+            <tr><td><strong>Supervisor</strong></td><td>{{ agent.supervisor|default:"—" }}</td></tr>
         </table>
     </div>
+
     <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <h2>Recent Shifts</h2>
-            <a href="{% url 'shift_create' %}" class="btn btn-primary" style="padding:4px 10px;font-size:12px;">+ Add Shift</a>
-        </div>
+        <h2>System Credentials</h2>
         <table>
-            <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-                {% for shift in shifts %}
-                <tr>
-                    <td>{{ shift.date }}</td>
-                    <td>{{ shift.start_time }}</td>
-                    <td>{{ shift.end_time }}</td>
-                    <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
-                    <td><a href="{% url 'shift_edit' shift.pk %}" style="font-size:12px;">Edit</a></td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="5" style="color:#888;">No shifts found.</td></tr>
-                {% endfor %}
-            </tbody>
+            <tr><td><strong>Five9 Username</strong></td><td>{{ agent.five9_username|default:"—" }}</td></tr>
+            <tr><td><strong>Five9 Password</strong></td><td>{{ agent.five9_password|default:"—" }}</td></tr>
+            <tr><td><strong>Teams Password</strong></td><td>{{ agent.teams_password|default:"—" }}</td></tr>
         </table>
     </div>
+</div>
+
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2>Recent Shifts</h2>
+        <a href="{% url 'shift_create' %}" class="btn btn-primary" style="padding:4px 10px;font-size:12px;">+ Add Shift</a>
+    </div>
+    <table>
+        <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+            {% for shift in shifts %}
+            <tr>
+                <td>{{ shift.date }}</td>
+                <td>{{ shift.start_time }}</td>
+                <td>{{ shift.end_time }}</td>
+                <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
+                <td><a href="{% url 'shift_edit' shift.pk %}" style="font-size:12px;">Edit</a></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" style="color:#888;">No shifts found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
 </div>
 {% endblock %}
