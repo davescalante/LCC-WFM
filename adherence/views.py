@@ -617,7 +617,7 @@ def payroll_export(request):
                 if record and record.actual_hours:
                     actual_total += record.actual_hours
 
-            coded = coded_map.get(agent.pk, Decimal('0'))
+            coded = sum(coded_map.get((agent.pk, d), Decimal('0')) for d in week_dates)
             adjusted = actual_total + coded
             commission = adj_map.get(agent.pk, Decimal('0'))
             bonus_label = 'Yes' if (bonus and bonus_determined) else 'No'
