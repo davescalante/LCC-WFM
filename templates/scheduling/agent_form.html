@@ -20,10 +20,6 @@
                 <div style="width:160px;flex-shrink:0;">{{ agent_form.phone_country_code }}</div>
                 <div style="flex:1;">{{ agent_form.phone_number }}</div>
             </div>
-            <label>Start Date</label>
-            {{ agent_form.start_date }}
-            <label>Termination Date</label>
-            {{ agent_form.termination_date }}
         </div>
 
         <div class="card">
@@ -64,6 +60,73 @@
         </div>
     </div>
 
+    {% if agent %}
+    <div class="card" id="employment-history-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h2 style="margin:0;">Employment History</h2>
+            <button type="button" onclick="addPeriodRow()"
+                style="padding:6px 16px;background:#1a3a5c;color:white;border:none;border-radius:4px;font-size:13px;cursor:pointer;">
+                + Add Period
+            </button>
+        </div>
+
+        <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;" id="periods-table">
+            <thead>
+                <tr style="background:#f0f4f8;text-align:left;">
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">Start Date</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">End Date <span style="font-weight:400;color:#888;">(blank = active)</span></th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;">Reason Left</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;">Notes</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;width:60px;"></th>
+                </tr>
+            </thead>
+            <tbody id="periods-body">
+                {% for p in periods %}
+                <tr id="period-row-{{ p.pk }}" style="border-bottom:1px solid #eee;">
+                    <input type="hidden" name="period_{{ p.pk }}_delete" id="del-{{ p.pk }}" value="">
+                    <td style="padding:6px 8px;">
+                        <input type="date" name="period_{{ p.pk }}_start"
+                            value="{{ p.start_date|date:'Y-m-d' }}"
+                            style="margin-bottom:0;width:140px;">
+                    </td>
+                    <td style="padding:6px 8px;">
+                        <input type="date" name="period_{{ p.pk }}_end"
+                            value="{{ p.end_date|date:'Y-m-d' }}"
+                            style="margin-bottom:0;width:140px;">
+                    </td>
+                    <td style="padding:6px 8px;">
+                        <select name="period_{{ p.pk }}_reason" style="margin-bottom:0;width:160px;">
+                            {% for val, label in reason_choices %}
+                            <option value="{{ val }}" {% if p.reason_ended == val %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td style="padding:6px 8px;">
+                        <input type="text" name="period_{{ p.pk }}_notes"
+                            value="{{ p.notes }}" placeholder="Optional notes"
+                            style="margin-bottom:0;">
+                    </td>
+                    <td style="padding:6px 8px;text-align:center;">
+                        <button type="button" onclick="removePeriod('{{ p.pk }}')"
+                            style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;">
+                            Remove
+                        </button>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr id="no-periods-row">
+                    <td colspan="5" style="padding:20px;text-align:center;color:#aaa;">
+                        No employment periods recorded. Click "+ Add Period" to add one.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="card">
         <h2>Notes</h2>
         <label>Notes</label>
@@ -88,6 +151,56 @@
     label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
 </style>
 <script>
+// ── Employment History ────────────────────────────────────────────────────────
+let newPeriodIndex = 0;
+
+const REASON_OPTIONS = [
+    {% for val, label in reason_choices %}'<option value="{{ val }}">{{ label }}</option>',{% endfor %}
+].join('');
+
+function addPeriodRow() {
+    const tbody = document.getElementById('periods-body');
+    const noRow = document.getElementById('no-periods-row');
+    if (noRow) noRow.remove();
+
+    const i = newPeriodIndex++;
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid #eee';
+    tr.id = 'new-period-row-' + i;
+    tr.innerHTML = `
+        <td style="padding:6px 8px;">
+            <input type="date" name="new_${i}_start" style="margin-bottom:0;width:140px;">
+        </td>
+        <td style="padding:6px 8px;">
+            <input type="date" name="new_${i}_end" style="margin-bottom:0;width:140px;">
+        </td>
+        <td style="padding:6px 8px;">
+            <select name="new_${i}_reason" style="margin-bottom:0;width:160px;">${REASON_OPTIONS}</select>
+        </td>
+        <td style="padding:6px 8px;">
+            <input type="text" name="new_${i}_notes" placeholder="Optional notes" style="margin-bottom:0;">
+        </td>
+        <td style="padding:6px 8px;text-align:center;">
+            <button type="button" onclick="this.closest('tr').remove()"
+                style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;">
+                Remove
+            </button>
+        </td>`;
+    tbody.appendChild(tr);
+}
+
+function removePeriod(pk) {
+    if (!confirm('Remove this employment period?')) return;
+    document.getElementById('del-' + pk).value = '1';
+    const row = document.getElementById('period-row-' + pk);
+    row.style.opacity = '0.35';
+    row.style.textDecoration = 'line-through';
+    row.querySelectorAll('input, select, button').forEach(el => el.disabled = true);
+    // Re-enable the hidden delete input so it submits
+    document.getElementById('del-' + pk).disabled = false;
+}
+
+// ── Role Type ─────────────────────────────────────────────────────────────────
     const ROLE_TYPES = {
         agent: [
             ['training', 'Training'],

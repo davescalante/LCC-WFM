@@ -43,17 +43,13 @@ class AgentForm(forms.ModelForm):
         model = Agent
         fields = [
             'agent_name', 'employee_id', 'role', 'role_type', 'status', 'supervisor',
-            'start_date', 'termination_date', 'phone_country_code', 'phone_number',
+            'phone_country_code', 'phone_number',
             'five9_username', 'five9_password', 'teams_password', 'notes',
         ]
         widgets = {
-            'notes': forms.Textarea(attrs={'rows': 4}),
-        }
-        widgets = {
-            'start_date': forms.DateInput(attrs={'type': 'date'}),
-            'termination_date': forms.DateInput(attrs={'type': 'date'}),
             'five9_password': forms.PasswordInput(render_value=True),
             'teams_password': forms.PasswordInput(render_value=True),
+            'notes': forms.Textarea(attrs={'rows': 4}),
         }
         labels = {
             'agent_name': 'Agent Name',
@@ -62,7 +58,6 @@ class AgentForm(forms.ModelForm):
             'five9_password': 'Five9 Password',
             'teams_password': 'Teams Password',
             'phone_number': 'Phone Number',
-            'start_date': 'Start Date',
         }
 
 

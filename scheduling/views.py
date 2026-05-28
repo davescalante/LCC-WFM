@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, Break
+from .models import Agent, Shift, Break, EmploymentPeriod
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -83,22 +83,67 @@ def agent_create(request):
 @login_required
 def agent_edit(request, pk):
     agent = get_object_or_404(Agent, pk=pk)
-    user_form = AgentUserForm(request.POST or None, instance=agent.user)
-    agent_form = AgentForm(request.POST or None, instance=agent)
-    if request.method == 'POST' and user_form.is_valid() and agent_form.is_valid():
-        user = user_form.save(commit=False)
-        password = user_form.cleaned_data.get('password')
-        if password:
-            user.set_password(password)
-        user.save()
-        agent_form.save()
-        messages.success(request, f"User {user.get_full_name()} updated successfully.")
-        return redirect('agent_detail', pk=agent.pk)
+
+    # Auto-seed period from legacy start_date if no periods exist yet
+    if agent.start_date and not agent.employment_periods.exists():
+        EmploymentPeriod.objects.create(
+            agent=agent,
+            start_date=agent.start_date,
+            end_date=agent.termination_date,
+            reason_ended='terminated' if agent.termination_date else '',
+        )
+
+    if request.method == 'POST':
+        user_form = AgentUserForm(request.POST, instance=agent.user)
+        agent_form = AgentForm(request.POST, instance=agent)
+        if user_form.is_valid() and agent_form.is_valid():
+            user = user_form.save(commit=False)
+            password = user_form.cleaned_data.get('password')
+            if password:
+                user.set_password(password)
+            user.save()
+            agent_form.save()
+
+            # Update or delete existing periods
+            for period in list(agent.employment_periods.all()):
+                if request.POST.get(f'period_{period.pk}_delete'):
+                    period.delete()
+                    continue
+                start = request.POST.get(f'period_{period.pk}_start', '').strip()
+                if start:
+                    period.start_date = start
+                    period.end_date = request.POST.get(f'period_{period.pk}_end', '').strip() or None
+                    period.reason_ended = request.POST.get(f'period_{period.pk}_reason', '')
+                    period.notes = request.POST.get(f'period_{period.pk}_notes', '')
+                    period.save()
+
+            # Create new periods (indexed rows added via JS)
+            i = 0
+            while f'new_{i}_start' in request.POST:
+                start = request.POST.get(f'new_{i}_start', '').strip()
+                if start:
+                    EmploymentPeriod.objects.create(
+                        agent=agent,
+                        start_date=start,
+                        end_date=request.POST.get(f'new_{i}_end', '').strip() or None,
+                        reason_ended=request.POST.get(f'new_{i}_reason', ''),
+                        notes=request.POST.get(f'new_{i}_notes', ''),
+                    )
+                i += 1
+
+            messages.success(request, f"User {user.get_full_name()} updated successfully.")
+            return redirect('agent_detail', pk=agent.pk)
+    else:
+        user_form = AgentUserForm(instance=agent.user)
+        agent_form = AgentForm(instance=agent)
+
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
         'title': 'Edit User',
         'agent': agent,
+        'periods': agent.employment_periods.all(),
+        'reason_choices': EmploymentPeriod.REASON_CHOICES,
     })
 
 

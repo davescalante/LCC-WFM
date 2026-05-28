@@ -53,6 +53,33 @@ class Agent(models.Model):
         return self.agent_name or self.user.get_full_name() or self.user.username
 
 
+class EmploymentPeriod(models.Model):
+    REASON_CHOICES = [
+        ('', '— Active / No reason —'),
+        ('resigned', 'Resigned'),
+        ('terminated', 'Terminated'),
+        ('laid_off', 'Laid Off'),
+        ('contract_end', 'Contract Ended'),
+        ('other', 'Other'),
+    ]
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='employment_periods')
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    reason_ended = models.CharField(max_length=20, choices=REASON_CHOICES, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['start_date']
+
+    def __str__(self):
+        end = self.end_date.strftime('%b %d, %Y') if self.end_date else 'Present'
+        return f"{self.start_date.strftime('%b %d, %Y')} – {end}"
+
+    @property
+    def is_current(self):
+        return self.end_date is None
+
+
 class Shift(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='shifts')
     date = models.DateField()
