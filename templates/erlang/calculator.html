@@ -1,63 +1,328 @@
 {% extends 'base.html' %}
 {% block title %} - Erlang Calculator{% endblock %}
 {% block content %}
-<h1>Erlang C Calculator</h1>
-<div class="grid-2">
-    <div class="card">
-        <h2>Inputs</h2>
-        <form method="post">
-            {% csrf_token %}
-            <label>Report Name</label>
-            <input type="text" name="name" placeholder="e.g. Monday Morning Peak">
-            <label>Calls Per Hour</label>
-            <input type="number" name="calls_per_hour" step="1" min="1" placeholder="e.g. 120">
-            <label>Average Handle Time (seconds)</label>
-            <input type="number" name="avg_handle_time" step="1" min="1" placeholder="e.g. 300">
-            <label>Target Service Level (%)</label>
-            <input type="number" name="target_service_level" step="1" min="1" max="100" value="80">
-            <label>Target Answer Time (seconds)</label>
-            <input type="number" name="target_answer_time" step="1" min="1" value="20">
-            <label>Shrinkage (%)</label>
-            <input type="number" name="shrinkage" step="0.1" min="0" max="99" value="0"
-                placeholder="e.g. 30">
-            <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">
-                Shrinkage accounts for time agents are unavailable — breaks, training, meetings, sick time, etc.
-            </p>
-            <button type="submit" class="btn btn-primary">Calculate</button>
-        </form>
-    </div>
-    {% if result %}
-    <div class="card">
-        <h2>Results — {{ result.report.name }}</h2>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-            <div class="stat">
-                <div class="number">{{ result.agents }}</div>
-                <div class="label">Agents Required<br><span style="font-size:11px;color:#aaa;">(Erlang C, no shrinkage)</span></div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Erlang C — Weekly Staffing Calculator</h1>
+</div>
+
+{% if error %}
+<div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;padding:12px 16px;border-radius:6px;margin-bottom:16px;font-size:14px;">
+    ⚠ {{ error }}
+</div>
+{% endif %}
+
+<!-- ── Upload & Parameters ─────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:20px;">
+    <form method="post" enctype="multipart/form-data" id="calc-form">
+        {% csrf_token %}
+        <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-end;">
+
+            <div style="flex:2;min-width:260px;">
+                <label style="display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;">
+                    Five9 Report — ACD Queue Quality of Service Details (Hourly)
+                    {% if has_data %}<span style="color:#27ae60;font-weight:400;margin-left:6px;">✓ File loaded</span>{% endif %}
+                </label>
+                <input type="file" name="csv_file" accept=".csv"
+                    style="display:block;width:100%;padding:8px;border:2px dashed #cbd5e1;border-radius:6px;font-size:13px;background:#f8fafc;cursor:pointer;">
+                {% if has_data %}
+                <div style="font-size:11px;color:#888;margin-top:4px;">Upload a new file to replace the current one.</div>
+                {% endif %}
             </div>
-            <div class="stat" style="background:{% if result.shrinkage > 0 %}#e8f5e9{% else %}#f8f9fa{% endif %};border-radius:8px;padding:12px;">
-                <div class="number" style="color:#1a7a40;">{{ result.agents_scheduled }}</div>
-                <div class="label">Agents to Schedule<br>
-                    <span style="font-size:11px;color:#aaa;">
-                        {% if result.shrinkage > 0 %}after {{ result.shrinkage }}% shrinkage{% else %}shrinkage not applied{% endif %}
-                    </span>
+
+            <div style="min-width:130px;">
+                <label style="display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;">Target Service Level</label>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <input type="number" name="target_sl" min="1" max="100" step="1"
+                        value="{{ params.target_sl|floatformat:0 }}"
+                        style="width:80px;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    <span style="color:#555;font-size:14px;">%</span>
                 </div>
             </div>
-            <div class="stat">
-                <div class="number">{{ result.service_level }}%</div>
-                <div class="label">Service Level</div>
+
+            <div style="min-width:150px;">
+                <label style="display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;">Target Answer Time</label>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <input type="number" name="target_seconds" min="1" max="300" step="1"
+                        value="{{ params.target_seconds }}"
+                        style="width:80px;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    <span style="color:#555;font-size:14px;">sec</span>
+                </div>
             </div>
-            <div class="stat">
-                <div class="number">{{ result.occupancy }}%</div>
-                <div class="label">Occupancy</div>
+
+            <div style="min-width:130px;">
+                <label style="display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;">Shrinkage</label>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <input type="number" name="shrinkage" min="0" max="99" step="0.1"
+                        value="{{ params.shrinkage|floatformat:1 }}"
+                        style="width:80px;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    <span style="color:#555;font-size:14px;">%</span>
+                </div>
             </div>
+
+            <div>
+                <button type="submit" class="btn btn-primary" style="padding:9px 24px;font-size:14px;">
+                    {% if has_data %}Recalculate{% else %}Calculate{% endif %}
+                </button>
+            </div>
+
         </div>
-        {% if result.shrinkage > 0 %}
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;font-size:13px;color:#166534;margin-bottom:12px;">
-            With {{ result.shrinkage }}% shrinkage: schedule <strong>{{ result.agents_scheduled }} agents</strong> to ensure {{ result.agents }} are available on phones at all times.
+    </form>
+</div>
+
+{% if has_data %}
+
+<!-- ── Day Tabs ────────────────────────────────────────────────────────── -->
+<div style="display:flex;gap:4px;margin-bottom:0;flex-wrap:wrap;" id="day-tabs">
+    {% for day in days %}
+    <button onclick="showDay('{{ day.name }}')" id="tab-{{ day.name }}"
+        style="padding:8px 16px;border:2px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;
+               background:#f8fafc;font-size:13px;font-weight:600;color:#555;cursor:pointer;
+               display:flex;align-items:center;gap:6px;">
+        {{ day.name }}
+        {% if day.has_data %}
+        <span id="badge-{{ day.name }}"
+            style="display:none;background:#dc2626;color:white;border-radius:10px;
+                   padding:1px 7px;font-size:11px;font-weight:700;">0</span>
+        {% endif %}
+    </button>
+    {% endfor %}
+</div>
+
+<!-- ── Day Panels ──────────────────────────────────────────────────────── -->
+{% for day in days %}
+<div id="panel-{{ day.name }}" class="day-panel" style="display:none;">
+    <div class="card" style="border-radius:0 6px 6px 6px;margin-bottom:20px;padding:0;">
+
+        {% if not day.has_data %}
+        <div style="padding:40px;text-align:center;color:#aaa;font-size:14px;">
+            No call data for {{ day.name }} in the uploaded report.
+        </div>
+
+        {% else %}
+        <!-- Table -->
+        <div style="overflow-x:auto;">
+        <table style="table-layout:auto;min-width:800px;border-collapse:collapse;width:100%;">
+            <thead>
+                <tr style="background:#f0f4f8;font-size:12px;color:#555;">
+                    <th style="padding:10px 14px;text-align:left;border-bottom:2px solid #ddd;white-space:nowrap;">Hour</th>
+                    <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;">Avg Calls</th>
+                    <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">Avg Handle Time</th>
+                    <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">Agents Required</th>
+                    <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">+ Shrinkage</th>
+                    <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;white-space:nowrap;border-left:2px solid #e5e7eb;">Current Staffing</th>
+                    <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;">Variance</th>
+                    <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">SL Achieved</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in day.rows %}
+                <tr style="border-bottom:1px solid #e8e8e8;{% cycle 'background:#fff;' 'background:#fafafa;' %}">
+                    <td style="padding:8px 14px;font-size:13px;white-space:nowrap;">{{ row.hour_label }}</td>
+                    <td style="padding:8px 10px;text-align:right;font-size:13px;">{{ row.avg_calls }}</td>
+                    <td style="padding:8px 10px;text-align:right;font-size:13px;font-family:monospace;">{{ row.aht_display }}</td>
+                    <td style="padding:8px 10px;text-align:right;font-size:13px;font-weight:600;">{{ row.agents_required }}</td>
+                    <td style="padding:8px 10px;text-align:right;font-size:14px;font-weight:700;color:#1a3a5c;">{{ row.agents_shrinkage }}</td>
+                    <td style="padding:6px 10px;text-align:center;border-left:2px solid #e5e7eb;">
+                        <input type="number" min="0"
+                            class="staffing-input"
+                            id="staffing-{{ day.name }}-{{ row.hour }}"
+                            name="staffing_{{ day.name }}_{{ row.hour }}"
+                            data-required="{{ row.agents_shrinkage }}"
+                            data-day="{{ day.name }}"
+                            placeholder="—"
+                            oninput="onStaffingChange('{{ day.name }}', {{ row.hour }})"
+                            style="width:64px;text-align:center;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+                    </td>
+                    <td id="variance-{{ day.name }}-{{ row.hour }}"
+                        style="padding:8px 10px;text-align:center;font-size:13px;font-weight:600;color:#aaa;">—</td>
+                    <td style="padding:8px 10px;text-align:right;font-size:13px;
+                        {% if row.service_level_achieved >= params.target_sl %}color:#15803d;font-weight:600;
+                        {% else %}color:#b45309;{% endif %}">
+                        {{ row.service_level_achieved }}%
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+
+        <!-- Summary bar -->
+        <div style="display:flex;gap:0;border-top:2px solid #e5e7eb;flex-wrap:wrap;">
+            <div style="padding:12px 20px;border-right:1px solid #e5e7eb;flex:1;min-width:120px;">
+                <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Hours Analyzed</div>
+                <div style="font-size:20px;font-weight:700;color:#1a3a5c;">{{ day.total_hours }}</div>
+            </div>
+            <div style="padding:12px 20px;border-right:1px solid #e5e7eb;flex:1;min-width:140px;">
+                <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Avg Agents Needed</div>
+                <div style="font-size:20px;font-weight:700;color:#1a3a5c;">{{ day.avg_agents }}</div>
+            </div>
+            <div style="padding:12px 20px;border-right:1px solid #e5e7eb;flex:2;min-width:200px;">
+                <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Peak Hour</div>
+                <div style="font-size:14px;font-weight:700;color:#1a3a5c;">{{ day.peak_label }} — {{ day.peak_agents }} agents</div>
+            </div>
+            <div style="padding:12px 20px;flex:2;min-width:220px;" id="summary-{{ day.name }}">
+                <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">vs Current Staffing</div>
+                <div style="font-size:12px;color:#aaa;">Enter current staffing above to see gaps.</div>
+            </div>
         </div>
         {% endif %}
-        <p style="font-size:13px;color:#888;">Report saved. <a href="{% url 'erlang_reports' %}">View all reports</a></p>
+
     </div>
-    {% endif %}
 </div>
+{% endfor %}
+
+<!-- ── Download ────────────────────────────────────────────────────────── -->
+<form method="post" action="{% url 'erlang_download' %}" id="download-form" style="margin-top:4px;">
+    {% csrf_token %}
+    <button type="button" onclick="submitDownload()"
+        class="btn" style="background:#1a3a5c;color:white;padding:8px 20px;">
+        ↓ Download Staffing Plan (CSV)
+    </button>
+</form>
+
+{% else %}
+<div class="card" style="text-align:center;padding:48px;color:#aaa;">
+    <div style="font-size:40px;margin-bottom:12px;">📊</div>
+    <div style="font-size:16px;font-weight:600;margin-bottom:8px;">Upload a Five9 report to get started</div>
+    <div style="font-size:13px;">Upload the <em>ACD Queue Quality of Service Details - Hourly</em> CSV export from Five9 above.</div>
+</div>
+{% endif %}
+
+<style>
+.day-panel { }
+#day-tabs button.active-tab {
+    background: white;
+    color: #1a3a5c;
+    border-color: #1a3a5c;
+    border-bottom-color: white;
+}
+</style>
+
+<script>
+const DAYS = [{% for day in days %}'{{ day.name }}',{% endfor %}];
+
+function showDay(name) {
+    DAYS.forEach(d => {
+        document.getElementById('panel-' + d).style.display = 'none';
+        const tab = document.getElementById('tab-' + d);
+        tab.classList.remove('active-tab');
+        tab.style.background = '#f8fafc';
+        tab.style.color = '#555';
+        tab.style.borderColor = '#ddd';
+    });
+    document.getElementById('panel-' + name).style.display = 'block';
+    const tab = document.getElementById('tab-' + name);
+    tab.classList.add('active-tab');
+    tab.style.background = 'white';
+    tab.style.color = '#1a3a5c';
+    tab.style.borderColor = '#1a3a5c';
+}
+
+function onStaffingChange(dayName, hour) {
+    const input = document.getElementById('staffing-' + dayName + '-' + hour);
+    const cell = document.getElementById('variance-' + dayName + '-' + hour);
+    const required = parseInt(input.dataset.required);
+    const val = input.value === '' ? NaN : parseInt(input.value);
+
+    if (isNaN(val)) {
+        cell.textContent = '—';
+        cell.style.color = '#aaa';
+    } else {
+        const diff = val - required;
+        if (diff < 0) {
+            cell.textContent = diff;
+            cell.style.color = '#dc2626';
+        } else if (diff > 0) {
+            cell.textContent = '+' + diff;
+            cell.style.color = '#15803d';
+        } else {
+            cell.textContent = '✓';
+            cell.style.color = '#6b7280';
+        }
+    }
+
+    updateDayBadge(dayName);
+    updateDaySummary(dayName);
+}
+
+function updateDayBadge(dayName) {
+    const panel = document.getElementById('panel-' + dayName);
+    if (!panel) return;
+    const inputs = panel.querySelectorAll('.staffing-input');
+    let under = 0, over = 0, ok = 0;
+    inputs.forEach(inp => {
+        const req = parseInt(inp.dataset.required);
+        const val = inp.value === '' ? NaN : parseInt(inp.value);
+        if (!isNaN(val)) {
+            if (val < req) under++;
+            else if (val > req) over++;
+            else ok++;
+        }
+    });
+    const badge = document.getElementById('badge-' + dayName);
+    if (badge) {
+        badge.textContent = under;
+        badge.style.display = under > 0 ? 'inline' : 'none';
+    }
+    return { under, over, ok };
+}
+
+function updateDaySummary(dayName) {
+    const panel = document.getElementById('panel-' + dayName);
+    const summary = document.getElementById('summary-' + dayName);
+    if (!panel || !summary) return;
+    const inputs = panel.querySelectorAll('.staffing-input');
+    let under = 0, over = 0, ok = 0, filled = 0;
+    inputs.forEach(inp => {
+        const req = parseInt(inp.dataset.required);
+        const val = inp.value === '' ? NaN : parseInt(inp.value);
+        if (!isNaN(val)) {
+            filled++;
+            if (val < req) under++;
+            else if (val > req) over++;
+            else ok++;
+        }
+    });
+    if (filled === 0) {
+        summary.innerHTML = '<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">vs Current Staffing</div><div style="font-size:12px;color:#aaa;">Enter current staffing above to see gaps.</div>';
+        return;
+    }
+    summary.innerHTML = `
+        <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">vs Current Staffing</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            <span style="font-size:13px;font-weight:700;color:#dc2626;">▼ ${under} understaffed</span>
+            <span style="font-size:13px;font-weight:700;color:#15803d;">▲ ${over} overstaffed</span>
+            <span style="font-size:13px;font-weight:700;color:#6b7280;">✓ ${ok} optimal</span>
+        </div>`;
+}
+
+function submitDownload() {
+    const form = document.getElementById('download-form');
+    form.querySelectorAll('.staffing-hidden').forEach(el => el.remove());
+    document.querySelectorAll('.staffing-input').forEach(inp => {
+        if (inp.value !== '') {
+            const h = document.createElement('input');
+            h.type = 'hidden';
+            h.name = inp.name;
+            h.value = inp.value;
+            h.className = 'staffing-hidden';
+            form.appendChild(h);
+        }
+    });
+    form.submit();
+}
+
+// Show first day with data on load
+{% if has_data %}
+(function() {
+    const first = DAYS.find(d => {
+        const p = document.getElementById('panel-' + d);
+        return p && p.querySelector('table');
+    }) || DAYS[0];
+    if (first) showDay(first);
+})();
+{% endif %}
+</script>
+
 {% endblock %}
