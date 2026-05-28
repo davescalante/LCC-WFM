@@ -137,6 +137,32 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path symlink
+def test_path_is_not_symlink():
+    from pathlib import Path
+    assert not Path(PATH).is_symlink(), f"Path should not be a symlink: {PATH}"
+
+def test_file_is_not_symlink():
+    from pathlib import Path
+    assert not Path(os.path.join(PATH, "test_path.py")).is_symlink(), "test_path.py should not be a symlink"
+
+def test_symlink_can_be_created_and_detected():
+    from pathlib import Path
+    symlink = Path(os.path.join(PATH, ".test_symlink"))
+    target = Path(os.path.join(PATH, "test_path.py"))
+    symlink.symlink_to(target)
+    assert symlink.is_symlink(), "Created symlink not detected"
+    symlink.unlink()
+
+def test_symlink_target_is_correct():
+    from pathlib import Path
+    symlink = Path(os.path.join(PATH, ".test_symlink"))
+    target = Path(os.path.join(PATH, "test_path.py"))
+    symlink.symlink_to(target)
+    assert symlink.resolve() == target.resolve(), "Symlink does not point to correct target"
+    symlink.unlink()
+
+
 # File path existence check
 def test_pathlib_path_exists():
     from pathlib import Path
