@@ -12,7 +12,7 @@ from .calculator import (
     agents_required, service_level, occupancy,
     parse_aht, calculate_staffing, format_aht,
 )
-from .models import ErlangReport, ErlangActualStaff
+from .models import ErlangReport, ErlangActualStaff, ErlangCallRow
 from scheduling.models import Shift, Five9Profile, OvertimeShift
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -168,9 +168,17 @@ def erlang_calculator(request):
                 if not rows:
                     error = "No valid data found. Check that the file is the Five9 ACD Queue Quality of Service Details - Hourly report."
                 else:
-                    rows_by_week = request.session.get('erlang_rows_by_week', {})
-                    rows_by_week[week_key] = rows
-                    request.session['erlang_rows_by_week'] = rows_by_week
+                    ErlangCallRow.objects.filter(week_start=week_start).delete()
+                    ErlangCallRow.objects.bulk_create([
+                        ErlangCallRow(
+                            week_start=week_start,
+                            day=r['day'],
+                            hour=r['hour'],
+                            total_calls=r['total_calls'],
+                            avg_calls=r['avg_calls'],
+                        )
+                        for r in rows
+                    ])
             except Exception as e:
                 error = f"Error reading file: {e}"
 
@@ -184,7 +192,10 @@ def erlang_calculator(request):
         if not error:
             return redirect(f"{request.path}?week_start={week_key}")
 
-    raw_rows = request.session.get('erlang_rows_by_week', {}).get(week_key, [])
+    raw_rows = [
+        {'day': r.day, 'hour': r.hour, 'total_calls': r.total_calls, 'avg_calls': r.avg_calls}
+        for r in ErlangCallRow.objects.filter(week_start=week_start)
+    ]
     _p = request.session.get('erlang_params', {})
     params = {
         'target_sl': _p.get('target_sl', 80),
@@ -273,7 +284,10 @@ def erlang_download(request):
         today = date.today()
         week_start = today - timedelta(days=today.weekday())
 
-    raw_rows = request.session.get('erlang_rows_by_week', {}).get(week_start.isoformat(), [])
+    raw_rows = [
+        {'day': r.day, 'hour': r.hour, 'total_calls': r.total_calls, 'avg_calls': r.avg_calls}
+        for r in ErlangCallRow.objects.filter(week_start=week_start)
+    ]
     _p = request.session.get('erlang_params', {})
     params = {
         'target_sl': _p.get('target_sl', 80),

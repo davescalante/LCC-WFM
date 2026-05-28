@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from scheduling.models import AuditLog
 from adherence.models import DailyUpload
-from erlang.models import ErlangActualStaff, ErlangReport
+from erlang.models import ErlangActualStaff, ErlangReport, ErlangCallRow
 
 
 class Command(BaseCommand):
@@ -17,6 +17,7 @@ class Command(BaseCommand):
         audit_count, _ = AuditLog.objects.all().delete()
         erlang_staff, _ = ErlangActualStaff.objects.all().delete()
         erlang_reports, _ = ErlangReport.objects.all().delete()
+        erlang_calls, _ = ErlangCallRow.objects.all().delete()
         daily_uploads, _ = DailyUpload.objects.all().delete()  # cascades to DailyAgentHours
 
         # Delete all non-superuser users — cascades through Agent to all scheduling,
