@@ -137,6 +137,28 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path iteration
+def test_iterdir_returns_results():
+    from pathlib import Path
+    results = list(Path(PATH).iterdir())
+    assert len(results) > 0, "iterdir returned no results"
+
+def test_iterdir_returns_path_objects():
+    from pathlib import Path
+    results = list(Path(PATH).iterdir())
+    assert all(isinstance(r, Path) for r in results), "iterdir results are not Path objects"
+
+def test_iterdir_contains_test_file():
+    from pathlib import Path
+    names = [p.name for p in Path(PATH).iterdir()]
+    assert "test_path.py" in names, "test_path.py not found in iterdir results"
+
+def test_iterdir_all_entries_exist():
+    from pathlib import Path
+    results = list(Path(PATH).iterdir())
+    assert all(p.exists() for p in results), "Some iterdir entries do not exist"
+
+
 # File path glob
 def test_glob_finds_python_files():
     from pathlib import Path
