@@ -4,8 +4,7 @@ from .models import Agent, Shift, Break
 
 
 class AgentUserForm(forms.ModelForm):
-    first_name = forms.CharField(max_length=150, label="Legal First Name")
-    last_name = forms.CharField(max_length=150, label="Legal Last Name")
+    legal_name = forms.CharField(max_length=300, label="Legal Name", help_text="Enter full legal name")
     email = forms.EmailField()
     password = forms.CharField(
         widget=forms.PasswordInput, required=False,
@@ -14,7 +13,23 @@ class AgentUserForm(forms.ModelForm):
 
     class Meta:
         model = User
-        fields = ['username', 'first_name', 'last_name', 'email']
+        fields = ['username', 'email']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            full_name = f"{self.instance.first_name} {self.instance.last_name}".strip()
+            self.fields['legal_name'].initial = full_name
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        legal_name = self.cleaned_data.get('legal_name', '').strip()
+        parts = legal_name.split(' ', 1)
+        user.first_name = parts[0]
+        user.last_name = parts[1] if len(parts) > 1 else ''
+        if commit:
+            user.save()
+        return user
 
 
 class AgentForm(forms.ModelForm):
