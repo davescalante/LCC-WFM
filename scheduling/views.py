@@ -133,6 +133,25 @@ def shift_list(request):
 
     agents = Agent.objects.filter(status='active').select_related('user').order_by('user__last_name', 'user__first_name')
 
+    # Auto carry-forward: if this week has no shifts and the previous week does, copy them over
+    if not Shift.objects.filter(date__in=week_dates).exists():
+        prev_week_start = week_start - timedelta(days=7)
+        prev_week_dates = [prev_week_start + timedelta(days=i) for i in range(7)]
+        prev_shifts = list(Shift.objects.filter(date__in=prev_week_dates).select_related('agent'))
+        if prev_shifts:
+            day_offset_map = {src: tgt for src, tgt in zip(prev_week_dates, week_dates)}
+            Shift.objects.bulk_create([
+                Shift(
+                    agent=s.agent,
+                    date=day_offset_map[s.date],
+                    start_time=s.start_time,
+                    end_time=s.end_time,
+                    is_off=s.is_off,
+                    notes=s.notes,
+                )
+                for s in prev_shifts
+            ])
+
     shifts_qs = Shift.objects.filter(
         date__in=week_dates, agent__in=agents
     ).select_related('agent__user')
@@ -203,7 +222,7 @@ def shift_week(request):
                     }
                 )
         messages.success(request, f"Schedule saved for week of {week_start.strftime('%B %d, %Y')}.")
-        return redirect('shift_list')
+        return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
 
     # Build day context with existing data pre-filled
     days = []
