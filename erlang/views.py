@@ -13,7 +13,7 @@ from .calculator import (
     parse_aht, calculate_staffing, format_aht,
 )
 from .models import ErlangReport, ErlangActualStaff
-from scheduling.models import Shift
+from scheduling.models import Shift, Five9Profile
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -34,10 +34,15 @@ def _build_scheduled_map(week_start):
     """Count regular/nightshift agents covering each (day_name, hour) for the given week."""
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
+    # Only count agents who have a Five9 profile with a regular-call role type
+    call_agent_ids = Five9Profile.objects.filter(
+        role_type__in=('regular_agent', 'night_shift')
+    ).values_list('agent_id', flat=True).distinct()
+
     shifts = Shift.objects.filter(
         date__in=week_dates,
         is_off=False,
-        agent__role_type__in=('regular_agent', 'night_shift'),
+        agent_id__in=call_agent_ids,
     ).values('date', 'start_time', 'end_time')
 
     scheduled = {}

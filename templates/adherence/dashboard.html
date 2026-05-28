@@ -55,7 +55,7 @@
         <tr style="border-bottom:1px solid #e8e8e8;">
             <td style="padding:8px 10px;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 <div style="font-size:13px;font-weight:600;line-height:1.3;">{{ row.agent }}</div>
-                {% if row.agent.five9_username %}<div style="font-size:11px;color:#888;margin-top:2px;">{{ row.agent.five9_username }}</div>{% endif %}
+                {% for p in row.agent.five9_profiles.all %}<div style="font-size:11px;color:#888;margin-top:2px;">{{ p.five9_username }}{% if p.label %} · {{ p.label }}{% endif %}</div>{% endfor %}
                 {% if row.agent.supervisor %}<div style="font-size:10px;color:#aaa;margin-top:1px;">{{ row.agent.supervisor }}</div>{% endif %}
             </td>
 

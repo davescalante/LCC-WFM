@@ -30,10 +30,31 @@
     <div class="card">
         <h2>System Credentials</h2>
         <table>
-            <tr><td><strong>Five9 Username</strong></td><td>{{ agent.five9_username|default:"—" }}</td></tr>
-            <tr><td><strong>Five9 Password</strong></td><td>{{ agent.five9_password|default:"—" }}</td></tr>
             <tr><td><strong>Teams Password</strong></td><td>{{ agent.teams_password|default:"—" }}</td></tr>
         </table>
+        {% if agent.five9_profiles.all %}
+        <h3 style="font-size:14px;margin:16px 0 8px;">Five9 Accounts</h3>
+        <table style="font-size:13px;">
+            <thead>
+                <tr style="background:#f0f4f8;">
+                    <th style="padding:6px 10px;text-align:left;">Label</th>
+                    <th style="padding:6px 10px;text-align:left;">Username</th>
+                    <th style="padding:6px 10px;text-align:left;">Role Type</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for profile in agent.five9_profiles.all %}
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:5px 10px;">{{ profile.label|default:"—" }}</td>
+                    <td style="padding:5px 10px;">{{ profile.five9_username }}</td>
+                    <td style="padding:5px 10px;">{{ profile.get_role_type_display|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="font-size:13px;color:#aaa;margin-top:12px;">No Five9 accounts on file.</p>
+        {% endif %}
     </div>
 </div>
 

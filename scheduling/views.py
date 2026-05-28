@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, Break, EmploymentPeriod
+from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -56,6 +56,34 @@ def agent_detail(request, pk):
     return render(request, 'scheduling/agent_detail.html', {'agent': agent, 'shifts': shifts})
 
 
+def _save_five9_profiles(request, agent):
+    """Process Five9Profile rows from POST: update existing, delete flagged, create new."""
+    for profile in list(agent.five9_profiles.all()):
+        if request.POST.get(f'five9_{profile.pk}_delete'):
+            profile.delete()
+            continue
+        username = request.POST.get(f'five9_{profile.pk}_username', '').strip()
+        if username:
+            profile.label = request.POST.get(f'five9_{profile.pk}_label', '').strip()
+            profile.five9_username = username
+            profile.five9_password = request.POST.get(f'five9_{profile.pk}_password', '').strip()
+            profile.role_type = request.POST.get(f'five9_{profile.pk}_role_type', '')
+            profile.save()
+
+    i = 0
+    while f'new_five9_{i}_username' in request.POST:
+        username = request.POST.get(f'new_five9_{i}_username', '').strip()
+        if username:
+            Five9Profile.objects.create(
+                agent=agent,
+                label=request.POST.get(f'new_five9_{i}_label', '').strip(),
+                five9_username=username,
+                five9_password=request.POST.get(f'new_five9_{i}_password', '').strip(),
+                role_type=request.POST.get(f'new_five9_{i}_role_type', ''),
+            )
+        i += 1
+
+
 @login_required
 def agent_create(request):
     user_form = AgentUserForm(request.POST or None)
@@ -71,12 +99,15 @@ def agent_create(request):
         agent = agent_form.save(commit=False)
         agent.user = user
         agent.save()
+        _save_five9_profiles(request, agent)
         messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
         'title': 'Add User',
+        'five9_profiles': [],
+        'role_type_choices': Agent.ROLE_TYPE_CHOICES,
     })
 
 
@@ -131,6 +162,7 @@ def agent_edit(request, pk):
                     )
                 i += 1
 
+            _save_five9_profiles(request, agent)
             messages.success(request, f"User {user.get_full_name()} updated successfully.")
             return redirect('agent_detail', pk=agent.pk)
     else:
@@ -144,6 +176,8 @@ def agent_edit(request, pk):
         'agent': agent,
         'periods': agent.employment_periods.all(),
         'reason_choices': EmploymentPeriod.REASON_CHOICES,
+        'five9_profiles': agent.five9_profiles.all(),
+        'role_type_choices': Agent.ROLE_TYPE_CHOICES,
     })
 
 

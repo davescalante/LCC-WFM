@@ -50,13 +50,74 @@
         </div>
 
         <div class="card">
-            <h2>Five9 & Teams</h2>
-            <label>Five9 Username</label>
-            {{ agent_form.five9_username }}
-            <label>Five9 Password</label>
-            {{ agent_form.five9_password }}
+            <h2>Teams</h2>
             <label>Teams Password</label>
             {{ agent_form.teams_password }}
+        </div>
+    </div>
+
+    <div class="card" id="five9-accounts-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h2 style="margin:0;">Five9 Accounts</h2>
+            <button type="button" onclick="addFive9Row()"
+                style="padding:6px 16px;background:#1a3a5c;color:white;border:none;border-radius:4px;font-size:13px;cursor:pointer;">
+                + Add Account
+            </button>
+        </div>
+        <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;" id="five9-table">
+            <thead>
+                <tr style="background:#f0f4f8;text-align:left;">
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">Label</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">Five9 Username</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">Five9 Password</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;">Role Type</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;width:60px;"></th>
+                </tr>
+            </thead>
+            <tbody id="five9-body">
+                {% for profile in five9_profiles %}
+                <tr id="five9-row-{{ profile.pk }}" style="border-bottom:1px solid #eee;">
+                    <input type="hidden" name="five9_{{ profile.pk }}_delete" id="del-five9-{{ profile.pk }}" value="">
+                    <td style="padding:6px 8px;">
+                        <input type="text" name="five9_{{ profile.pk }}_label"
+                            value="{{ profile.label }}" placeholder="e.g. Primary, Kill Team"
+                            style="margin-bottom:0;width:130px;">
+                    </td>
+                    <td style="padding:6px 8px;">
+                        <input type="text" name="five9_{{ profile.pk }}_username"
+                            value="{{ profile.five9_username }}"
+                            style="margin-bottom:0;width:180px;">
+                    </td>
+                    <td style="padding:6px 8px;">
+                        <input type="password" name="five9_{{ profile.pk }}_password"
+                            value="{{ profile.five9_password }}"
+                            style="margin-bottom:0;width:140px;">
+                    </td>
+                    <td style="padding:6px 8px;">
+                        <select name="five9_{{ profile.pk }}_role_type" style="margin-bottom:0;width:160px;">
+                            <option value="">— None —</option>
+                            {% for val, label in role_type_choices %}
+                            <option value="{{ val }}" {% if profile.role_type == val %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td style="padding:6px 8px;text-align:center;">
+                        <button type="button" onclick="removeFive9('{{ profile.pk }}')"
+                            style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;">
+                            Remove
+                        </button>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr id="no-five9-row">
+                    <td colspan="5" style="padding:20px;text-align:center;color:#aaa;">
+                        No Five9 accounts. Click "+ Add Account" to add one.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
         </div>
     </div>
 
@@ -151,6 +212,54 @@
     label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
 </style>
 <script>
+// ── Five9 Accounts ────────────────────────────────────────────────────────────
+let newFive9Index = 0;
+
+const ROLE_TYPE_OPTIONS = '<option value="">— None —</option>' + [
+    {% for val, label in role_type_choices %}'<option value="{{ val }}">{{ label }}</option>',{% endfor %}
+].join('');
+
+function addFive9Row() {
+    const tbody = document.getElementById('five9-body');
+    const noRow = document.getElementById('no-five9-row');
+    if (noRow) noRow.remove();
+
+    const i = newFive9Index++;
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid #eee';
+    tr.id = 'new-five9-row-' + i;
+    tr.innerHTML = `
+        <td style="padding:6px 8px;">
+            <input type="text" name="new_five9_${i}_label" placeholder="e.g. Primary, Kill Team" style="margin-bottom:0;width:130px;">
+        </td>
+        <td style="padding:6px 8px;">
+            <input type="text" name="new_five9_${i}_username" placeholder="Five9 username" style="margin-bottom:0;width:180px;">
+        </td>
+        <td style="padding:6px 8px;">
+            <input type="password" name="new_five9_${i}_password" placeholder="Password" style="margin-bottom:0;width:140px;">
+        </td>
+        <td style="padding:6px 8px;">
+            <select name="new_five9_${i}_role_type" style="margin-bottom:0;width:160px;">${ROLE_TYPE_OPTIONS}</select>
+        </td>
+        <td style="padding:6px 8px;text-align:center;">
+            <button type="button" onclick="this.closest('tr').remove()"
+                style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;">
+                Remove
+            </button>
+        </td>`;
+    tbody.appendChild(tr);
+}
+
+function removeFive9(pk) {
+    if (!confirm('Remove this Five9 account?')) return;
+    document.getElementById('del-five9-' + pk).value = '1';
+    const row = document.getElementById('five9-row-' + pk);
+    row.style.opacity = '0.35';
+    row.style.textDecoration = 'line-through';
+    row.querySelectorAll('input, select, button').forEach(el => el.disabled = true);
+    document.getElementById('del-five9-' + pk).disabled = false;
+}
+
 // ── Employment History ────────────────────────────────────────────────────────
 let newPeriodIndex = 0;
 

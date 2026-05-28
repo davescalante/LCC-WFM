@@ -53,6 +53,23 @@ class Agent(models.Model):
         return self.agent_name or self.user.get_full_name() or self.user.username
 
 
+class Five9Profile(models.Model):
+    ROLE_TYPE_CHOICES = Agent.ROLE_TYPE_CHOICES
+
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='five9_profiles')
+    label = models.CharField(max_length=100, blank=True, help_text="e.g. Primary, Kill Team, Overtime")
+    five9_username = models.CharField(max_length=150)
+    five9_password = models.CharField(max_length=150, blank=True)
+    role_type = models.CharField(max_length=20, choices=ROLE_TYPE_CHOICES, blank=True)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        tag = self.label or self.get_role_type_display() or 'Account'
+        return f"{self.five9_username} ({tag})"
+
+
 class EmploymentPeriod(models.Model):
     REASON_CHOICES = [
         ('', '— Active / No reason —'),

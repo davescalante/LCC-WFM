@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
-from scheduling.models import Shift, Agent
+from scheduling.models import Shift, Agent, Five9Profile
 from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
@@ -565,7 +565,7 @@ def payroll_export(request):
                 writer.writerow([
                     c.agent.user.get_full_name(),
                     c.agent.agent_name or '',
-                    c.agent.five9_username or '',
+                    c.agent.five9_profiles.values_list('five9_username', flat=True).first() or '',
                     c.date.strftime('%Y-%m-%d'),
                     c.date.strftime('%A'),
                     c.start_time.strftime('%H:%M'),
@@ -627,7 +627,7 @@ def payroll_export(request):
                 agent.user.get_full_name(),
                 agent.agent_name or '',
                 agent.employee_id or '',
-                agent.five9_username or '',
+                agent.five9_profiles.values_list('five9_username', flat=True).first() or '',
                 supervisor_name,
                 _decimal_to_hhmmss(sched_total),
                 _decimal_to_hhmmss(actual_total),
@@ -744,11 +744,13 @@ def upload_daily_file(request):
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Could not read file: {e}'}, status=400)
 
+    # Build lookup from Five9 username → Agent using Five9Profile table
+    # so agents with multiple Five9 accounts all resolve to the same person
     agent_map = {
-        a.five9_username.strip().lower(): a
-        for a in Agent.objects.filter(
-            five9_username__gt='', status='active'
-        ).select_related('user', 'supervisor__user')
+        p.five9_username.strip().lower(): p.agent
+        for p in Five9Profile.objects.filter(
+            five9_username__gt='', agent__status='active'
+        ).select_related('agent__user', 'agent__supervisor__user')
     }
 
     DailyUpload.objects.filter(date=upload_date).delete()

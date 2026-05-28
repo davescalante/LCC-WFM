@@ -44,18 +44,15 @@ class AgentForm(forms.ModelForm):
         fields = [
             'agent_name', 'employee_id', 'role', 'role_type', 'status', 'supervisor',
             'phone_country_code', 'phone_number',
-            'five9_username', 'five9_password', 'teams_password', 'notes',
+            'teams_password', 'notes',
         ]
         widgets = {
-            'five9_password': forms.PasswordInput(render_value=True),
             'teams_password': forms.PasswordInput(render_value=True),
             'notes': forms.Textarea(attrs={'rows': 4}),
         }
         labels = {
             'agent_name': 'Agent Name',
             'employee_id': 'Employee ID',
-            'five9_username': 'Five9 Username',
-            'five9_password': 'Five9 Password',
             'teams_password': 'Teams Password',
             'phone_number': 'Phone Number',
         }
