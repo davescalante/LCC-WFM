@@ -37,7 +37,7 @@
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Login Hrs</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Coded Hrs</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Total Hrs</th>
-            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Commission<br>Deduction</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Commission<br>Deduction %</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Bonus</th>
         </tr>
     </thead>
@@ -64,10 +64,13 @@
                 {{ row.adjusted_total|to_hhmmss|default:"—" }}
             </td>
             <td style="padding:8px 12px;text-align:center;">
-                <input type="number" name="deduction_{{ row.agent.pk }}"
-                    value="{{ row.commission_deduction }}"
-                    min="0" step="0.01"
-                    style="width:80px;text-align:center;padding:4px 6px;font-size:13px;border:1px solid #ddd;border-radius:4px;margin:0;">
+                <div style="display:flex;align-items:center;justify-content:center;gap:3px;">
+                    <input type="number" name="deduction_{{ row.agent.pk }}"
+                        value="{{ row.commission_deduction }}"
+                        min="0" max="100" step="0.1"
+                        style="width:64px;text-align:center;padding:4px 6px;font-size:13px;border:1px solid #ddd;border-radius:4px;margin:0;">
+                    <span style="font-size:13px;color:#555;">%</span>
+                </div>
             </td>
             <td style="padding:10px 12px;text-align:center;">
                 {% if row.bonus == 'Yes' %}

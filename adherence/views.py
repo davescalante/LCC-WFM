@@ -526,7 +526,7 @@ def payroll_export(request):
         writer.writerow([
             'Legal Name', 'Agent Name', 'Five9 Username',
             'Scheduled Hours', 'Actual Login Hours', 'Coded Hours',
-            'Adjusted Total Hours', 'Commission Deduction', 'Adherence Bonus',
+            'Adjusted Total Hours', 'Commission Deduction %', 'Adherence Bonus',
         ])
 
         for agent in agents:
@@ -565,7 +565,7 @@ def payroll_export(request):
                 _decimal_to_hhmmss(actual_total),
                 _decimal_to_hhmmss(coded),
                 _decimal_to_hhmmss(adjusted),
-                f'{commission:.2f}',
+                f'{commission:.1f}%',
                 bonus_label,
             ])
 

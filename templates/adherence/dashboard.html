@@ -98,11 +98,14 @@
                 {% else %}<span style="color:#aaa;font-size:12px;">—</span>{% endif %}
             </td>
             <td style="padding:6px 8px;text-align:center;vertical-align:middle;">
-                <input type="number" min="0" step="0.01"
-                    value="{% if row.commission_deduction %}{{ row.commission_deduction }}{% endif %}"
-                    placeholder="0.00"
-                    onblur="saveCommission('{{ row.agent.pk }}', '{{ week_start|date:'Y-m-d' }}', this)"
-                    style="width:72px;text-align:center;font-size:12px;padding:3px 5px;border:1px solid #ddd;border-radius:4px;">
+                <div style="display:flex;align-items:center;justify-content:center;gap:2px;">
+                    <input type="number" min="0" max="100" step="0.1"
+                        value="{% if row.commission_deduction %}{{ row.commission_deduction }}{% endif %}"
+                        placeholder="0"
+                        onblur="saveCommission('{{ row.agent.pk }}', '{{ week_start|date:'Y-m-d' }}', this)"
+                        style="width:56px;text-align:center;font-size:12px;padding:3px 5px;border:1px solid #ddd;border-radius:4px;">
+                    <span style="font-size:12px;color:#555;">%</span>
+                </div>
             </td>
         </tr>
         {% empty %}
