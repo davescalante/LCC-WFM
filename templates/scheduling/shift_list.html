@@ -21,6 +21,16 @@
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
+        {% if has_prev_week %}
+        <form method="post" action="{% url 'shift_copy_from_prev' %}" id="copy-form" style="margin:0;">
+            {% csrf_token %}
+            <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+            <button type="button" onclick="confirmCopy()" class="btn"
+                style="background:#f59e0b;color:white;padding:6px 14px;white-space:nowrap;">
+                &#x2398; Copy from prev week{% if has_this_week %} (overwrite){% endif %}
+            </button>
+        </form>
+        {% endif %}
     </div>
 </div>
 
@@ -82,4 +92,13 @@
     </tbody>
 </table>
 </div>
+
+<script>
+function confirmCopy() {
+    {% if has_this_week %}
+    if (!confirm("This will overwrite this week's existing schedule with last week's. Continue?")) return;
+    {% endif %}
+    document.getElementById('copy-form').submit();
+}
+</script>
 {% endblock %}
