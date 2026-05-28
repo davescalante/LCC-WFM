@@ -283,8 +283,9 @@ def shift_edit(request, pk):
     form = ShiftForm(request.POST or None, instance=shift)
     if request.method == 'POST' and form.is_valid():
         form.save()
+        week_start = shift.date - timedelta(days=shift.date.weekday())
         messages.success(request, "Shift updated successfully.")
-        return redirect('shift_list')
+        return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
     return render(request, 'scheduling/shift_form.html', {
         'form': form,
         'title': 'Edit Shift',
@@ -296,9 +297,10 @@ def shift_edit(request, pk):
 def shift_delete(request, pk):
     shift = get_object_or_404(Shift, pk=pk)
     if request.method == 'POST':
+        week_start = shift.date - timedelta(days=shift.date.weekday())
         shift.delete()
         messages.success(request, "Shift deleted.")
-        return redirect('shift_list')
+        return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
     return render(request, 'scheduling/confirm_delete.html', {
         'object': shift,
         'cancel_url': reverse('shift_list'),
