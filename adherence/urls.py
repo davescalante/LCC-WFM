@@ -12,4 +12,5 @@ urlpatterns = [
     path('delete-coding/', views.delete_coding_ajax, name='delete_coding_ajax'),
     path('daily/upload/', views.upload_daily_file, name='upload_daily_file'),
     path('daily/delete/', views.delete_daily_upload_ajax, name='delete_daily_upload'),
+    path('poll/', views.adherence_poll, name='adherence_poll'),
 ]

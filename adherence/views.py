@@ -901,3 +901,28 @@ def delete_daily_upload_ajax(request):
     except (ValueError, TypeError):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
     return JsonResponse({'ok': True})
+
+
+@login_required
+def adherence_poll(request):
+    """Return the latest update timestamp for adherence records in the given week."""
+    from django.db.models import Max
+    week_start_str = request.GET.get('week_start', '')
+    try:
+        ws = date.fromisoformat(week_start_str)
+        ws -= timedelta(days=ws.weekday())
+    except (ValueError, TypeError):
+        today = date.today()
+        ws = today - timedelta(days=today.weekday())
+
+    week_dates = [ws + timedelta(days=i) for i in range(7)]
+    result = AdherenceRecord.objects.filter(date__in=week_dates).aggregate(
+        latest=Max('updated_at')
+    )
+    coding_result = Coding.objects.filter(date__in=week_dates).aggregate(
+        latest=Max('created_at')
+    )
+
+    timestamps = [t for t in [result['latest'], coding_result['latest']] if t]
+    latest = max(timestamps).isoformat() if timestamps else None
+    return JsonResponse({'latest': latest})
