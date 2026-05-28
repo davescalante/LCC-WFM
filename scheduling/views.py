@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile, ShiftTemplate
+from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, OvertimeShift
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -527,4 +527,152 @@ def shift_delete(request, pk):
     return render(request, 'scheduling/confirm_delete.html', {
         'object': shift,
         'cancel_url': reverse('shift_list'),
+    })
+
+
+def _get_week_start(request):
+    """Return Monday of the selected week from GET param or today."""
+    today = timezone.localdate()
+    default = today - timedelta(days=today.weekday())
+    raw = request.GET.get('week_start')
+    try:
+        ws = date.fromisoformat(raw) if raw else default
+        return ws - timedelta(days=ws.weekday())
+    except (ValueError, TypeError):
+        return default
+
+
+def _get_supervisor_filter(request):
+    """Returns (supervisor_id_str, supervisors_qs). Reads GET param saving to session."""
+    supervisors = Agent.objects.filter(
+        role_type='supervisor', status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    if 'supervisor' in request.GET:
+        val = request.GET.get('supervisor', '')
+        request.session['shift_supervisor_filter'] = val
+        return val, supervisors
+
+    return request.session.get('shift_supervisor_filter', ''), supervisors
+
+
+def _apply_supervisor_filter(agents_qs, supervisor_id):
+    if supervisor_id:
+        try:
+            return agents_qs.filter(supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+    return agents_qs
+
+
+@login_required
+def overtime_list(request):
+    week_start = _get_week_start(request)
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    week_end = week_dates[-1]
+
+    supervisor_id, supervisors = _get_supervisor_filter(request)
+    agents = Agent.objects.filter(status='active').select_related('user').order_by(
+        'user__last_name', 'user__first_name'
+    )
+    agents = _apply_supervisor_filter(agents, supervisor_id)
+
+    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
+    ot_map = {(s.agent_id, s.date): s for s in ot_qs}
+
+    rows = []
+    for agent in agents:
+        cells = []
+        for day_date in week_dates:
+            ot_shift = ot_map.get((agent.pk, day_date))
+            cells.append({'date': day_date, 'ot_shift': ot_shift})
+        rows.append({'agent': agent, 'cells': cells})
+
+    return render(request, 'scheduling/overtime_list.html', {
+        'rows': rows,
+        'week_dates': week_dates,
+        'week_start': week_start,
+        'week_end': week_end,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+    })
+
+
+@login_required
+def overtime_week(request):
+    week_start = _get_week_start(request)
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    week_end = week_dates[-1]
+
+    agents = Agent.objects.filter(status='active').select_related('user').order_by(
+        'user__last_name', 'user__first_name'
+    )
+
+    if request.method == 'POST':
+        week_start_str = request.POST.get('week_start')
+        try:
+            ws = date.fromisoformat(week_start_str) if week_start_str else week_start
+            ws = ws - timedelta(days=ws.weekday())
+        except (ValueError, TypeError):
+            ws = week_start
+        week_dates_post = [ws + timedelta(days=i) for i in range(7)]
+
+        for agent in agents:
+            for day_date in week_dates_post:
+                date_iso = day_date.isoformat()
+                ot_start = request.POST.get(f'ot_start_{agent.pk}_{date_iso}', '').strip()
+                ot_end = request.POST.get(f'ot_end_{agent.pk}_{date_iso}', '').strip()
+                ot_notes = request.POST.get(f'ot_notes_{agent.pk}_{date_iso}', '').strip()
+
+                if ot_start and ot_end:
+                    OvertimeShift.objects.update_or_create(
+                        agent=agent,
+                        date=day_date,
+                        defaults={
+                            'start_time': ot_start,
+                            'end_time': ot_end,
+                            'notes': ot_notes,
+                        }
+                    )
+                else:
+                    OvertimeShift.objects.filter(agent=agent, date=day_date).delete()
+
+        messages.success(request, f"OT shifts saved for week of {ws.strftime('%B %d, %Y')}.")
+        return redirect(f"{reverse('overtime_list')}?week_start={ws.isoformat()}")
+
+    # GET: pre-fill from existing OT records
+    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
+    ot_map = {(s.agent_id, s.date): s for s in ot_qs}
+
+    rows = []
+    for agent in agents:
+        cells = []
+        for day_date in week_dates:
+            ot_shift = ot_map.get((agent.pk, day_date))
+            cells.append({'date': day_date, 'ot_shift': ot_shift})
+        rows.append({'agent': agent, 'cells': cells})
+
+    return render(request, 'scheduling/overtime_week.html', {
+        'rows': rows,
+        'week_dates': week_dates,
+        'week_start': week_start,
+        'week_end': week_end,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+    })
+
+
+@login_required
+def overtime_delete(request, pk):
+    ot_shift = get_object_or_404(OvertimeShift, pk=pk)
+    if request.method == 'POST':
+        week_start = ot_shift.date - timedelta(days=ot_shift.date.weekday())
+        ot_shift.delete()
+        messages.success(request, "OT shift deleted.")
+        return redirect(f"{reverse('overtime_list')}?week_start={week_start.isoformat()}")
+    return render(request, 'scheduling/confirm_delete.html', {
+        'object': ot_shift,
+        'cancel_url': reverse('overtime_list'),
     })

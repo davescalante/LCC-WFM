@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
-from scheduling.models import Shift, Agent, Five9Profile
+from scheduling.models import Shift, Agent, Five9Profile, OvertimeShift
 from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
@@ -82,6 +82,17 @@ def _scheduled_hours(shift):
     return Decimal(str(round(delta.total_seconds() / 3600, 6)))
 
 
+def _ot_hours(ot_shift):
+    if not ot_shift:
+        return Decimal('0')
+    start = datetime.combine(date.today(), ot_shift.start_time)
+    end = datetime.combine(date.today(), ot_shift.end_time)
+    delta = end - start
+    if delta.total_seconds() < 0:
+        delta += timedelta(days=1)
+    return Decimal(str(round(delta.total_seconds() / 3600, 6)))
+
+
 def _get_week_start(request):
     today = timezone.localdate()
     default = today - timedelta(days=today.weekday())
@@ -106,10 +117,13 @@ def _build_maps(agents, week_dates):
         key = (c.agent_id, c.date)
         coded_map[key] = coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
 
-    return shift_map, record_map, coded_map
+    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
+    ot_map = {(s.agent_id, s.date): s for s in ot_qs}
+
+    return shift_map, record_map, coded_map, ot_map
 
 
-def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
+def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None):
     rows = []
     for agent in agents:
         cells = []
@@ -123,22 +137,32 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
         for day_date in week_dates:
             shift = shift_map.get((agent.pk, day_date))
             record = record_map.get((agent.pk, day_date))
+            ot_shift = (ot_map or {}).get((agent.pk, day_date))
 
             sched_hrs = _scheduled_hours(shift)
+            ot_hrs = _ot_hours(ot_shift)
             is_off = shift.is_off if shift else False
             has_shift = shift is not None
-            effective_sched = sched_hrs  # may be reduced for VTO/LOA
 
-            if has_shift and not is_off:
+            # A day is scheduled if there's a non-off regular shift OR an OT shift
+            is_scheduled_day = (has_shift and not is_off) or bool(ot_shift)
+
+            effective_sched = Decimal('0')
+
+            if is_scheduled_day:
                 status = record.status if record else ''
                 actual_hrs = record.actual_hours if record else None
+
+                raw_sched = sched_hrs + ot_hrs
 
                 # VTO/LOA all-day: remove scheduled requirement entirely
                 # P+VTO/T+VTO: cap scheduled to what they actually worked
                 if status in ('VTO', 'LOA'):
                     effective_sched = Decimal('0')
                 elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
-                    effective_sched = min(actual_hrs, sched_hrs)
+                    effective_sched = min(actual_hrs, raw_sched)
+                else:
+                    effective_sched = raw_sched
 
                 sched_total += effective_sched
 
@@ -177,9 +201,9 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
 
             # Cell color — use total (login + codings) vs effective scheduled for color logic
             cell_total = (actual_hrs or Decimal('0')) + cell_coded_hrs
-            if not has_shift:
+            if not has_shift and not ot_shift:
                 cell_color = '#fafafa'
-            elif is_off:
+            elif is_off and not ot_shift:
                 cell_color = STATUS_COLORS.get(status, '#f0f0f0') if status else '#f0f0f0'
             elif status:
                 base = STATUS_COLORS.get(status, '#fff')
@@ -193,7 +217,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             else:
                 cell_color = '#fff'
 
-            cell_sched_hrs = effective_sched if has_shift and not is_off else None
+            cell_sched_hrs = effective_sched if is_scheduled_day else None
             if cell_sched_hrs and (actual_hrs is not None or cell_coded_hrs) and cell_sched_hrs > cell_total:
                 missing_hrs = cell_sched_hrs - cell_total
             else:
@@ -204,14 +228,15 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             cells.append({
                 'date': day_date,
                 'scheduled': (
-                    'Off' if is_off
-                    else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift
+                    'Off' if (is_off and not ot_shift)
+                    else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift and not is_off
                     else ''
                 ),
+                'ot_time': f"{ot_shift.start_time.strftime('%H:%M')}–{ot_shift.end_time.strftime('%H:%M')}" if ot_shift else None,
                 'sched_hrs': cell_sched_hrs,
                 'missing_hrs': missing_hrs,
-                'is_off': is_off,
-                'has_shift': has_shift,
+                'is_off': is_off and not ot_shift,
+                'has_shift': is_scheduled_day or (has_shift and is_off),
                 'status': status,
                 'display_hrs': display_hrs,
                 'color': cell_color,
@@ -405,7 +430,7 @@ def adherence_week(request):
     agents = _apply_supervisor_filter(agents, supervisor_id)
 
     if request.method == 'POST':
-        shift_map, record_map, _ = _build_maps(agents, week_dates)
+        shift_map, record_map, _, _ot = _build_maps(agents, week_dates)
         for agent in agents:
             for day_date in week_dates:
                 status_val = request.POST.get(f'status_{agent.pk}_{day_date.isoformat()}', '')
@@ -426,8 +451,8 @@ def adherence_week(request):
 
         return redirect(reverse('adherence_dashboard') + f'?week_start={week_start.isoformat()}')
 
-    shift_map, record_map, coded_map = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map)
+    shift_map, record_map, coded_map, ot_map = _build_maps(agents, week_dates)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction
@@ -587,7 +612,7 @@ def payroll_export(request):
             return response
 
         # Default: export payroll summary
-        shift_map, record_map, coded_map = _build_maps(agents, week_dates)
+        shift_map, record_map, coded_map, ot_map = _build_maps(agents, week_dates)
         adj_map = {
             pa.agent_id: pa.commission_deduction
             for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
@@ -613,16 +638,22 @@ def payroll_export(request):
             for day_date in week_dates:
                 shift = shift_map.get((agent.pk, day_date))
                 record = record_map.get((agent.pk, day_date))
-                if shift and not shift.is_off:
+                ot_shift = ot_map.get((agent.pk, day_date))
+                is_off = shift.is_off if shift else False
+                is_scheduled_day = (shift and not is_off) or bool(ot_shift)
+
+                if is_scheduled_day:
                     base_sched = _scheduled_hours(shift)
+                    ot_hrs = _ot_hours(ot_shift)
+                    raw_sched = base_sched + ot_hrs
                     status = record.status if record else ''
                     actual_hrs = record.actual_hours if record else None
                     if status in ('VTO', 'LOA'):
                         effective_sched = Decimal('0')
                     elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
-                        effective_sched = min(actual_hrs, base_sched)
+                        effective_sched = min(actual_hrs, raw_sched)
                     else:
-                        effective_sched = base_sched
+                        effective_sched = raw_sched
                     sched_total += effective_sched
                     if status in BONUS_DISQUALIFYING:
                         bonus = False
@@ -659,8 +690,8 @@ def payroll_export(request):
         return response
 
     # GET — show preview with editable deductions
-    shift_map, record_map, coded_map = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map)
+    shift_map, record_map, coded_map, ot_map = _build_maps(agents, week_dates)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction

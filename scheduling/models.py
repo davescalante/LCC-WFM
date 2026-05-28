@@ -136,6 +136,21 @@ class Shift(models.Model):
         return f"{self.agent} - {self.date} {self.start_time}-{self.end_time}"
 
 
+class OvertimeShift(models.Model):
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='overtime_shifts')
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ('agent', 'date')
+        ordering = ['date']
+
+    def __str__(self):
+        return f"{self.agent} — OT {self.date} {self.start_time}–{self.end_time}"
+
+
 class Break(models.Model):
     BREAK_TYPES = [
         ('break', 'Break'),

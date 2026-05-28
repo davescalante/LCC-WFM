@@ -13,7 +13,7 @@ from .calculator import (
     parse_aht, calculate_staffing, format_aht,
 )
 from .models import ErlangReport, ErlangActualStaff
-from scheduling.models import Shift, Five9Profile
+from scheduling.models import Shift, Five9Profile, OvertimeShift
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -47,6 +47,21 @@ def _build_scheduled_map(week_start):
 
     scheduled = {}
     for s in shifts:
+        day_name = s['date'].strftime('%A')
+        sh = s['start_time'].hour
+        eh = s['end_time'].hour
+        hours = list(range(sh, 24)) + list(range(0, eh)) if eh <= sh else list(range(sh, eh))
+        for h in hours:
+            key = (day_name, h)
+            scheduled[key] = scheduled.get(key, 0) + 1
+
+    # Also count OT shifts for call agents
+    ot_shifts = OvertimeShift.objects.filter(
+        date__in=week_dates,
+        agent_id__in=call_agent_ids,
+    ).values('date', 'start_time', 'end_time')
+
+    for s in ot_shifts:
         day_name = s['date'].strftime('%A')
         sh = s['start_time'].hour
         eh = s['end_time'].hour

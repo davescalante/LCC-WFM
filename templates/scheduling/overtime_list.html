@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block title %} - OT Shifts{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>OT Shifts</h1>
+    <a href="{% url 'overtime_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">+ Edit OT Week</a>
+</div>
+
+{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+
+<!-- Supervisor filter -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <form method="get" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Filter by Supervisor:</label>
+        <select name="supervisor" onchange="this.form.submit()"
+            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+            <option value="">All</option>
+            {% for sup in supervisors %}
+            <option value="{{ sup.pk }}" {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>
+                {{ sup }}
+            </option>
+            {% endfor %}
+        </select>
+        {% if selected_supervisor %}
+        <a href="?week_start={{ week_start|date:'Y-m-d' }}&supervisor=" style="font-size:12px;color:#888;text-decoration:none;">&#10005; Clear</a>
+        {% endif %}
+    </form>
+</div>
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+           class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} &ndash; {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+           class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+            {% if selected_supervisor %}<input type="hidden" name="supervisor" value="{{ selected_supervisor }}">{% endif %}
+            <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
+                onchange="this.form.submit()">
+        </form>
+    </div>
+</div>
+
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="table-layout:auto;min-width:900px;border-collapse:collapse;">
+    <thead>
+        <tr style="background:#f0f4f8;">
+            <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+            {% for d in week_dates %}
+            <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
+                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
+                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+            </th>
+            {% endfor %}
+            <th style="min-width:120px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        <tr style="border-bottom:1px solid #e8e8e8;">
+            <td style="padding:10px 12px;font-weight:600;font-size:13px;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
+                <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
+            </td>
+            {% for cell in row.cells %}
+            <td style="padding:6px 4px;text-align:center;vertical-align:middle;{% if cell.ot_shift %}background:#f0fdf4;{% endif %}">
+                {% if cell.ot_shift %}
+                    <div style="font-size:12px;font-weight:600;color:#16a34a;white-space:nowrap;">
+                        {{ cell.ot_shift.start_time|time:"H:i" }}&ndash;{{ cell.ot_shift.end_time|time:"H:i" }}
+                    </div>
+                    {% if cell.ot_shift.notes %}
+                    <div style="font-size:10px;color:#888;margin-top:2px;">{{ cell.ot_shift.notes|truncatechars:20 }}</div>
+                    {% endif %}
+                {% else %}
+                    <span style="color:#ddd;font-size:12px;">&mdash;</span>
+                {% endif %}
+            </td>
+            {% endfor %}
+            <td style="padding:8px 10px;text-align:center;border-left:2px solid #eee;">
+                <a href="{% url 'overtime_week' %}?week_start={{ week_start|date:'Y-m-d' }}&agent={{ row.agent.pk }}"
+                   class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;">Edit</a>
+            </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" style="padding:30px;color:#888;text-align:center;">No agents found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+{% endblock %}
