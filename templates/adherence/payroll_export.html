@@ -14,11 +14,12 @@
         <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
         <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
-        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+        <form method="get" style="display:flex;align-items:center;gap:8px;">
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
+        {% include 'includes/supervisor_filter.html' %}
     </div>
 </div>
 
@@ -32,7 +33,9 @@
         <tr style="background:#f0f4f8;">
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Legal Name</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Agent Name</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Emp ID</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Five9 Username</th>
+            <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;">Supervisor</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Sched Hrs</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Login Hrs</th>
             <th style="padding:10px 12px;border-bottom:2px solid #ddd;text-align:center;">Coded Hrs</th>
@@ -46,7 +49,9 @@
         <tr style="border-bottom:1px solid #eee;">
             <td style="padding:10px 12px;font-size:13px;">{{ row.agent.user.get_full_name }}</td>
             <td style="padding:10px 12px;font-size:13px;">{{ row.agent.agent_name|default:"—" }}</td>
+            <td style="padding:10px 12px;font-size:13px;color:#555;">{{ row.agent.employee_id|default:"—" }}</td>
             <td style="padding:10px 12px;font-size:13px;color:#555;">{{ row.agent.five9_username|default:"—" }}</td>
+            <td style="padding:10px 12px;font-size:13px;color:#555;">{{ row.agent.supervisor|default:"—" }}</td>
             <td style="padding:10px 12px;text-align:center;font-size:12px;font-family:monospace;">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
             <td style="padding:10px 12px;text-align:center;font-size:12px;font-family:monospace;
                 {% if row.actual_hours and row.sched_hours %}

@@ -70,6 +70,40 @@ class Coding(models.Model):
         return f"{self.agent} — {self.date} — {self.start_time}–{self.end_time}"
 
 
+class DailyUpload(models.Model):
+    """One uploaded Five9 CSV file per day."""
+    date = models.DateField(unique=True)
+    uploaded_at = models.DateTimeField(auto_now=True)
+    filename = models.CharField(max_length=255, blank=True)
+    row_count = models.IntegerField(default=0)
+    unmatched_count = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"Five9 upload — {self.date} ({self.row_count} agents)"
+
+
+class DailyAgentHours(models.Model):
+    """One row from a Five9 daily CSV: one agent's login/not-ready time for one day."""
+    upload = models.ForeignKey(DailyUpload, on_delete=models.CASCADE, related_name='rows')
+    agent = models.ForeignKey(
+        Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_hours'
+    )
+    five9_username = models.CharField(max_length=100)
+    agent_group = models.CharField(max_length=100, blank=True)
+    login_seconds = models.IntegerField(default=0)
+    not_ready_seconds = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['five9_username']
+        unique_together = ('upload', 'five9_username')
+
+    def __str__(self):
+        return f"{self.five9_username} — {self.upload.date}"
+
+
 class PayrollAdjustment(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='payroll_adjustments')
     week_start = models.DateField()

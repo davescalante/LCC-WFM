@@ -1,0 +1,218 @@
+{% extends 'base.html' %}
+{% load adherence_filters %}
+{% block title %} - Daily Hours Data{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <div style="display:flex;align-items:center;gap:16px;">
+        <h1 style="margin:0;">Daily Hours Data</h1>
+        <span id="upload-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+    </div>
+    <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Adherence</a>
+</div>
+
+<!-- Week navigation + supervisor filter -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <form method="get" style="display:flex;align-items:center;gap:8px;">
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
+                onchange="this.form.submit()">
+        </form>
+        {% include 'includes/supervisor_filter.html' %}
+    </div>
+</div>
+
+<!-- Day cards -->
+{% for slot in day_slots %}
+<div class="card" style="margin-bottom:16px;padding:0;" id="day-card-{{ slot.date|date:'Y-m-d' }}">
+
+    <!-- Card header -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 20px;border-bottom:1px solid #eee;
+        background:{% if slot.upload %}{% if slot.upload.unmatched_count > 0 %}#fffbeb{% else %}#f0fdf4{% endif %}{% else %}#fafafa{% endif %};
+        border-radius:8px 8px 0 0;">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <div>
+                <span style="font-size:15px;font-weight:700;color:#1a3a5c;">{{ slot.date|date:"l" }}</span>
+                <span style="font-size:13px;color:#888;margin-left:6px;">{{ slot.date|date:"M d, Y" }}</span>
+            </div>
+            {% if slot.upload %}
+                {% if slot.upload.unmatched_count > 0 %}
+                <span class="badge badge-yellow">⚠ {{ slot.upload.unmatched_count }} unmatched</span>
+                {% endif %}
+                <span class="badge badge-green">✓ {{ slot.upload.row_count }} agents</span>
+                <span style="font-size:11px;color:#888;">{{ slot.upload.filename }} &nbsp;·&nbsp; uploaded {{ slot.upload.uploaded_at|date:"M d \a\t g:i A" }}</span>
+            {% else %}
+                <span style="font-size:13px;color:#aaa;">No file uploaded</span>
+            {% endif %}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+            {% if slot.upload %}
+            <button onclick="toggleTable('{{ slot.date|date:'Y-m-d' }}')"
+                id="toggle-btn-{{ slot.date|date:'Y-m-d' }}"
+                style="font-size:12px;padding:4px 10px;background:#eee;border:none;border-radius:4px;cursor:pointer;">
+                ▼ Hide
+            </button>
+            <button onclick="confirmDelete('{{ slot.date|date:'Y-m-d' }}')"
+                style="font-size:12px;padding:4px 10px;background:#fee2e2;color:#991b1b;border:none;border-radius:4px;cursor:pointer;">
+                Delete
+            </button>
+            {% endif %}
+            <label style="font-size:12px;padding:4px 12px;background:#1a3a5c;color:white;border-radius:4px;cursor:pointer;margin:0;">
+                {% if slot.upload %}Replace File{% else %}Upload File{% endif %}
+                <input type="file" accept=".csv" style="display:none;"
+                    onchange="uploadFile(this, '{{ slot.date|date:'Y-m-d' }}')">
+            </label>
+        </div>
+    </div>
+
+    <!-- Detail table -->
+    {% if slot.upload and slot.rows %}
+    <div id="table-{{ slot.date|date:'Y-m-d' }}" style="overflow-x:auto;">
+    <table style="table-layout:auto;min-width:1000px;border-collapse:collapse;">
+        <thead>
+            <tr style="background:#f8f9fa;font-size:11px;color:#555;">
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:left;white-space:nowrap;">Supervisor</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:left;white-space:nowrap;">Agent</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:left;white-space:nowrap;">Five9 Username</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;">Login Time</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;">Not Ready</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;">Coded Time</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;background:#e8f5e9;">Total Worked</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;">NR Allowance<br><span style="font-weight:400;color:#aaa;">(12.5%)</span></th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;">Excess NR</th>
+                <th style="padding:8px 10px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap;background:#e8f5e9;">Final Hours</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in slot.rows %}
+            <tr style="border-bottom:1px solid #f0f0f0;{% if not row.dah.agent %}background:#fffbeb;{% endif %}">
+                <td style="padding:6px 10px;font-size:12px;color:#555;">
+                    {{ row.dah.agent.supervisor|default:"—" }}
+                </td>
+                <td style="padding:6px 10px;font-size:12px;">
+                    {% if row.dah.agent %}
+                    <div style="font-weight:600;">{{ row.dah.agent }}</div>
+                    {% if row.dah.agent.employee_id %}<div style="font-size:10px;color:#aaa;">ID: {{ row.dah.agent.employee_id }}</div>{% endif %}
+                    {% else %}
+                    <span style="color:#d97706;font-weight:600;">⚠ Unmatched</span>
+                    {% endif %}
+                </td>
+                <td style="padding:6px 10px;font-size:12px;color:#555;">{{ row.dah.five9_username }}</td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;">{{ row.dah.login_seconds|seconds_to_hhmmss }}</td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;{% if row.excess_seconds > 0 %}color:#c0392b;{% endif %}">
+                    {{ row.dah.not_ready_seconds|seconds_to_hhmmss }}
+                </td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;color:#5d6d7e;">
+                    {% if row.coded_seconds %}{{ row.coded_seconds|seconds_to_hhmmss }}{% else %}<span style="color:#ddd;">—</span>{% endif %}
+                </td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;font-weight:600;background:#f0fdf4;">
+                    {{ row.total_seconds|seconds_to_hhmmss }}
+                </td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;color:#888;">
+                    {{ row.allowance_seconds|seconds_to_hhmmss }}
+                </td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;{% if row.excess_seconds > 0 %}color:#c0392b;font-weight:600;{% else %}color:#aaa;{% endif %}">
+                    {% if row.excess_seconds %}{{ row.excess_seconds|seconds_to_hhmmss }}{% else %}—{% endif %}
+                </td>
+                <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;font-weight:700;background:#f0fdf4;
+                    {% if row.excess_seconds > 0 %}color:#c0392b;{% else %}color:#1a7a40;{% endif %}">
+                    {{ row.final_seconds|seconds_to_hhmmss }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% elif slot.upload and not slot.rows %}
+    <div style="padding:16px 20px;color:#888;font-size:13px;">No agents matched for this day{% if selected_supervisor %} under the selected supervisor{% endif %}.</div>
+    {% endif %}
+
+</div>
+{% endfor %}
+
+<div class="card" style="margin-top:20px;background:#f8f9fa;border:1px solid #e9ecef;padding:14px 20px;">
+    <p style="font-size:13px;color:#666;margin:0;">
+        <strong>How it works:</strong> Upload the Five9 daily report CSV for each day.
+        The system reads each agent's login time and not-ready time, adds any manually coded non-system time,
+        then deducts excess not-ready time (anything above 12.5% of total worked time).
+        The resulting <strong>Final Hours</strong> are automatically written to the attendance sheet as that agent's worked hours for the day.
+        You can replace a file at any time — previous data is overwritten.
+    </p>
+</div>
+
+<script>
+function csrfToken() {
+    return document.querySelector('meta[name="csrf-token"]').content;
+}
+
+function showUploadStatus(msg, color, bg) {
+    const el = document.getElementById('upload-status');
+    el.textContent = msg;
+    el.style.color = color;
+    el.style.background = bg;
+    el.style.display = 'inline';
+}
+
+function toggleTable(dateStr) {
+    const tbl = document.getElementById('table-' + dateStr);
+    const btn = document.getElementById('toggle-btn-' + dateStr);
+    if (!tbl) return;
+    if (tbl.style.display === 'none') {
+        tbl.style.display = '';
+        btn.textContent = '▼ Hide';
+    } else {
+        tbl.style.display = 'none';
+        btn.textContent = '▶ Show';
+    }
+}
+
+async function uploadFile(input, dateStr) {
+    if (!input.files.length) return;
+    const file = input.files[0];
+    showUploadStatus('Uploading…', '#b45309', '#fef3c7');
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('date', dateStr);
+    formData.append('csrfmiddlewaretoken', csrfToken());
+
+    try {
+        const resp = await fetch('/adherence/daily/upload/', {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken()},
+            body: formData,
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'Upload failed');
+
+        showUploadStatus('✓ Uploaded — reloading…', '#166534', '#dcfce7');
+        setTimeout(() => window.location.reload(), 600);
+    } catch (e) {
+        showUploadStatus('⚠ ' + (e.message || 'Upload failed'), '#991b1b', '#fee2e2');
+        input.value = '';
+    }
+}
+
+async function confirmDelete(dateStr) {
+    if (!confirm('Delete the upload for ' + dateStr + '? The attendance hours written by this upload will not be cleared automatically.')) return;
+    showUploadStatus('Deleting…', '#b45309', '#fef3c7');
+    try {
+        const resp = await fetch('/adherence/daily/delete/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({date: dateStr}),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'Delete failed');
+        showUploadStatus('✓ Deleted — reloading…', '#166534', '#dcfce7');
+        setTimeout(() => window.location.reload(), 600);
+    } catch (e) {
+        showUploadStatus('⚠ ' + (e.message || 'Delete failed'), '#991b1b', '#fee2e2');
+    }
+}
+</script>
+{% endblock %}

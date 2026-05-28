@@ -6,10 +6,39 @@
     <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add User</a>
 </div>
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+
+<!-- Supervisor filter -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <form method="get" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Filter by Supervisor:</label>
+        <select name="supervisor" onchange="this.form.submit()"
+            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+            <option value="">All</option>
+            {% for sup in supervisors %}
+            <option value="{{ sup.pk }}"
+                {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>
+                {{ sup }}
+            </option>
+            {% endfor %}
+        </select>
+        {% if selected_supervisor %}
+        <a href="?supervisor=" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear</a>
+        {% endif %}
+    </form>
+</div>
+
 <div class="card">
     <table>
         <thead>
-            <tr><th>Name</th><th>Role</th><th>Role Type</th><th>Email</th><th>Status</th><th>Actions</th></tr>
+            <tr>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Role Type</th>
+                <th>Supervisor</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
         </thead>
         <tbody>
             {% for agent in agents %}
@@ -17,6 +46,7 @@
                 <td><a href="{% url 'agent_detail' agent.pk %}">{{ agent.user.get_full_name }}</a></td>
                 <td><span class="badge badge-blue">{{ agent.get_role_display }}</span></td>
                 <td>{{ agent.get_role_type_display|default:"—" }}</td>
+                <td style="color:#555;font-size:13px;">{{ agent.supervisor|default:"—" }}</td>
                 <td>{{ agent.user.email }}</td>
                 <td>{% if agent.status == 'active' %}<span class="badge badge-green">Active</span>{% else %}<span class="badge badge-red">Inactive</span>{% endif %}</td>
                 <td>
@@ -25,7 +55,7 @@
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" style="color:#888;">No users found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
+            <tr><td colspan="7" style="color:#888;">No users found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
             {% endfor %}
         </tbody>
     </table>

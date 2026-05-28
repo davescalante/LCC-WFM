@@ -1,7 +1,10 @@
 from datetime import date, timedelta, datetime
 from decimal import Decimal, InvalidOperation
 import csv
+import io
 import json
+
+from django.db.models import Q
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
@@ -11,7 +14,7 @@ from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
 from scheduling.models import Shift, Agent
-from .models import AdherenceRecord, Coding, PayrollAdjustment
+from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
 BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
@@ -213,6 +216,39 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
     return rows
 
 
+def _hhmmss_to_seconds(s):
+    """Convert 'HH:MM:SS' string to integer seconds. Returns 0 on any error."""
+    try:
+        parts = str(s).strip().split(':')
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    except (ValueError, IndexError, AttributeError):
+        return 0
+
+
+def _get_supervisor_filter(request):
+    """Returns (supervisor_id_str, supervisors_qs).
+    Reads GET param 'supervisor' (saving to session), or falls back to session."""
+    supervisors = Agent.objects.filter(
+        role_type='supervisor', status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    if 'supervisor' in request.GET:
+        val = request.GET.get('supervisor', '')
+        request.session['supervisor_filter'] = val
+        return val, supervisors
+
+    return request.session.get('supervisor_filter', ''), supervisors
+
+
+def _apply_supervisor_filter(agents_qs, supervisor_id):
+    if supervisor_id:
+        try:
+            return agents_qs.filter(supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+    return agents_qs
+
+
 # ── AJAX endpoints ────────────────────────────────────────────────────────────
 
 @login_required
@@ -333,9 +369,11 @@ def adherence_week(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
 
-    agents = Agent.objects.filter(status='active').select_related('user').order_by(
+    supervisor_id, supervisors = _get_supervisor_filter(request)
+    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
+    agents = _apply_supervisor_filter(agents, supervisor_id)
 
     if request.method == 'POST':
         shift_map, record_map, _ = _build_maps(agents, week_dates)
@@ -377,6 +415,8 @@ def adherence_week(request):
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'status_choices': AdherenceRecord.STATUS_CHOICES,
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
     })
 
 
@@ -386,9 +426,11 @@ def codings_week(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
 
-    agents = Agent.objects.filter(status='active').select_related('user').order_by(
+    supervisor_id, supervisors = _get_supervisor_filter(request)
+    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
+    agents = _apply_supervisor_filter(agents, supervisor_id)
 
     if request.method == 'POST':
         action = request.POST.get('action')
@@ -453,6 +495,8 @@ def codings_week(request):
         'week_end': week_end,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
     })
 
 
@@ -462,9 +506,11 @@ def payroll_export(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
 
-    agents = Agent.objects.filter(status='active').select_related('user').order_by(
+    supervisor_id, supervisors = _get_supervisor_filter(request)
+    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
+    agents = _apply_supervisor_filter(agents, supervisor_id)
 
     if request.method == 'POST':
         action = request.POST.get('action', 'export_payroll')
@@ -524,7 +570,7 @@ def payroll_export(request):
 
         writer = csv.writer(response)
         writer.writerow([
-            'Legal Name', 'Agent Name', 'Five9 Username',
+            'Legal Name', 'Agent Name', 'Employee ID', 'Five9 Username', 'Supervisor',
             'Scheduled Hours', 'Actual Login Hours', 'Coded Hours',
             'Adjusted Total Hours', 'Commission Deduction %', 'Adherence Bonus',
         ])
@@ -557,10 +603,13 @@ def payroll_export(request):
             commission = adj_map.get(agent.pk, Decimal('0'))
             bonus_label = 'Yes' if (bonus and bonus_determined) else 'No'
 
+            supervisor_name = str(agent.supervisor) if agent.supervisor else ''
             writer.writerow([
                 agent.user.get_full_name(),
                 agent.agent_name or '',
+                agent.employee_id or '',
                 agent.five9_username or '',
+                supervisor_name,
                 _decimal_to_hhmmss(sched_total),
                 _decimal_to_hhmmss(actual_total),
                 _decimal_to_hhmmss(coded),
@@ -588,4 +637,173 @@ def payroll_export(request):
         'week_end': week_end,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
     })
+
+
+# ── Daily Hours views ─────────────────────────────────────────────────────────
+
+@login_required
+def daily_hours_week(request):
+    week_start = _get_week_start(request)
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    week_end = week_dates[-1]
+
+    supervisor_id, supervisors = _get_supervisor_filter(request)
+
+    codings_map = {}
+    for c in Coding.objects.filter(date__in=week_dates):
+        key = (c.agent_id, c.date)
+        codings_map[key] = codings_map.get(key, 0) + c.total_seconds_count()
+
+    upload_map = {u.date: u for u in DailyUpload.objects.filter(date__in=week_dates)}
+
+    day_slots = []
+    for day_date in week_dates:
+        upload = upload_map.get(day_date)
+        rows = []
+        if upload:
+            dah_qs = upload.rows.select_related(
+                'agent__user', 'agent__supervisor__user'
+            ).order_by('agent__user__last_name', 'agent__user__first_name', 'five9_username')
+
+            if supervisor_id:
+                try:
+                    dah_qs = dah_qs.filter(
+                        Q(agent__supervisor_id=int(supervisor_id)) | Q(agent__isnull=True)
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+            for dah in dah_qs:
+                coded_secs = codings_map.get((dah.agent_id, day_date), 0) if dah.agent_id else 0
+                total_secs = dah.login_seconds + coded_secs
+                allowance_secs = int(total_secs * 0.125)
+                excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
+                final_secs = max(0, total_secs - excess_secs)
+                rows.append({
+                    'dah': dah,
+                    'coded_seconds': coded_secs,
+                    'total_seconds': total_secs,
+                    'allowance_seconds': allowance_secs,
+                    'excess_seconds': excess_secs,
+                    'final_seconds': final_secs,
+                })
+        day_slots.append({'date': day_date, 'upload': upload, 'rows': rows})
+
+    return render(request, 'adherence/daily_hours.html', {
+        'day_slots': day_slots,
+        'week_start': week_start,
+        'week_end': week_end,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+    })
+
+
+@login_required
+@require_POST
+def upload_daily_file(request):
+    """Accept a Five9 CSV upload for one day. Replaces any existing upload for that date."""
+    date_str = request.POST.get('date')
+    csv_file = request.FILES.get('file')
+
+    if not date_str or not csv_file:
+        return JsonResponse({'ok': False, 'error': 'Missing date or file.'}, status=400)
+
+    try:
+        upload_date = date.fromisoformat(date_str)
+    except ValueError:
+        return JsonResponse({'ok': False, 'error': 'Invalid date.'}, status=400)
+
+    try:
+        content = csv_file.read().decode('utf-8-sig')
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': f'Could not read file: {e}'}, status=400)
+
+    agent_map = {
+        a.five9_username.strip().lower(): a
+        for a in Agent.objects.filter(
+            five9_username__gt='', status='active'
+        ).select_related('user', 'supervisor__user')
+    }
+
+    DailyUpload.objects.filter(date=upload_date).delete()
+
+    upload = DailyUpload.objects.create(
+        date=upload_date,
+        filename=csv_file.name,
+        row_count=len(rows),
+    )
+
+    unmatched = 0
+    dah_objects = []
+
+    for row in rows:
+        username = (row.get('AGENT') or row.get('Agent') or '').strip().lower()
+        agent_group = (row.get('AGENT GROUP') or row.get('Agent Group') or '').strip()
+        login_str = (row.get('LOGIN TIME') or row.get('Login Time') or '').strip()
+        not_ready_str = (row.get('NOT READY TIME') or row.get('Not Ready Time') or '').strip()
+
+        if not username:
+            continue
+
+        agent = agent_map.get(username)
+        if not agent:
+            unmatched += 1
+
+        dah = DailyAgentHours(
+            upload=upload,
+            agent=agent,
+            five9_username=username,
+            agent_group=agent_group,
+            login_seconds=_hhmmss_to_seconds(login_str),
+            not_ready_seconds=_hhmmss_to_seconds(not_ready_str),
+        )
+        dah_objects.append(dah)
+
+    DailyAgentHours.objects.bulk_create(dah_objects, ignore_conflicts=True)
+    upload.unmatched_count = unmatched
+    upload.save()
+
+    for dah in dah_objects:
+        if not dah.agent_id:
+            continue
+        coded_secs = sum(
+            c.total_seconds_count()
+            for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
+        )
+        total_secs = dah.login_seconds + coded_secs
+        allowance_secs = int(total_secs * 0.125)
+        excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
+        final_secs = max(0, total_secs - excess_secs)
+        final_hours = Decimal(str(round(final_secs / 3600, 6)))
+
+        AdherenceRecord.objects.update_or_create(
+            agent_id=dah.agent_id,
+            date=upload_date,
+            defaults={'actual_hours': final_hours},
+        )
+
+    return JsonResponse({
+        'ok': True,
+        'row_count': len(dah_objects),
+        'unmatched_count': unmatched,
+        'filename': csv_file.name,
+    })
+
+
+@login_required
+@require_POST
+def delete_daily_upload_ajax(request):
+    data = json.loads(request.body)
+    date_str = data.get('date')
+    try:
+        DailyUpload.objects.filter(date=date.fromisoformat(date_str)).delete()
+    except (ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
+    return JsonResponse({'ok': True})

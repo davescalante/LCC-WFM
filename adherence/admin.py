@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AdherenceRecord, Coding, PayrollAdjustment
+from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
 @admin.register(AdherenceRecord)
@@ -20,3 +20,16 @@ class CodingAdmin(admin.ModelAdmin):
 class PayrollAdjustmentAdmin(admin.ModelAdmin):
     list_display = ['agent', 'week_start', 'commission_deduction', 'notes']
     list_filter = ['week_start']
+
+
+@admin.register(DailyUpload)
+class DailyUploadAdmin(admin.ModelAdmin):
+    list_display = ['date', 'filename', 'row_count', 'unmatched_count', 'uploaded_at']
+    list_filter = ['date']
+
+
+@admin.register(DailyAgentHours)
+class DailyAgentHoursAdmin(admin.ModelAdmin):
+    list_display = ['five9_username', 'agent', 'upload', 'login_seconds', 'not_ready_seconds']
+    list_filter = ['upload__date']
+    search_fields = ['five9_username', 'agent__agent_name']

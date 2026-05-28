@@ -23,8 +23,30 @@ def dashboard(request):
 
 @login_required
 def agent_list(request):
-    agents = Agent.objects.select_related('user').order_by('user__last_name')
-    return render(request, 'scheduling/agent_list.html', {'agents': agents})
+    supervisors = Agent.objects.filter(
+        role_type='supervisor', status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    if 'supervisor' in request.GET:
+        supervisor_id = request.GET.get('supervisor', '')
+        request.session['supervisor_filter'] = supervisor_id
+    else:
+        supervisor_id = request.session.get('supervisor_filter', '')
+
+    agents = Agent.objects.select_related('user', 'supervisor__user').order_by(
+        'user__last_name', 'user__first_name'
+    )
+    if supervisor_id:
+        try:
+            agents = agents.filter(supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+
+    return render(request, 'scheduling/agent_list.html', {
+        'agents': agents,
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+    })
 
 
 @login_required

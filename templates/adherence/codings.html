@@ -17,11 +17,12 @@
         <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
         <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
-        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+        <form method="get" style="display:flex;align-items:center;gap:8px;">
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
+        {% include 'includes/supervisor_filter.html' %}
     </div>
 </div>
 
@@ -29,7 +30,7 @@
 <table style="table-layout:auto;min-width:1000px;border-collapse:collapse;">
     <thead>
         <tr style="background:#f0f4f8;">
-            <th style="width:150px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+            <th style="width:180px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
             {% for d in week_dates %}
             <th style="min-width:140px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
                 <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
@@ -44,6 +45,9 @@
         <tr style="border-bottom:1px solid #e8e8e8;">
             <td style="padding:8px 10px;font-size:13px;font-weight:600;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 {{ row.agent }}
+                {% if row.agent.five9_username %}<div style="font-size:10px;color:#888;font-weight:400;margin-top:1px;">{{ row.agent.five9_username }}</div>{% endif %}
+                {% if row.agent.employee_id %}<div style="font-size:10px;color:#aaa;font-weight:400;">ID: {{ row.agent.employee_id }}</div>{% endif %}
+                {% if row.agent.supervisor %}<div style="font-size:10px;color:#aaa;font-weight:400;">{{ row.agent.supervisor }}</div>{% endif %}
             </td>
 
             {% for cell in row.cells %}

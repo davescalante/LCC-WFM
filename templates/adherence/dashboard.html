@@ -20,12 +20,12 @@
         <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
         <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
-        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
-            <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
+        <form method="get" style="display:flex;align-items:center;gap:8px;">
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
+        {% include 'includes/supervisor_filter.html' %}
     </div>
 </div>
 
@@ -56,6 +56,7 @@
             <td style="padding:8px 10px;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 <div style="font-size:13px;font-weight:600;line-height:1.3;">{{ row.agent }}</div>
                 {% if row.agent.five9_username %}<div style="font-size:11px;color:#888;margin-top:2px;">{{ row.agent.five9_username }}</div>{% endif %}
+                {% if row.agent.supervisor %}<div style="font-size:10px;color:#aaa;margin-top:1px;">{{ row.agent.supervisor }}</div>{% endif %}
             </td>
 
             {% for cell in row.cells %}
