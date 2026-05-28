@@ -30,7 +30,6 @@
 </div>
 
 {% if selected_agent_id %}
-<!-- Step 2: Fill in the week -->
 <form method="post">
     {% csrf_token %}
     <input type="hidden" name="agent" value="{{ selected_agent_id }}">
@@ -38,6 +37,14 @@
 
     <div class="card">
         <h2 style="margin-bottom:16px;">Week of {{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</h2>
+
+        {% if has_any_template %}
+        <div style="font-size:12px;color:#2563eb;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:8px 12px;margin-bottom:14px;">
+            <strong>Recurring schedule active.</strong>
+            Days shown in blue are from this agent's template. Override individual weeks with "One-time" below.
+        </div>
+        {% endif %}
+
         <table style="table-layout:fixed;">
             <thead>
                 <tr>
@@ -51,8 +58,16 @@
             </thead>
             <tbody>
                 {% for day in days %}
-                <tr id="row-{{ day.index }}" {% if day.is_off %}style="background:#fff5f5;"{% endif %}>
-                    <td><strong>{{ day.name }}</strong></td>
+                <tr id="row-{{ day.index }}"
+                    style="border-bottom:1px solid #f0f0f0;{% if day.is_off %}background:#fff5f5;{% elif day.from_template %}background:#f0f7ff;{% endif %}">
+                    <td>
+                        <strong>{{ day.name }}</strong>
+                        {% if day.from_template %}
+                        <span style="font-size:10px;color:#2563eb;display:block;font-weight:400;">recurring</span>
+                        {% elif day.has_override %}
+                        <span style="font-size:10px;color:#d97706;display:block;font-weight:400;">override</span>
+                        {% endif %}
+                    </td>
                     <td style="color:#888;font-size:13px;">{{ day.date|date:"M d" }}</td>
                     <td style="text-align:center;">
                         <input type="checkbox" name="day_{{ day.index }}_off"
@@ -84,8 +99,70 @@
         </table>
     </div>
 
+    <!-- How to save -->
+    <div class="card" style="margin-top:16px;">
+        <h2 style="margin-bottom:14px;">How should this change be applied?</h2>
+
+        <div style="display:flex;flex-direction:column;gap:14px;">
+
+            <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;padding:12px 16px;border:2px solid #ddd;border-radius:6px;transition:border-color .15s;" id="opt-permanent">
+                <input type="radio" name="edit_type" value="permanent"
+                    {% if not has_any_template %}checked{% endif %}
+                    onchange="onEditTypeChange()"
+                    style="margin-top:3px;width:16px;height:16px;flex-shrink:0;">
+                <div>
+                    <div style="font-weight:700;font-size:14px;color:#1a3a5c;">Permanent — recurring weekly schedule</div>
+                    <div style="font-size:12px;color:#666;margin-top:2px;">
+                        Save as this agent's default schedule. It will automatically appear every week going forward.
+                    </div>
+                </div>
+            </label>
+
+            <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;padding:12px 16px;border:2px solid #ddd;border-radius:6px;transition:border-color .15s;" id="opt-one-time">
+                <input type="radio" name="edit_type" value="one_time"
+                    {% if has_any_template %}checked{% endif %}
+                    onchange="onEditTypeChange()"
+                    style="margin-top:3px;width:16px;height:16px;flex-shrink:0;">
+                <div>
+                    <div style="font-weight:700;font-size:14px;color:#1a3a5c;">One-time — this week only</div>
+                    <div style="font-size:12px;color:#666;margin-top:2px;">
+                        Override the schedule for the week of {{ week_start|date:"F d, Y" }} only.
+                        The recurring schedule stays unchanged.
+                    </div>
+                </div>
+            </label>
+
+            <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;padding:12px 16px;border:2px solid #ddd;border-radius:6px;transition:border-color .15s;" id="opt-date-range">
+                <input type="radio" name="edit_type" value="date_range"
+                    onchange="onEditTypeChange()"
+                    style="margin-top:3px;width:16px;height:16px;flex-shrink:0;">
+                <div style="flex:1;">
+                    <div style="font-weight:700;font-size:14px;color:#1a3a5c;">Date range — specific weeks</div>
+                    <div style="font-size:12px;color:#666;margin-top:2px;">
+                        Apply this schedule to every week within a date range.
+                    </div>
+                    <div id="range-pickers" style="display:none;margin-top:10px;display:none;gap:16px;flex-wrap:wrap;">
+                        <div>
+                            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;">From week of</label>
+                            <input type="date" name="range_start" id="range_start"
+                                value="{{ week_start_iso }}"
+                                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                        </div>
+                        <div>
+                            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;">Through week of</label>
+                            <input type="date" name="range_end" id="range_end"
+                                value="{{ week_start_iso }}"
+                                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                        </div>
+                    </div>
+                </div>
+            </label>
+
+        </div>
+    </div>
+
     <div style="margin-top:16px;display:flex;gap:12px;align-items:center;">
-        <button type="submit" class="btn btn-primary">Save Weekly Schedule</button>
+        <button type="submit" class="btn btn-primary">Save Schedule</button>
         <a href="{% url 'shift_list' %}" class="btn" style="background:#888;color:white;">Cancel</a>
     </div>
 </form>
@@ -102,6 +179,7 @@
         width:100%; padding:7px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;
     }
     input[type="checkbox"] { width:18px; height:18px; cursor:pointer; }
+    input[type="radio"]:checked ~ div > div:first-child { color:#1a3a5c; }
 </style>
 
 <script>
@@ -113,10 +191,27 @@
             el.disabled = off;
             el.style.opacity = off ? '0.3' : '1';
         });
-        // also disable notes
         const notes = document.querySelector('[name="day_' + i + '_notes"]');
         if (notes) { notes.disabled = off; notes.style.opacity = off ? '0.3' : '1'; }
-        row.style.background = off ? '#fff5f5' : '';
+        if (!off) row.style.removeProperty('background');
+        else row.style.background = '#fff5f5';
     }
+
+    function onEditTypeChange() {
+        const val = document.querySelector('input[name="edit_type"]:checked').value;
+        const pickers = document.getElementById('range-pickers');
+        pickers.style.display = val === 'date_range' ? 'flex' : 'none';
+
+        // Highlight selected option card
+        ['permanent','one-time','date-range'].forEach(function(k) {
+            const el = document.getElementById('opt-' + k);
+            if (el) el.style.borderColor = '#ddd';
+        });
+        const map = {permanent:'opt-permanent', one_time:'opt-one-time', date_range:'opt-date-range'};
+        const active = document.getElementById(map[val]);
+        if (active) active.style.borderColor = '#1a3a5c';
+    }
+
+    document.addEventListener('DOMContentLoaded', onEditTypeChange);
 </script>
 {% endblock %}

@@ -61,6 +61,8 @@
             <td style="padding:6px 4px;text-align:center;vertical-align:middle;
                 {% if cell.shift %}
                     {% if cell.shift.is_off %}background:#fafafa;{% else %}background:#f0fdf4;{% endif %}
+                {% elif cell.template %}
+                    {% if cell.template.is_off %}background:#f0f4ff;{% else %}background:#eff6ff;{% endif %}
                 {% endif %}">
                 {% if cell.shift %}
                     {% if cell.shift.is_off %}
@@ -73,7 +75,20 @@
                         <div style="font-size:10px;color:#888;margin-top:2px;">{{ cell.shift.notes|truncatechars:20 }}</div>
                         {% endif %}
                     {% endif %}
-                    <a href="{% url 'shift_edit' cell.shift.pk %}" style="font-size:10px;color:#aaa;display:block;margin-top:2px;">edit</a>
+                    <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
+                       style="font-size:10px;color:#d97706;display:block;margin-top:2px;">override</a>
+                {% elif cell.template %}
+                    {% if cell.template.is_off %}
+                        <span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span>
+                    {% else %}
+                        <div style="font-size:12px;font-weight:600;color:#2563eb;white-space:nowrap;">
+                            {{ cell.template.start_time|time:"H:i" }}–{{ cell.template.end_time|time:"H:i" }}
+                        </div>
+                        {% if cell.template.notes %}
+                        <div style="font-size:10px;color:#93c5fd;margin-top:2px;">{{ cell.template.notes|truncatechars:20 }}</div>
+                        {% endif %}
+                    {% endif %}
+                    <span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:0.03em;">RECURRING</span>
                 {% else %}
                     <span style="color:#ddd;font-size:12px;">—</span>
                 {% endif %}

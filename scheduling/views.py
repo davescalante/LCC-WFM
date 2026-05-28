@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile
+from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile, ShiftTemplate
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -214,32 +214,41 @@ def shift_list(request):
 
     prev_week_start = week_start - timedelta(days=7)
     prev_week_dates = [prev_week_start + timedelta(days=i) for i in range(7)]
-    has_prev_week = Shift.objects.filter(date__in=prev_week_dates).exists()
-    has_this_week = Shift.objects.filter(date__in=week_dates).exists()
 
-    shifts_qs = Shift.objects.filter(
-        date__in=week_dates, agent__in=agents
-    ).select_related('agent__user')
+    # Override Shift records (specific dates)
+    shifts_qs = Shift.objects.filter(date__in=week_dates, agent__in=agents)
     shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
 
-    # Per-agent: which agents have data in the previous week / this week
+    # Recurring templates (day-of-week defaults)
+    templates_qs = ShiftTemplate.objects.filter(agent__in=agents)
+    template_map = {(t.agent_id, t.day_of_week): t for t in templates_qs}
+
+    has_prev_week = Shift.objects.filter(date__in=prev_week_dates).exists()
+    has_this_week = shifts_qs.exists() or templates_qs.exists()
+
     prev_week_agent_ids = set(
-        Shift.objects.filter(date__in=prev_week_dates)
-        .values_list('agent_id', flat=True)
+        Shift.objects.filter(date__in=prev_week_dates).values_list('agent_id', flat=True)
     )
-    this_week_agent_ids = set(s.agent_id for s in shifts_qs)
+    this_week_override_ids = {s.agent_id for s in shifts_qs}
 
     rows = []
     for agent in agents:
         cells = []
         for day_date in week_dates:
-            shift = shift_map.get((agent.pk, day_date))
-            cells.append({'date': day_date, 'shift': shift})
+            override = shift_map.get((agent.pk, day_date))
+            template = template_map.get((agent.pk, day_date.weekday()))
+            cells.append({
+                'date': day_date,
+                'shift': override,
+                'template': template if not override else None,
+            })
         rows.append({
             'agent': agent,
             'cells': cells,
             'has_prev_week_shifts': agent.pk in prev_week_agent_ids,
-            'has_this_week_shifts': agent.pk in this_week_agent_ids,
+            'has_this_week_shifts': agent.pk in this_week_override_ids,
+            'has_template': template_map.get((agent.pk, 0)) is not None
+                or any((agent.pk, d) in template_map for d in range(7)),
         })
 
     return render(request, 'scheduling/shift_list.html', {
@@ -343,7 +352,6 @@ def shift_week(request):
     agents = Agent.objects.select_related('user').order_by('user__last_name')
     DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
-    # Default week start to current Monday
     today = timezone.localdate()
     default_week_start = today - timedelta(days=today.weekday())
 
@@ -352,54 +360,117 @@ def shift_week(request):
 
     try:
         week_start = date.fromisoformat(week_start_str) if week_start_str else default_week_start
-        # Snap to Monday of the selected week
         week_start = week_start - timedelta(days=week_start.weekday())
     except ValueError:
         week_start = default_week_start
 
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
-    # Load existing shifts for pre-filling
-    existing = {}
-    if selected_agent_id:
-        for shift in Shift.objects.filter(agent_id=selected_agent_id, date__in=week_dates):
-            existing[shift.date] = shift
-
     if request.method == 'POST' and selected_agent_id:
         agent = get_object_or_404(Agent, pk=selected_agent_id)
-        for i, day_date in enumerate(week_dates):
-            is_off = request.POST.get(f'day_{i}_off') == 'on'
-            start = request.POST.get(f'day_{i}_start')
-            end = request.POST.get(f'day_{i}_end')
-            notes = request.POST.get(f'day_{i}_notes', '')
+        edit_type = request.POST.get('edit_type', 'permanent')
 
-            if is_off or (start and end):
-                Shift.objects.update_or_create(
-                    agent=agent,
-                    date=day_date,
-                    defaults={
-                        'start_time': start or '09:00',
-                        'end_time': end or '17:00',
-                        'is_off': is_off,
-                        'notes': notes,
-                    }
-                )
-        messages.success(request, f"Schedule saved for week of {week_start.strftime('%B %d, %Y')}.")
+        def _day_configs():
+            for i, day_date in enumerate(week_dates):
+                is_off = request.POST.get(f'day_{i}_off') == 'on'
+                start = request.POST.get(f'day_{i}_start', '').strip()
+                end = request.POST.get(f'day_{i}_end', '').strip()
+                notes = request.POST.get(f'day_{i}_notes', '')
+                yield i, day_date, is_off, start, end, notes
+
+        if edit_type == 'permanent':
+            for i, day_date, is_off, start, end, notes in _day_configs():
+                if is_off or (start and end):
+                    ShiftTemplate.objects.update_or_create(
+                        agent=agent, day_of_week=i,
+                        defaults={
+                            'start_time': start or '09:00',
+                            'end_time': end or '17:00',
+                            'is_off': is_off,
+                            'notes': notes,
+                        }
+                    )
+            messages.success(request, f"Recurring schedule saved for {agent}. This schedule will appear every week.")
+
+        elif edit_type == 'one_time':
+            for i, day_date, is_off, start, end, notes in _day_configs():
+                if is_off or (start and end):
+                    Shift.objects.update_or_create(
+                        agent=agent, date=day_date,
+                        defaults={
+                            'start_time': start or '09:00',
+                            'end_time': end or '17:00',
+                            'is_off': is_off,
+                            'notes': notes,
+                        }
+                    )
+            messages.success(request, f"One-time schedule saved for week of {week_start.strftime('%B %d, %Y')} for {agent}.")
+
+        elif edit_type == 'date_range':
+            range_start_str = request.POST.get('range_start', '').strip()
+            range_end_str = request.POST.get('range_end', '').strip()
+            try:
+                range_start = date.fromisoformat(range_start_str)
+                range_start -= timedelta(days=range_start.weekday())
+                range_end = date.fromisoformat(range_end_str)
+                range_end -= timedelta(days=range_end.weekday())
+            except (ValueError, TypeError):
+                messages.error(request, "Please select a valid start and end date for the range.")
+                return redirect(f"{reverse('shift_week')}?agent={selected_agent_id}&week_start={week_start.isoformat()}")
+
+            configs = list(_day_configs())
+            current_week = range_start
+            week_count = 0
+            while current_week <= range_end:
+                for i, day_date, is_off, start, end, notes in configs:
+                    target = current_week + timedelta(days=i)
+                    if is_off or (start and end):
+                        Shift.objects.update_or_create(
+                            agent=agent, date=target,
+                            defaults={
+                                'start_time': start or '09:00',
+                                'end_time': end or '17:00',
+                                'is_off': is_off,
+                                'notes': notes,
+                            }
+                        )
+                current_week += timedelta(days=7)
+                week_count += 1
+            messages.success(
+                request,
+                f"Schedule applied to {week_count} week(s) "
+                f"({range_start.strftime('%b %d')} – {range_end.strftime('%b %d, %Y')}) for {agent}."
+            )
+
         return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
 
-    # Build day context with existing data pre-filled
+    # ── GET: pre-fill from overrides first, then templates ───────────────────
+    overrides = {}
+    templates = {}
+    if selected_agent_id:
+        for s in Shift.objects.filter(agent_id=selected_agent_id, date__in=week_dates):
+            overrides[s.date] = s
+        for t in ShiftTemplate.objects.filter(agent_id=selected_agent_id):
+            templates[t.day_of_week] = t
+
     days = []
     for i, day_date in enumerate(week_dates):
-        shift = existing.get(day_date)
+        override = overrides.get(day_date)
+        tmpl = templates.get(i)
+        src = override or tmpl
         days.append({
             'index': i,
             'name': DAYS[i],
             'date': day_date,
-            'start': shift.start_time.strftime('%H:%M') if shift and not shift.is_off else '',
-            'end': shift.end_time.strftime('%H:%M') if shift and not shift.is_off else '',
-            'is_off': shift.is_off if shift else False,
-            'notes': shift.notes if shift else '',
+            'start': src.start_time.strftime('%H:%M') if src and src.start_time and not src.is_off else '',
+            'end': src.end_time.strftime('%H:%M') if src and src.end_time and not src.is_off else '',
+            'is_off': src.is_off if src else False,
+            'notes': src.notes if src else '',
+            'from_template': bool(tmpl and not override),
+            'has_override': bool(override),
         })
+
+    has_any_template = bool(templates)
 
     return render(request, 'scheduling/shift_week.html', {
         'agents': agents,
@@ -407,6 +478,8 @@ def shift_week(request):
         'week_start': week_start,
         'week_end': week_dates[-1],
         'days': days,
+        'has_any_template': has_any_template,
+        'week_start_iso': week_start.isoformat(),
     })
 
 

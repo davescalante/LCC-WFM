@@ -97,6 +97,30 @@ class EmploymentPeriod(models.Model):
         return self.end_date is None
 
 
+class ShiftTemplate(models.Model):
+    """Recurring weekly schedule for an agent — the default for every week."""
+    DAY_CHOICES = [
+        (0, 'Monday'), (1, 'Tuesday'), (2, 'Wednesday'), (3, 'Thursday'),
+        (4, 'Friday'), (5, 'Saturday'), (6, 'Sunday'),
+    ]
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='shift_templates')
+    day_of_week = models.IntegerField(choices=DAY_CHOICES)
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    is_off = models.BooleanField(default=False)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ('agent', 'day_of_week')
+        ordering = ['day_of_week']
+
+    def __str__(self):
+        day = self.get_day_of_week_display()
+        if self.is_off:
+            return f"{self.agent} {day} OFF"
+        return f"{self.agent} {day} {self.start_time}–{self.end_time}"
+
+
 class Shift(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='shifts')
     date = models.DateField()
