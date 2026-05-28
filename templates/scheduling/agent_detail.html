@@ -21,6 +21,7 @@
             <tr><td><strong>Start Date</strong></td><td>{{ agent.start_date|default:"—" }}</td></tr>
             <tr><td><strong>Role</strong></td><td>{{ agent.get_role_display }}</td></tr>
             <tr><td><strong>Role Type</strong></td><td>{{ agent.get_role_type_display|default:"—" }}</td></tr>
+            <tr><td><strong>Status</strong></td><td>{% if agent.status == 'active' %}<span class="badge badge-green">Active</span>{% else %}<span class="badge badge-red">Inactive</span>{% endif %}</td></tr>
             <tr><td><strong>Supervisor</strong></td><td>{{ agent.supervisor|default:"—" }}</td></tr>
         </table>
     </div>
