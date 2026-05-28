@@ -137,6 +137,28 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path glob
+def test_glob_finds_python_files():
+    from pathlib import Path
+    results = list(Path(PATH).glob("*.py"))
+    assert len(results) > 0, "No .py files found via glob"
+
+def test_glob_finds_test_file():
+    from pathlib import Path
+    results = list(Path(PATH).glob("test_path.py"))
+    assert len(results) == 1, f"Expected 1 match for test_path.py, got: {len(results)}"
+
+def test_glob_returns_path_objects():
+    from pathlib import Path
+    results = list(Path(PATH).glob("*.py"))
+    assert all(isinstance(r, Path) for r in results), "Glob results are not Path objects"
+
+def test_glob_no_matches_for_unknown_extension():
+    from pathlib import Path
+    results = list(Path(PATH).glob("*.xyz"))
+    assert len(results) == 0, f"Unexpected matches for *.xyz: {results}"
+
+
 # File path expansion
 def test_expanduser_resolves_tilde():
     expanded = os.path.expanduser("~")
