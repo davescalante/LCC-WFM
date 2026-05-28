@@ -34,6 +34,20 @@ def minutes_to_hhmmss(value):
 
 
 @register.filter
+def to_hhmm(value):
+    """Decimal hours → H:MM string (no leading zero, no seconds). Returns '' if falsy."""
+    if not value:
+        return ''
+    try:
+        total_seconds = round(float(value) * 3600)
+        h = total_seconds // 3600
+        m = (total_seconds % 3600) // 60
+        return f'{h}:{m:02d}'
+    except (ValueError, TypeError):
+        return ''
+
+
+@register.filter
 def seconds_to_hhmmss(value):
     """Integer seconds → HH:MM:SS string. Returns '' if value is falsy."""
     if not value:

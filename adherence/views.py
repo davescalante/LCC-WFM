@@ -181,6 +181,12 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             else:
                 cell_color = '#fff'
 
+            cell_sched_hrs = sched_hrs if has_shift and not is_off else None
+            if cell_sched_hrs and actual_hrs is not None and cell_sched_hrs > actual_hrs:
+                missing_hrs = cell_sched_hrs - actual_hrs
+            else:
+                missing_hrs = None
+
             cells.append({
                 'date': day_date,
                 'scheduled': (
@@ -188,7 +194,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                     else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift
                     else ''
                 ),
-                'sched_hrs': sched_hrs if has_shift and not is_off else None,
+                'sched_hrs': cell_sched_hrs,
+                'missing_hrs': missing_hrs,
                 'is_off': is_off,
                 'has_shift': has_shift,
                 'status': status,

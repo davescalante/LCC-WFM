@@ -70,6 +70,9 @@
                     {% else %}{{ cell.scheduled }}{% endif %}
                 </div>
                 {% endif %}
+                {% if cell.sched_hrs %}
+                <div style="font-size:10px;color:#aaa;margin-bottom:3px;">{{ cell.sched_hrs|to_hhmm }}h sched</div>
+                {% endif %}
                 {% if cell.has_shift %}
                 <select onchange="onStatusChange(this)"
                     style="width:100%;font-size:11px;padding:2px 2px;border:1px solid #ccc;border-radius:3px;background:transparent;">
@@ -83,6 +86,9 @@
                     placeholder="HH:MM:SS"
                     maxlength="8"
                     style="width:100%;font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:3px;margin-top:2px;background:transparent;font-family:monospace;">
+                {% if cell.missing_hrs %}
+                <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:2px;">−{{ cell.missing_hrs|to_hhmm }} short</div>
+                {% endif %}
                 {% endif %}
             </td>
             {% endfor %}
