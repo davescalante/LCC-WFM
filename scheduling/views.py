@@ -704,6 +704,47 @@ def overtime_delete(request, pk):
 
 
 @login_required
+def live_poll(request):
+    """Generic poll endpoint — returns the latest change timestamp for a given page type."""
+    from django.db.models import Max
+    from .models import AuditLog
+
+    poll_type = request.GET.get('type', '')
+    week_start_str = request.GET.get('week_start', '')
+
+    try:
+        ws = date.fromisoformat(week_start_str)
+        ws -= timedelta(days=ws.weekday())
+        week_end = ws + timedelta(days=6)
+    except (ValueError, TypeError):
+        ws = week_end = None
+
+    latest = None
+
+    if poll_type == 'codings' and ws:
+        from adherence.models import Coding
+        r = Coding.objects.filter(date__range=[ws, week_end]).aggregate(latest=Max('created_at'))
+        latest = r['latest']
+    elif poll_type == 'shifts':
+        r = AuditLog.objects.filter(action__icontains='schedule').aggregate(latest=Max('timestamp'))
+        latest = r['latest']
+    elif poll_type == 'users':
+        r = AuditLog.objects.filter(action__icontains='agent profile').aggregate(latest=Max('timestamp'))
+        latest = r['latest']
+    elif poll_type == 'daily' and ws:
+        from adherence.models import DailyUpload
+        dates = [ws + timedelta(days=i) for i in range(7)]
+        r = DailyUpload.objects.filter(date__in=dates).aggregate(latest=Max('uploaded_at'))
+        latest = r['latest']
+    elif poll_type == 'overtime':
+        r = AuditLog.objects.filter(action__icontains='OT shift').aggregate(latest=Max('timestamp'))
+        latest = r['latest']
+
+    from django.http import JsonResponse
+    return JsonResponse({'latest': latest.isoformat() if latest else None})
+
+
+@login_required
 def activity_log(request):
     from .models import AuditLog
     from django.contrib.auth.models import User

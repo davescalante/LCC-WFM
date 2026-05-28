@@ -18,4 +18,5 @@ urlpatterns = [
     path('overtime/week/', views.overtime_week, name='overtime_week'),
     path('overtime/<int:pk>/delete/', views.overtime_delete, name='overtime_delete'),
     path('activity/', views.activity_log, name='activity_log'),
+    path('poll/', views.live_poll, name='live_poll'),
 ]
