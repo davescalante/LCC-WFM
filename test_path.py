@@ -137,6 +137,25 @@ def test_file_is_valid_python():
     ast.parse(source)
 
 
+# File path join
+def test_path_join_produces_correct_path():
+    joined = os.path.join(PATH, "test_path.py")
+    assert joined == "/Users/denisetijerina/Documents/LCC-WFM/test_path.py", f"Unexpected joined path: {joined}"
+
+def test_path_join_with_subdirectory():
+    joined = os.path.join(PATH, "subdir", "file.txt")
+    assert joined == "/Users/denisetijerina/Documents/LCC-WFM/subdir/file.txt", f"Unexpected joined path: {joined}"
+
+def test_path_join_absolute_overrides():
+    joined = os.path.join(PATH, "/tmp")
+    assert joined == "/tmp", f"Absolute component should override: {joined}"
+
+def test_pathlib_join_produces_correct_path():
+    from pathlib import Path
+    joined = Path(PATH) / "test_path.py"
+    assert str(joined) == "/Users/denisetijerina/Documents/LCC-WFM/test_path.py", f"Unexpected joined path: {joined}"
+
+
 # File path normalization
 def test_path_is_normalized():
     assert os.path.normpath(PATH) == PATH, f"Path is not normalized: {PATH}"
