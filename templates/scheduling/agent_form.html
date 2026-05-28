@@ -22,7 +22,7 @@
         </div>
 
         <div class="card">
-            <h2>Agent Details</h2>
+            <h2>User Details</h2>
             <label>Agent Name</label>
             {{ agent_form.agent_name }}
             <label>Employee ID</label>
@@ -64,7 +64,7 @@
         {% if field.errors %}<div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>{% endif %}
     {% endfor %}
 
-    <button type="submit" class="btn btn-primary" style="margin-top:12px;">Save Agent</button>
+    <button type="submit" class="btn btn-primary" style="margin-top:12px;">Save User</button>
 </form>
 
 <style>

@@ -48,12 +48,12 @@ def agent_create(request):
         agent = agent_form.save(commit=False)
         agent.user = user
         agent.save()
-        messages.success(request, f"Agent {user.get_full_name()} created successfully.")
+        messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
-        'title': 'Add Agent',
+        'title': 'Add User',
     })
 
 
@@ -69,12 +69,12 @@ def agent_edit(request, pk):
             user.set_password(password)
         user.save()
         agent_form.save()
-        messages.success(request, f"Agent {user.get_full_name()} updated successfully.")
+        messages.success(request, f"User {user.get_full_name()} updated successfully.")
         return redirect('agent_detail', pk=agent.pk)
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
-        'title': 'Edit Agent',
+        'title': 'Edit User',
         'agent': agent,
     })
 
@@ -85,7 +85,7 @@ def agent_delete(request, pk):
     if request.method == 'POST':
         name = agent.user.get_full_name()
         agent.user.delete()
-        messages.success(request, f"Agent {name} deleted.")
+        messages.success(request, f"User {name} deleted.")
         return redirect('agent_list')
     return render(request, 'scheduling/confirm_delete.html', {
         'object': agent,

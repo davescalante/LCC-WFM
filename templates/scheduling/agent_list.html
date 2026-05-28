@@ -2,8 +2,8 @@
 {% block title %} - Agents{% endblock %}
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <h1>Agents</h1>
-    <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add Agent</a>
+    <h1>Users</h1>
+    <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add User</a>
 </div>
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 <div class="card">
@@ -24,7 +24,7 @@
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" style="color:#888;">No agents found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
+            <tr><td colspan="5" style="color:#888;">No users found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
             {% endfor %}
         </tbody>
     </table>

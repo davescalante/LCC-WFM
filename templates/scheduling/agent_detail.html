@@ -4,14 +4,14 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>{{ agent.user.get_full_name }}</h1>
     <div>
-        <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-primary">Edit Agent</a>
+        <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-primary">Edit User</a>
         <a href="{% url 'agent_delete' agent.pk %}" class="btn" style="background:#c0392b;color:white;margin-left:8px;">Delete</a>
     </div>
 </div>
 
 <div class="grid-2">
     <div class="card">
-        <h2>Personal Info</h2>
+        <h2>User Info</h2>
         <table>
             <tr><td><strong>Legal Name</strong></td><td>{{ agent.user.get_full_name }}</td></tr>
             <tr><td><strong>Agent Name</strong></td><td>{{ agent.agent_name|default:"—" }}</td></tr>
