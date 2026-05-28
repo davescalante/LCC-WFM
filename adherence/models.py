@@ -20,6 +20,7 @@ class AdherenceRecord(models.Model):
         ('Quit',    'Quit'),
         ('Baja',    'Baja — Terminated'),
         ('V',       'V — Vacation'),
+        ('LOA',     'LOA — Leave of Absence'),
     ]
 
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='adherence_records')

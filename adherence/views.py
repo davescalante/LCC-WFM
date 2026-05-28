@@ -18,7 +18,8 @@ from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, Dai
 
 
 BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
-BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'I'}
+BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA'}
+VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
 
 STATUS_COLORS = {
     'P':     '#e8f5e9',
@@ -35,6 +36,7 @@ STATUS_COLORS = {
     'Baja':  '#eeeeee',
     'V':     '#e3f2fd',
     'IMSS':  '#e0f2f1',
+    'LOA':   '#f3e5f5',
 }
 
 
@@ -125,11 +127,20 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             sched_hrs = _scheduled_hours(shift)
             is_off = shift.is_off if shift else False
             has_shift = shift is not None
+            effective_sched = sched_hrs  # may be reduced for VTO/LOA
 
             if has_shift and not is_off:
-                sched_total += sched_hrs
                 status = record.status if record else ''
                 actual_hrs = record.actual_hours if record else None
+
+                # VTO/LOA all-day: remove scheduled requirement entirely
+                # P+VTO/T+VTO: cap scheduled to what they actually worked
+                if status in ('VTO', 'LOA'):
+                    effective_sched = Decimal('0')
+                elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
+                    effective_sched = min(actual_hrs, sched_hrs)
+
+                sched_total += effective_sched
 
                 # Totals
                 if status in ('P', 'OT', 'MUT', 'VTO', 'P+VTO', 'T', 'T+VTO', 'I'):
@@ -149,7 +160,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                 elif status == '':
                     pass  # not yet filled
                 else:
-                    # V, IMSS, Quit, Baja, etc — not qualifying
+                    # V, IMSS, Quit, Baja, LOA, etc — not qualifying
                     bonus = False
                     bonus_determined = True
             elif has_shift and is_off:
@@ -164,7 +175,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
 
             cell_coded_hrs = coded_map.get((agent.pk, day_date), Decimal('0'))
 
-            # Cell color — use total (login + codings) vs scheduled for color logic
+            # Cell color — use total (login + codings) vs effective scheduled for color logic
             cell_total = (actual_hrs or Decimal('0')) + cell_coded_hrs
             if not has_shift:
                 cell_color = '#fafafa'
@@ -172,8 +183,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                 cell_color = STATUS_COLORS.get(status, '#f0f0f0') if status else '#f0f0f0'
             elif status:
                 base = STATUS_COLORS.get(status, '#fff')
-                if (actual_hrs is not None or cell_coded_hrs) and sched_hrs > 0:
-                    if cell_total >= sched_hrs:
+                if (actual_hrs is not None or cell_coded_hrs) and effective_sched > 0:
+                    if cell_total >= effective_sched:
                         cell_color = '#e8f5e9'
                     else:
                         cell_color = '#fff3e0' if status not in ('Absent', 'NCNS') else '#ffcdd2'
@@ -182,7 +193,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             else:
                 cell_color = '#fff'
 
-            cell_sched_hrs = sched_hrs if has_shift and not is_off else None
+            cell_sched_hrs = effective_sched if has_shift and not is_off else None
             if cell_sched_hrs and (actual_hrs is not None or cell_coded_hrs) and cell_sched_hrs > cell_total:
                 missing_hrs = cell_sched_hrs - cell_total
             else:
@@ -603,8 +614,16 @@ def payroll_export(request):
                 shift = shift_map.get((agent.pk, day_date))
                 record = record_map.get((agent.pk, day_date))
                 if shift and not shift.is_off:
-                    sched_total += _scheduled_hours(shift)
+                    base_sched = _scheduled_hours(shift)
                     status = record.status if record else ''
+                    actual_hrs = record.actual_hours if record else None
+                    if status in ('VTO', 'LOA'):
+                        effective_sched = Decimal('0')
+                    elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
+                        effective_sched = min(actual_hrs, base_sched)
+                    else:
+                        effective_sched = base_sched
+                    sched_total += effective_sched
                     if status in BONUS_DISQUALIFYING:
                         bonus = False
                         bonus_determined = True
