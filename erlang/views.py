@@ -196,7 +196,7 @@ def erlang_download(request):
                 row['day'],
                 row['hour_label'],
                 row['avg_calls'],
-                row['aht_display'],
+                aht_display,
                 row['agents_required'],
                 row['agents_shrinkage'],
                 current,
