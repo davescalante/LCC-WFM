@@ -41,6 +41,7 @@ class Agent(models.Model):
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_reports'
     )
+    notes = models.TextField(blank=True)
 
     def __str__(self):
         return self.agent_name or self.user.get_full_name() or self.user.username

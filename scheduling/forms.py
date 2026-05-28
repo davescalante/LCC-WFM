@@ -38,8 +38,11 @@ class AgentForm(forms.ModelForm):
         fields = [
             'agent_name', 'employee_id', 'role', 'role_type', 'status', 'supervisor',
             'start_date', 'phone_number',
-            'five9_username', 'five9_password', 'teams_password',
+            'five9_username', 'five9_password', 'teams_password', 'notes',
         ]
+        widgets = {
+            'notes': forms.Textarea(attrs={'rows': 4}),
+        }
         widgets = {
             'start_date': forms.DateInput(attrs={'type': 'date'}),
             'five9_password': forms.PasswordInput(render_value=True),

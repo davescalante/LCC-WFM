@@ -59,6 +59,12 @@
         </div>
     </div>
 
+    <div class="card">
+        <h2>Notes</h2>
+        <label>Notes</label>
+        {{ agent_form.notes }}
+    </div>
+
     {% for field in user_form %}
         {% if field.errors %}<div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>{% endif %}
     {% endfor %}
