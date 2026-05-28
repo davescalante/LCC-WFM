@@ -74,7 +74,7 @@ def _scheduled_hours(shift):
     delta = end - start
     if delta.total_seconds() < 0:
         delta += timedelta(days=1)
-    return Decimal(str(round(delta.total_seconds() / 3600, 2)))
+    return Decimal(str(round(delta.total_seconds() / 3600, 6)))
 
 
 def _get_week_start(request):

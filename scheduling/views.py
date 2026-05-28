@@ -109,7 +109,7 @@ def shift_list(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
 
-    agents = Agent.objects.select_related('user').order_by('user__last_name', 'user__first_name')
+    agents = Agent.objects.filter(status='active').select_related('user').order_by('user__last_name', 'user__first_name')
 
     shifts_qs = Shift.objects.filter(
         date__in=week_dates, agent__in=agents
