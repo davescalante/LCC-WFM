@@ -57,12 +57,11 @@
         </div>
     </div>
 
-    {% for form in user_form,agent_form %}
-        {% for field in form %}
-            {% if field.errors %}
-            <div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>
-            {% endif %}
-        {% endfor %}
+    {% for field in user_form %}
+        {% if field.errors %}<div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>{% endif %}
+    {% endfor %}
+    {% for field in agent_form %}
+        {% if field.errors %}<div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>{% endif %}
     {% endfor %}
 
     <button type="submit" class="btn btn-primary" style="margin-top:12px;">Save Agent</button>
