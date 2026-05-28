@@ -36,6 +36,10 @@
             {{ agent_form.status }}
             <label>Supervisor</label>
             {{ agent_form.supervisor }}
+            {% if not agent %}
+            <label>Start Date</label>
+            <input type="date" name="start_date" style="margin-bottom:14px;">
+            {% endif %}
         </div>
     </div>
 
@@ -364,6 +368,18 @@ function removePeriod(pk) {
         updateRoleTypes();
         document.getElementById('id_role').addEventListener('change', updateRoleTypes);
         document.getElementById('id_role_type').addEventListener('change', updateLoginAccess);
+
+        // Prevent browser from autofilling logged-in user's own credentials
+        // into fields meant for a different person. Only allow for own-profile edits.
+        var usernameEl = document.getElementById('id_username');
+        var passwordEl = document.getElementById('id_password');
+        {% if is_own_profile %}
+        if (usernameEl) usernameEl.setAttribute('autocomplete', 'username');
+        if (passwordEl) passwordEl.setAttribute('autocomplete', 'current-password');
+        {% else %}
+        if (usernameEl) usernameEl.setAttribute('autocomplete', 'off');
+        if (passwordEl) passwordEl.setAttribute('autocomplete', 'new-password');
+        {% endif %}
     });
 </script>
 {% endblock %}

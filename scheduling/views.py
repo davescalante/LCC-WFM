@@ -103,6 +103,10 @@ def agent_create(request):
         if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
             user.set_unusable_password()
             user.save()
+        start_date = request.POST.get('start_date', '').strip()
+        if start_date:
+            from .models import EmploymentPeriod
+            EmploymentPeriod.objects.create(agent=agent, start_date=start_date)
         log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
         messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
@@ -112,6 +116,7 @@ def agent_create(request):
         'title': 'Add User',
         'five9_profiles': [],
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
+        'is_own_profile': False,
     })
 
 
@@ -186,6 +191,7 @@ def agent_edit(request, pk):
         'reason_choices': EmploymentPeriod.REASON_CHOICES,
         'five9_profiles': agent.five9_profiles.all(),
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
+        'is_own_profile': (agent.user == request.user),
     })
 
 
