@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+{% block title %} - Erlang Reports{% endblock %}
+{% block content %}
+<h1>Erlang Reports</h1>
+<div class="card">
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Date</th><th>Calls/hr</th><th>AHT (s)</th><th>Target SL</th><th>Agents Req.</th><th>SL Achieved</th><th>Occupancy</th></tr>
+        </thead>
+        <tbody>
+            {% for report in reports %}
+            <tr>
+                <td>{{ report.name }}</td>
+                <td>{{ report.created_at|date:"Y-m-d H:i" }}</td>
+                <td>{{ report.calls_per_hour }}</td>
+                <td>{{ report.avg_handle_time }}</td>
+                <td>{{ report.target_service_level }}% in {{ report.target_answer_time }}s</td>
+                <td><strong>{{ report.agents_required }}</strong></td>
+                <td>
+                    {% if report.service_level_achieved >= report.target_service_level %}
+                    <span class="badge badge-green">{{ report.service_level_achieved }}%</span>
+                    {% else %}
+                    <span class="badge badge-red">{{ report.service_level_achieved }}%</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if report.occupancy <= 85 %}
+                    <span class="badge badge-green">{{ report.occupancy }}%</span>
+                    {% else %}
+                    <span class="badge badge-yellow">{{ report.occupancy }}%</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8" style="color:#888;">No reports yet. <a href="{% url 'erlang_calculator' %}">Run a calculation.</a></td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %} - Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard — {{ today }}</h1>
+<div class="grid-3">
+    <div class="card stat">
+        <div class="number">{{ shifts_today.count }}</div>
+        <div class="label">Shifts Today</div>
+    </div>
+    <div class="card stat">
+        <div class="number">{{ agents.count }}</div>
+        <div class="label">Total Agents</div>
+    </div>
+    <div class="card stat">
+        <div class="number">{{ shifts_today.count }}</div>
+        <div class="label">On Schedule</div>
+    </div>
+</div>
+<div class="card">
+    <h2>Today's Shifts</h2>
+    {% if shifts_today %}
+    <table>
+        <thead>
+            <tr><th>Agent</th><th>Team</th><th>Start</th><th>End</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            {% for shift in shifts_today %}
+            <tr>
+                <td>{{ shift.agent.user.get_full_name }}</td>
+                <td>{{ shift.agent.team }}</td>
+                <td>{{ shift.start_time }}</td>
+                <td>{{ shift.end_time }}</td>
+                <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#888;">No shifts scheduled for today.</p>
+    {% endif %}
+</div>
+{% endblock %}

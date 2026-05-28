@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block title %} - Adherence{% endblock %}
+{% block content %}
+<h1>Adherence — {{ today }}</h1>
+<div class="card">
+    <h2>Today's Adherence Log</h2>
+    <table>
+        <thead>
+            <tr><th>Agent</th><th>Scheduled</th><th>Actual</th><th>Status</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+            {% for record in records %}
+            <tr>
+                <td>{{ record.shift.agent.user.get_full_name }}</td>
+                <td>{{ record.shift.start_time }} - {{ record.shift.end_time }}</td>
+                <td>{{ record.actual_start|default:"-" }} - {{ record.actual_end|default:"-" }}</td>
+                <td>
+                    {% if record.status == 'on_time' %}<span class="badge badge-green">On Time</span>
+                    {% elif record.status == 'absent' %}<span class="badge badge-red">Absent</span>
+                    {% elif record.status == 'late' %}<span class="badge badge-yellow">Late</span>
+                    {% else %}<span class="badge badge-blue">{{ record.get_status_display }}</span>{% endif %}
+                </td>
+                <td>{{ record.notes }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" style="color:#888;">No adherence records for today.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<a href="{% url 'log_adherence' %}" class="btn btn-primary">Log Adherence</a>
+{% endblock %}

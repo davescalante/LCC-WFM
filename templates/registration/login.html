@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LCC Workforce Management — Login</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); width: 360px; }
+        h1 { color: #1a3a5c; font-size: 22px; margin-bottom: 8px; }
+        p { color: #888; font-size: 13px; margin-bottom: 24px; }
+        label { display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 4px; }
+        input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-bottom: 16px; }
+        button { width: 100%; padding: 10px; background: #1a3a5c; color: white; border: none; border-radius: 4px; font-size: 15px; cursor: pointer; }
+        button:hover { background: #254e7a; }
+        .error { color: #c0392b; font-size: 13px; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>LCC Workforce Management</h1>
+        <p>Sign in to continue</p>
+        {% if form.errors %}
+        <div class="error">Invalid username or password.</div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            <label>Username</label>
+            <input type="text" name="username" autofocus>
+            <label>Password</label>
+            <input type="password" name="password">
+            <button type="submit">Sign In</button>
+        </form>
+    </div>
+</body>
+</html>

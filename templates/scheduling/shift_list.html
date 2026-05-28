@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block title %} - Shifts{% endblock %}
+{% block content %}
+<h1>Shifts</h1>
+<div class="card">
+    <table>
+        <thead>
+            <tr><th>Agent</th><th>Date</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+            {% for shift in shifts %}
+            <tr>
+                <td>{{ shift.agent.user.get_full_name }}</td>
+                <td>{{ shift.date }}</td>
+                <td>{{ shift.start_time }}</td>
+                <td>{{ shift.end_time }}</td>
+                <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
+                <td>{{ shift.notes }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" style="color:#888;">No shifts found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

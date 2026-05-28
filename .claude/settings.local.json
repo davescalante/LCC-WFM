@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "Bash(/usr/local/bin/gh auth *)",
+      "Bash(brew install *)",
+      "Bash(/opt/homebrew/bin/brew install *)",
+      "Bash(/opt/homebrew/bin/gh auth *)",
+      "Bash(git -C /Users/denisetijerina/Documents/LCC-WFM log --oneline)",
+      "Bash(git -C /Users/denisetijerina/Documents/LCC-WFM remote -v)",
+      "Bash(python3 *)",
+      "Bash(git -C /Users/denisetijerina/Documents/LCC-WFM add test_path.py)",
+      "Bash(git -C /Users/denisetijerina/Documents/LCC-WFM commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git *)"
+    ]
+  }
+}

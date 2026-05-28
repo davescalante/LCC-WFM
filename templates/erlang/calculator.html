@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %} - Erlang Calculator{% endblock %}
+{% block content %}
+<h1>Erlang C Calculator</h1>
+<div class="grid-2">
+    <div class="card">
+        <h2>Inputs</h2>
+        <form method="post">
+            {% csrf_token %}
+            <label>Report Name</label>
+            <input type="text" name="name" placeholder="e.g. Monday Morning Peak">
+            <label>Calls Per Hour</label>
+            <input type="number" name="calls_per_hour" step="1" min="1" placeholder="e.g. 120">
+            <label>Average Handle Time (seconds)</label>
+            <input type="number" name="avg_handle_time" step="1" min="1" placeholder="e.g. 300">
+            <label>Target Service Level (%)</label>
+            <input type="number" name="target_service_level" step="1" min="1" max="100" value="80">
+            <label>Target Answer Time (seconds)</label>
+            <input type="number" name="target_answer_time" step="1" min="1" value="20">
+            <button type="submit" class="btn btn-primary">Calculate</button>
+        </form>
+    </div>
+    {% if result %}
+    <div class="card">
+        <h2>Results — {{ result.report.name }}</h2>
+        <div class="grid-3" style="margin-bottom:16px;">
+            <div class="stat">
+                <div class="number">{{ result.agents }}</div>
+                <div class="label">Agents Required</div>
+            </div>
+            <div class="stat">
+                <div class="number">{{ result.service_level }}%</div>
+                <div class="label">Service Level</div>
+            </div>
+            <div class="stat">
+                <div class="number">{{ result.occupancy }}%</div>
+                <div class="label">Occupancy</div>
+            </div>
+        </div>
+        <p style="font-size:13px;color:#888;">Report saved. <a href="{% url 'erlang_reports' %}">View all reports</a></p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
