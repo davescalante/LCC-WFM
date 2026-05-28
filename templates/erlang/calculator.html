@@ -4,6 +4,21 @@
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1 style="margin:0;">Erlang C — Weekly Staffing Calculator</h1>
+    {% if has_data %}
+    <div style="display:flex;align-items:center;gap:8px;">
+        <a href="?week_start={{ prev_week|date:'Y-m-d' }}"
+            style="padding:6px 14px;border:1px solid #ddd;border-radius:4px;font-size:13px;color:#333;text-decoration:none;background:#fff;">← Prev</a>
+        <span style="font-size:14px;font-weight:600;color:#1a3a5c;white-space:nowrap;">
+            {{ week_start|date:"M d" }} – {{ week_end|date:"M d, Y" }}
+        </span>
+        <a href="?week_start={{ next_week|date:'Y-m-d' }}"
+            style="padding:6px 14px;border:1px solid #ddd;border-radius:4px;font-size:13px;color:#333;text-decoration:none;background:#fff;">Next →</a>
+        {% if not is_current_week %}
+        <a href="?week_start={{ current_week|date:'Y-m-d' }}"
+            style="padding:6px 14px;border:1px solid #3b82f6;border-radius:4px;font-size:12px;color:#3b82f6;text-decoration:none;">Today</a>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 
 {% if error %}
@@ -120,6 +135,7 @@
                     <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">Agents Required</th>
                     <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">+ Shrinkage</th>
                     <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;white-space:nowrap;border-left:2px solid #e5e7eb;">Scheduled Staff</th>
+                    <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;white-space:nowrap;">Actual Agents</th>
                     <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;">Variance</th>
                     <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">SL Achieved</th>
                 </tr>
@@ -131,15 +147,28 @@
                     <td style="padding:8px 10px;text-align:right;font-size:13px;">{{ row.avg_calls }}</td>
                     <td style="padding:8px 10px;text-align:right;font-size:13px;font-weight:600;">{{ row.agents_required }}</td>
                     <td style="padding:8px 10px;text-align:right;font-size:14px;font-weight:700;color:#1a3a5c;">{{ row.agents_shrinkage }}</td>
-                    <td style="padding:6px 10px;text-align:center;border-left:2px solid #e5e7eb;">
-                        <input type="number" min="0"
-                            class="staffing-input"
+                    <td style="padding:8px 10px;text-align:center;border-left:2px solid #e5e7eb;">
+                        <span class="staffing-display"
                             id="staffing-{{ day.name }}-{{ row.hour }}"
-                            name="staffing_{{ day.name }}_{{ row.hour }}"
                             data-required="{{ row.agents_shrinkage }}"
                             data-day="{{ day.name }}"
-                            {% if row.scheduled_staff %}value="{{ row.scheduled_staff }}"{% endif %}
-                            oninput="onStaffingChange('{{ day.name }}', {{ row.hour }})"
+                            data-value="{{ row.scheduled_staff }}"
+                            style="display:inline-block;width:40px;font-size:14px;font-weight:700;color:#1a3a5c;">
+                            {{ row.scheduled_staff|default:"—" }}
+                        </span>
+                    </td>
+                    <td style="padding:6px 10px;text-align:center;">
+                        <input type="number" min="0"
+                            class="actual-input"
+                            id="actual-{{ day.name }}-{{ row.hour }}"
+                            data-week="{{ week_start|date:'Y-m-d' }}"
+                            data-day="{{ day.name }}"
+                            data-hour="{{ row.hour }}"
+                            data-required="{{ row.agents_shrinkage }}"
+                            {% if row.actual_agents is not None %}value="{{ row.actual_agents }}"{% endif %}
+                            placeholder="—"
+                            onblur="saveActual(this)"
+                            oninput="onActualChange('{{ day.name }}', {{ row.hour }})"
                             style="width:64px;text-align:center;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
                     </td>
                     <td id="variance-{{ day.name }}-{{ row.hour }}"
@@ -227,13 +256,15 @@ function showDay(name) {
     tab.style.borderColor = '#1a3a5c';
 }
 
-function onStaffingChange(dayName, hour) {
-    const input = document.getElementById('staffing-' + dayName + '-' + hour);
+// Variance: compares Scheduled Staff vs Agents Required
+function updateVariance(dayName, hour) {
+    const display = document.getElementById('staffing-' + dayName + '-' + hour);
     const cell = document.getElementById('variance-' + dayName + '-' + hour);
-    const required = parseInt(input.dataset.required);
-    const val = input.value === '' ? NaN : parseInt(input.value);
+    if (!display || !cell) return;
+    const required = parseInt(display.dataset.required);
+    const val = parseInt(display.dataset.value);
 
-    if (isNaN(val)) {
+    if (isNaN(val) || val === 0) {
         cell.textContent = '—';
         cell.style.color = '#aaa';
     } else {
@@ -249,43 +280,43 @@ function onStaffingChange(dayName, hour) {
             cell.style.color = '#6b7280';
         }
     }
+}
 
+// Called when Actual Agents input changes — just refreshes badge/summary
+function onActualChange(dayName, hour) {
     updateDayBadge(dayName);
     updateDaySummary(dayName);
 }
 
+// Badge counts hours where Scheduled Staff < Agents Required
 function updateDayBadge(dayName) {
     const panel = document.getElementById('panel-' + dayName);
     if (!panel) return;
-    const inputs = panel.querySelectorAll('.staffing-input');
-    let under = 0, over = 0, ok = 0;
-    inputs.forEach(inp => {
-        const req = parseInt(inp.dataset.required);
-        const val = inp.value === '' ? NaN : parseInt(inp.value);
-        if (!isNaN(val)) {
-            if (val < req) under++;
-            else if (val > req) over++;
-            else ok++;
-        }
+    const displays = panel.querySelectorAll('.staffing-display');
+    let under = 0;
+    displays.forEach(el => {
+        const req = parseInt(el.dataset.required);
+        const val = parseInt(el.dataset.value);
+        if (!isNaN(val) && val > 0 && val < req) under++;
     });
     const badge = document.getElementById('badge-' + dayName);
     if (badge) {
         badge.textContent = under;
         badge.style.display = under > 0 ? 'inline' : 'none';
     }
-    return { under, over, ok };
 }
 
+// Summary bar: Scheduled vs Required breakdown
 function updateDaySummary(dayName) {
     const panel = document.getElementById('panel-' + dayName);
     const summary = document.getElementById('summary-' + dayName);
     if (!panel || !summary) return;
-    const inputs = panel.querySelectorAll('.staffing-input');
+    const displays = panel.querySelectorAll('.staffing-display');
     let under = 0, over = 0, ok = 0, filled = 0;
-    inputs.forEach(inp => {
-        const req = parseInt(inp.dataset.required);
-        const val = inp.value === '' ? NaN : parseInt(inp.value);
-        if (!isNaN(val)) {
+    displays.forEach(el => {
+        const req = parseInt(el.dataset.required);
+        const val = parseInt(el.dataset.value);
+        if (!isNaN(val) && val > 0) {
             filled++;
             if (val < req) under++;
             else if (val > req) over++;
@@ -293,11 +324,11 @@ function updateDaySummary(dayName) {
         }
     });
     if (filled === 0) {
-        summary.innerHTML = '<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">vs Current Staffing</div><div style="font-size:12px;color:#aaa;">Enter current staffing above to see gaps.</div>';
+        summary.innerHTML = '<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Scheduled vs Required</div><div style="font-size:12px;color:#aaa;">No scheduled staff data for this week.</div>';
         return;
     }
     summary.innerHTML = `
-        <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">vs Current Staffing</div>
+        <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Scheduled vs Required</div>
         <div style="display:flex;gap:16px;flex-wrap:wrap;">
             <span style="font-size:13px;font-weight:700;color:#dc2626;">▼ ${under} understaffed</span>
             <span style="font-size:13px;font-weight:700;color:#15803d;">▲ ${over} overstaffed</span>
@@ -305,23 +336,31 @@ function updateDaySummary(dayName) {
         </div>`;
 }
 
-function submitDownload() {
-    const form = document.getElementById('download-form');
-    form.querySelectorAll('.staffing-hidden').forEach(el => el.remove());
-    document.querySelectorAll('.staffing-input').forEach(inp => {
-        if (inp.value !== '') {
-            const h = document.createElement('input');
-            h.type = 'hidden';
-            h.name = inp.name;
-            h.value = inp.value;
-            h.className = 'staffing-hidden';
-            form.appendChild(h);
-        }
+// Save actual agents via AJAX on blur
+function saveActual(input) {
+    const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const body = new URLSearchParams({
+        csrfmiddlewaretoken: csrf,
+        week_start: input.dataset.week,
+        day: input.dataset.day,
+        hour: input.dataset.hour,
+        actual_agents: input.value,
     });
-    form.submit();
+    input.style.borderColor = '#93c5fd';
+    fetch('{% url "erlang_save_actual" %}', { method: 'POST', body, headers: { 'X-CSRFToken': csrf } })
+        .then(r => r.json())
+        .then(d => {
+            input.style.borderColor = d.ok ? '#86efac' : '#fca5a5';
+            setTimeout(() => { input.style.borderColor = '#ddd'; }, 1500);
+        })
+        .catch(() => { input.style.borderColor = '#fca5a5'; });
 }
 
-// Show first day with data on load; initialize variance for all pre-populated inputs
+function submitDownload() {
+    document.getElementById('download-form').submit();
+}
+
+// On load: show first day with data, compute all variances and badges
 {% if has_data %}
 (function() {
     const first = DAYS.find(d => {
@@ -330,13 +369,14 @@ function submitDownload() {
     }) || DAYS[0];
     if (first) showDay(first);
 
-    // Trigger variance calculation for any pre-populated scheduled staff values
-    document.querySelectorAll('.staffing-input').forEach(inp => {
-        if (inp.value !== '') {
-            const dayName = inp.dataset.day;
-            const hour = inp.id.split('-').pop();
-            onStaffingChange(dayName, parseInt(hour));
-        }
+    DAYS.forEach(dayName => {
+        const panel = document.getElementById('panel-' + dayName);
+        if (!panel) return;
+        panel.querySelectorAll('.staffing-display').forEach(el => {
+            updateVariance(dayName, el.id.split('-').pop());
+        });
+        updateDayBadge(dayName);
+        updateDaySummary(dayName);
     });
 })();
 {% endif %}

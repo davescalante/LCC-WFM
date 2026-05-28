@@ -1,6 +1,20 @@
 from django.db import models
 
 
+class ErlangActualStaff(models.Model):
+    week_start = models.DateField()
+    day = models.CharField(max_length=10)
+    hour = models.IntegerField()
+    actual_agents = models.IntegerField()
+
+    class Meta:
+        unique_together = ('week_start', 'day', 'hour')
+        ordering = ['week_start', 'day', 'hour']
+
+    def __str__(self):
+        return f"{self.week_start} {self.day} {self.hour}:00 — {self.actual_agents} agents"
+
+
 class ErlangReport(models.Model):
     name = models.CharField(max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)

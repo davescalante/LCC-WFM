@@ -5,23 +5,34 @@ from datetime import date, timedelta
 
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.http import require_POST
 
 from .calculator import (
     agents_required, service_level, occupancy,
-    parse_aht, calculate_staffing,
+    parse_aht, calculate_staffing, format_aht,
 )
-from .models import ErlangReport
+from .models import ErlangReport, ErlangActualStaff
 from scheduling.models import Shift
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 
-def _build_scheduled_map():
-    """Count regular/nightshift agents covering each (day_name, hour) for the current week."""
-    today = date.today()
-    week_mon = today - timedelta(days=today.weekday())
-    week_dates = [week_mon + timedelta(days=i) for i in range(7)]
+def _get_week_start(request):
+    """Return the Monday of the selected week from GET param, session, or today."""
+    raw = request.GET.get('week_start') or request.session.get('erlang_week_start')
+    try:
+        ws = date.fromisoformat(raw)
+        ws -= timedelta(days=ws.weekday())  # force to Monday
+    except (TypeError, ValueError):
+        today = date.today()
+        ws = today - timedelta(days=today.weekday())
+    return ws
+
+
+def _build_scheduled_map(week_start):
+    """Count regular/nightshift agents covering each (day_name, hour) for the given week."""
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
     shifts = Shift.objects.filter(
         date__in=week_dates,
@@ -40,6 +51,14 @@ def _build_scheduled_map():
             scheduled[key] = scheduled.get(key, 0) + 1
 
     return scheduled
+
+
+def _build_actual_map(week_start):
+    """Load saved actual agent counts for the given week."""
+    return {
+        (a.day, a.hour): a.actual_agents
+        for a in ErlangActualStaff.objects.filter(week_start=week_start)
+    }
 
 
 def _parse_five9_csv(file):
@@ -79,7 +98,7 @@ def _parse_five9_csv(file):
     return rows
 
 
-def _build_days(calculated_rows, params, scheduled_map):
+def _build_days(calculated_rows, params, scheduled_map, actual_map):
     """Group calculated rows by day and compute per-day summary stats."""
     by_day = {d: [] for d in DAYS_ORDER}
     for row in calculated_rows:
@@ -95,6 +114,7 @@ def _build_days(calculated_rows, params, scheduled_map):
 
         for row in rows:
             row['scheduled_staff'] = scheduled_map.get((day_name, row['hour']), 0)
+            row['actual_agents'] = actual_map.get((day_name, row['hour']), None)
 
         total_shrink = sum(r['agents_shrinkage'] for r in rows)
         peak = max(rows, key=lambda r: r['agents_shrinkage'])
@@ -116,8 +136,10 @@ def _build_days(calculated_rows, params, scheduled_map):
 def erlang_calculator(request):
     error = None
 
+    week_start = _get_week_start(request)
+    request.session['erlang_week_start'] = week_start.isoformat()
+
     if request.method == 'POST':
-        # Parse new file if uploaded, otherwise keep existing session data
         if 'csv_file' in request.FILES and request.FILES['csv_file'].name:
             try:
                 rows = _parse_five9_csv(request.FILES['csv_file'])
@@ -136,7 +158,7 @@ def erlang_calculator(request):
         }
 
         if not error:
-            return redirect('erlang_calculator')
+            return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     raw_rows = request.session.get('erlang_rows', [])
     _p = request.session.get('erlang_params', {})
@@ -156,7 +178,16 @@ def erlang_calculator(request):
             params['shrinkage'],
             params['aht_seconds'],
         )
-        days = _build_days(calculated, params, _build_scheduled_map())
+        days = _build_days(
+            calculated, params,
+            _build_scheduled_map(week_start),
+            _build_actual_map(week_start),
+        )
+
+    prev_week = week_start - timedelta(days=7)
+    next_week = week_start + timedelta(days=7)
+    today = date.today()
+    current_week = today - timedelta(days=today.weekday())
 
     return render(request, 'erlang/calculator.html', {
         'days': days,
@@ -164,7 +195,46 @@ def erlang_calculator(request):
         'has_data': bool(raw_rows),
         'error': error,
         'days_order': DAYS_ORDER,
+        'week_start': week_start,
+        'week_end': week_start + timedelta(days=6),
+        'prev_week': prev_week,
+        'next_week': next_week,
+        'is_current_week': week_start == current_week,
+        'current_week': current_week,
     })
+
+
+@login_required
+@require_POST
+def erlang_save_actual(request):
+    """AJAX endpoint: save or clear an actual-agents value for a specific week/day/hour."""
+    week_start_str = request.POST.get('week_start', '')
+    day = request.POST.get('day', '')
+    hour_str = request.POST.get('hour', '')
+    actual_str = request.POST.get('actual_agents', '').strip()
+
+    try:
+        ws = date.fromisoformat(week_start_str)
+        hour = int(hour_str)
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'Invalid parameters'}, status=400)
+
+    if day not in DAYS_ORDER:
+        return JsonResponse({'error': 'Invalid day'}, status=400)
+
+    if actual_str == '':
+        ErlangActualStaff.objects.filter(week_start=ws, day=day, hour=hour).delete()
+    else:
+        try:
+            actual_agents = int(actual_str)
+        except ValueError:
+            return JsonResponse({'error': 'Invalid value'}, status=400)
+        ErlangActualStaff.objects.update_or_create(
+            week_start=ws, day=day, hour=hour,
+            defaults={'actual_agents': actual_agents},
+        )
+
+    return JsonResponse({'ok': True})
 
 
 @login_required
@@ -184,6 +254,13 @@ def erlang_download(request):
     if not raw_rows:
         return redirect('erlang_calculator')
 
+    week_start_str = request.session.get('erlang_week_start', '')
+    try:
+        week_start = date.fromisoformat(week_start_str)
+    except (ValueError, TypeError):
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+
     calculated = calculate_staffing(
         raw_rows,
         params['target_sl'],
@@ -192,25 +269,17 @@ def erlang_download(request):
         params['aht_seconds'],
     )
 
-    # Collect current staffing values from POST
-    current_staffing = {}
-    for key, val in request.POST.items():
-        if key.startswith('staffing_'):
-            try:
-                current_staffing[key] = int(val)
-            except (ValueError, TypeError):
-                pass
+    scheduled_map = _build_scheduled_map(week_start)
+    actual_map = _build_actual_map(week_start)
 
     response = HttpResponse(content_type='text/csv')
     response['Content-Disposition'] = 'attachment; filename="staffing_plan.csv"'
     writer = csv.writer(response)
-    from .calculator import format_aht
     aht_display = format_aht(params['aht_seconds'])
-    scheduled_map = _build_scheduled_map()
     writer.writerow([
         'Day', 'Hour', 'Avg Calls', f'Avg Handle Time ({aht_display})',
         'Agents Required', f'Agents w/ {params["shrinkage"]}% Shrinkage',
-        'Scheduled Staff', 'Variance', 'Service Level %',
+        'Scheduled Staff', 'Actual Agents', 'Variance (Sched vs Req)', 'Service Level %',
     ])
 
     by_day = {d: [] for d in DAYS_ORDER}
@@ -220,13 +289,9 @@ def erlang_download(request):
 
     for day_name in DAYS_ORDER:
         for row in sorted(by_day[day_name], key=lambda r: r['hour']):
-            key = f"staffing_{day_name}_{row['hour']}"
-            # Use override from POST if provided, else fall back to scheduled count
-            if key in current_staffing:
-                current = current_staffing[key]
-            else:
-                current = scheduled_map.get((day_name, row['hour']), '')
-            variance = (current - row['agents_shrinkage']) if isinstance(current, int) else ''
+            scheduled = scheduled_map.get((day_name, row['hour']), '')
+            actual = actual_map.get((day_name, row['hour']), '')
+            variance = (scheduled - row['agents_shrinkage']) if isinstance(scheduled, int) else ''
             writer.writerow([
                 row['day'],
                 row['hour_label'],
@@ -234,7 +299,8 @@ def erlang_download(request):
                 aht_display,
                 row['agents_required'],
                 row['agents_shrinkage'],
-                current,
+                scheduled,
+                actual,
                 variance,
                 f"{row['service_level_achieved']}%",
             ])
