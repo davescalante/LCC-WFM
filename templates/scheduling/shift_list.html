@@ -3,7 +3,7 @@
 {% block content %}
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>Shifts</h1>
-    <a href="{% url 'shift_create' %}" class="btn btn-primary">+ Add Shift</a>
+    <a href="{% url 'shift_week' %}" class="btn btn-primary">+ Add Weekly Schedule</a>
 </div>
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 <div class="card">

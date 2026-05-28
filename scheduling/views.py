@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
@@ -95,18 +96,81 @@ def agent_delete(request, pk):
 
 @login_required
 def shift_list(request):
+    # Group shifts by week for display
     shifts = Shift.objects.select_related('agent__user').order_by('-date', 'start_time')
     return render(request, 'scheduling/shift_list.html', {'shifts': shifts})
 
 
 @login_required
-def shift_create(request):
-    form = ShiftForm(request.POST or None)
-    if request.method == 'POST' and form.is_valid():
-        form.save()
-        messages.success(request, "Shift created successfully.")
+def shift_week(request):
+    agents = Agent.objects.select_related('user').order_by('user__last_name')
+    DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+    # Default week start to current Monday
+    today = timezone.localdate()
+    default_week_start = today - timedelta(days=today.weekday())
+
+    selected_agent_id = request.GET.get('agent') or request.POST.get('agent')
+    week_start_str = request.GET.get('week_start') or request.POST.get('week_start')
+
+    try:
+        week_start = date.fromisoformat(week_start_str) if week_start_str else default_week_start
+        # Snap to Monday of the selected week
+        week_start = week_start - timedelta(days=week_start.weekday())
+    except ValueError:
+        week_start = default_week_start
+
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+
+    # Load existing shifts for pre-filling
+    existing = {}
+    if selected_agent_id:
+        for shift in Shift.objects.filter(agent_id=selected_agent_id, date__in=week_dates):
+            existing[shift.date] = shift
+
+    if request.method == 'POST' and selected_agent_id:
+        agent = get_object_or_404(Agent, pk=selected_agent_id)
+        for i, day_date in enumerate(week_dates):
+            is_off = request.POST.get(f'day_{i}_off') == 'on'
+            start = request.POST.get(f'day_{i}_start')
+            end = request.POST.get(f'day_{i}_end')
+            notes = request.POST.get(f'day_{i}_notes', '')
+
+            if is_off or (start and end):
+                Shift.objects.update_or_create(
+                    agent=agent,
+                    date=day_date,
+                    defaults={
+                        'start_time': start or '09:00',
+                        'end_time': end or '17:00',
+                        'is_off': is_off,
+                        'notes': notes,
+                    }
+                )
+        messages.success(request, f"Schedule saved for week of {week_start.strftime('%B %d, %Y')}.")
         return redirect('shift_list')
-    return render(request, 'scheduling/shift_form.html', {'form': form, 'title': 'Add Shift'})
+
+    # Build day context with existing data pre-filled
+    days = []
+    for i, day_date in enumerate(week_dates):
+        shift = existing.get(day_date)
+        days.append({
+            'index': i,
+            'name': DAYS[i],
+            'date': day_date,
+            'start': shift.start_time.strftime('%H:%M') if shift and not shift.is_off else '',
+            'end': shift.end_time.strftime('%H:%M') if shift and not shift.is_off else '',
+            'is_off': shift.is_off if shift else False,
+            'notes': shift.notes if shift else '',
+        })
+
+    return render(request, 'scheduling/shift_week.html', {
+        'agents': agents,
+        'selected_agent_id': int(selected_agent_id) if selected_agent_id else None,
+        'week_start': week_start,
+        'week_end': week_dates[-1],
+        'days': days,
+    })
 
 
 @login_required

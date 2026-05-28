@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+{% block title %} - Weekly Schedule{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Weekly Schedule</h1>
+    <a href="{% url 'shift_list' %}" class="btn" style="background:#888;color:white;">Cancel</a>
+</div>
+
+{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+
+<!-- Step 1: Pick agent and week -->
+<div class="card" style="margin-bottom:20px;">
+    <form method="get" style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:200px;">
+            <label>User</label>
+            <select name="agent" id="agent-select" onchange="this.form.submit()">
+                <option value="">— Select a user —</option>
+                {% for agent in agents %}
+                <option value="{{ agent.pk }}" {% if agent.pk == selected_agent_id %}selected{% endif %}>
+                    {{ agent }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="flex:1;min-width:180px;">
+            <label>Week of</label>
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}" onchange="this.form.submit()">
+        </div>
+    </form>
+</div>
+
+{% if selected_agent_id %}
+<!-- Step 2: Fill in the week -->
+<form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="agent" value="{{ selected_agent_id }}">
+    <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+
+    <div class="card">
+        <h2 style="margin-bottom:16px;">Week of {{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</h2>
+        <table style="table-layout:fixed;">
+            <thead>
+                <tr>
+                    <th style="width:120px;">Day</th>
+                    <th style="width:110px;">Date</th>
+                    <th style="width:80px;text-align:center;">Day Off</th>
+                    <th>Start Time</th>
+                    <th>End Time</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for day in days %}
+                <tr id="row-{{ day.index }}" {% if day.is_off %}style="background:#fff5f5;"{% endif %}>
+                    <td><strong>{{ day.name }}</strong></td>
+                    <td style="color:#888;font-size:13px;">{{ day.date|date:"M d" }}</td>
+                    <td style="text-align:center;">
+                        <input type="checkbox" name="day_{{ day.index }}_off"
+                            id="off_{{ day.index }}"
+                            {% if day.is_off %}checked{% endif %}
+                            onchange="toggleDay({{ day.index }})">
+                    </td>
+                    <td>
+                        <input type="time" name="day_{{ day.index }}_start"
+                            id="start_{{ day.index }}"
+                            value="{{ day.start }}"
+                            {% if day.is_off %}disabled style="opacity:0.3;"{% endif %}>
+                    </td>
+                    <td>
+                        <input type="time" name="day_{{ day.index }}_end"
+                            id="end_{{ day.index }}"
+                            value="{{ day.end }}"
+                            {% if day.is_off %}disabled style="opacity:0.3;"{% endif %}>
+                    </td>
+                    <td>
+                        <input type="text" name="day_{{ day.index }}_notes"
+                            value="{{ day.notes }}"
+                            placeholder="Optional"
+                            {% if day.is_off %}disabled style="opacity:0.3;"{% endif %}>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div style="margin-top:16px;display:flex;gap:12px;align-items:center;">
+        <button type="submit" class="btn btn-primary">Save Weekly Schedule</button>
+        <a href="{% url 'shift_list' %}" class="btn" style="background:#888;color:white;">Cancel</a>
+    </div>
+</form>
+
+{% else %}
+<div class="card" style="text-align:center;padding:40px;color:#888;">
+    <p>Select a user above to set up their weekly schedule.</p>
+</div>
+{% endif %}
+
+<style>
+    label { display:block; font-size:13px; font-weight:600; margin-bottom:4px; color:#555; }
+    select, input[type="date"], input[type="time"], input[type="text"] {
+        width:100%; padding:7px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;
+    }
+    input[type="checkbox"] { width:18px; height:18px; cursor:pointer; }
+</style>
+
+<script>
+    function toggleDay(i) {
+        const off = document.getElementById('off_' + i).checked;
+        const row = document.getElementById('row-' + i);
+        ['start_' + i, 'end_' + i].forEach(function(id) {
+            const el = document.getElementById(id);
+            el.disabled = off;
+            el.style.opacity = off ? '0.3' : '1';
+        });
+        // also disable notes
+        const notes = document.querySelector('[name="day_' + i + '_notes"]');
+        if (notes) { notes.disabled = off; notes.style.opacity = off ? '0.3' : '1'; }
+        row.style.background = off ? '#fff5f5' : '';
+    }
+</script>
+{% endblock %}
