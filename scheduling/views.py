@@ -96,9 +96,28 @@ def agent_delete(request, pk):
 
 @login_required
 def shift_list(request):
-    # Group shifts by week for display
-    shifts = Shift.objects.select_related('agent__user').order_by('-date', 'start_time')
-    return render(request, 'scheduling/shift_list.html', {'shifts': shifts})
+    today = timezone.localdate()
+    default_week_start = today - timedelta(days=today.weekday())
+
+    week_start_str = request.GET.get('week_start')
+    try:
+        week_start = date.fromisoformat(week_start_str) if week_start_str else default_week_start
+        week_start = week_start - timedelta(days=week_start.weekday())
+    except ValueError:
+        week_start = default_week_start
+
+    week_end = week_start + timedelta(days=6)
+    shifts = Shift.objects.filter(
+        date__gte=week_start, date__lte=week_end
+    ).select_related('agent__user').order_by('date', 'start_time')
+
+    return render(request, 'scheduling/shift_list.html', {
+        'shifts': shifts,
+        'week_start': week_start,
+        'week_end': week_end,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+    })
 
 
 @login_required

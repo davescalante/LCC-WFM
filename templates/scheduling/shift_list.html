@@ -5,19 +5,37 @@
     <h1>Shifts</h1>
     <a href="{% url 'shift_week' %}" class="btn btn-primary">+ Add Weekly Schedule</a>
 </div>
+
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+
+<!-- Week filter -->
+<div class="card" style="margin-bottom:20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+            <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;"
+                onchange="this.form.submit()">
+        </form>
+    </div>
+</div>
+
 <div class="card">
     <table>
         <thead>
-            <tr><th>Agent</th><th>Date</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
+            <tr><th>User</th><th>Date</th><th>Day</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th>Actions</th></tr>
         </thead>
         <tbody>
             {% for shift in shifts %}
             <tr>
-                <td>{{ shift.agent.user.get_full_name }}</td>
-                <td>{{ shift.date }}</td>
-                <td>{{ shift.start_time }}</td>
-                <td>{{ shift.end_time }}</td>
+                <td>{{ shift.agent }}</td>
+                <td>{{ shift.date|date:"M d, Y" }}</td>
+                <td style="color:#888;font-size:13px;">{{ shift.date|date:"l" }}</td>
+                <td>{% if not shift.is_off %}{{ shift.start_time }}{% else %}—{% endif %}</td>
+                <td>{% if not shift.is_off %}{{ shift.end_time }}{% else %}—{% endif %}</td>
                 <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
                 <td>{{ shift.notes }}</td>
                 <td>
@@ -26,7 +44,9 @@
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="7" style="color:#888;">No shifts found. <a href="{% url 'shift_week' %}">Add one.</a></td></tr>
+            <tr><td colspan="8" style="color:#888;padding:20px;">
+                No shifts for this week. <a href="{% url 'shift_week' %}?week_start={{ week_start|date:'Y-m-d' }}">Add a weekly schedule.</a>
+            </td></tr>
             {% endfor %}
         </tbody>
     </table>
