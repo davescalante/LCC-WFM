@@ -17,7 +17,7 @@
             <tr><td><strong>Agent Name</strong></td><td>{{ agent.agent_name|default:"—" }}</td></tr>
             <tr><td><strong>Employee ID</strong></td><td>{{ agent.employee_id|default:"—" }}</td></tr>
             <tr><td><strong>Email</strong></td><td>{{ agent.user.email }}</td></tr>
-            <tr><td><strong>Phone</strong></td><td>{{ agent.phone_number|default:"—" }}</td></tr>
+            <tr><td><strong>Phone</strong></td><td>{% if agent.phone_number %}{{ agent.phone_country_code }} {{ agent.phone_number }}{% else %}—{% endif %}</td></tr>
             <tr><td><strong>Start Date</strong></td><td>{{ agent.start_date|default:"—" }}</td></tr>
             <tr><td><strong>Termination Date</strong></td><td>{{ agent.termination_date|default:"—" }}</td></tr>
             <tr><td><strong>Role</strong></td><td>{{ agent.get_role_display }}</td></tr>

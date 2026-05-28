@@ -37,7 +37,7 @@ class AgentForm(forms.ModelForm):
         model = Agent
         fields = [
             'agent_name', 'employee_id', 'role', 'role_type', 'status', 'supervisor',
-            'start_date', 'termination_date', 'phone_number',
+            'start_date', 'termination_date', 'phone_country_code', 'phone_number',
             'five9_username', 'five9_password', 'teams_password', 'notes',
         ]
         widgets = {

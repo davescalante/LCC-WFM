@@ -16,7 +16,10 @@
             <label>Email</label>
             {{ user_form.email }}
             <label>Phone Number</label>
-            {{ agent_form.phone_number }}
+            <div style="display:flex;gap:8px;">
+                <div style="width:160px;flex-shrink:0;">{{ agent_form.phone_country_code }}</div>
+                <div style="flex:1;">{{ agent_form.phone_number }}</div>
+            </div>
             <label>Start Date</label>
             {{ agent_form.start_date }}
             <label>Termination Date</label>
