@@ -602,8 +602,9 @@ def payroll_export(request):
                     elif status:
                         bonus = False
                         bonus_determined = True
-                    if record and record.actual_hours:
-                        actual_total += record.actual_hours
+                # Count actual hours for every day — off-day OT counts too
+                if record and record.actual_hours:
+                    actual_total += record.actual_hours
 
             coded = coded_map.get(agent.pk, Decimal('0'))
             adjusted = actual_total + coded
