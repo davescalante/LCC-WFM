@@ -100,6 +100,9 @@ def agent_create(request):
         agent.user = user
         agent.save()
         _save_five9_profiles(request, agent)
+        if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
+            user.set_unusable_password()
+            user.save()
         log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
         messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
@@ -134,7 +137,10 @@ def agent_edit(request, pk):
             if password:
                 user.set_password(password)
             user.save()
-            agent_form.save()
+            agent = agent_form.save()
+            if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
+                user.set_unusable_password()
+                user.save()
 
             # Update or delete existing periods
             for period in list(agent.employment_periods.all()):
