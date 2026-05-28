@@ -67,22 +67,25 @@
 
                 <!-- Cell total -->
                 <div id="cell-total-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                    style="font-size:10px;color:#888;text-align:right;margin-bottom:3px;font-family:monospace;{% if not cell.total_minutes %}display:none;{% endif %}">
-                    {{ cell.total_minutes|minutes_to_hhmmss }}
+                    style="font-size:10px;color:#888;text-align:right;margin-bottom:3px;font-family:monospace;{% if not cell.total_seconds %}display:none;{% endif %}">
+                    {{ cell.total_seconds|seconds_to_hhmmss }}
                 </div>
 
                 <!-- Inline add form (hidden by default) -->
                 <div id="add-form-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}" style="display:none;">
                     <div style="display:flex;gap:2px;margin-bottom:2px;">
-                        <input type="time" id="start-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                            style="flex:1;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0;min-width:0;">
-                        <input type="time" id="end-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                            style="flex:1;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0;min-width:0;">
+                        <input type="text" id="start-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                            placeholder="HH:MM:SS" maxlength="8"
+                            style="flex:1;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0;min-width:0;font-family:monospace;">
+                        <input type="text" id="end-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                            placeholder="HH:MM:SS" maxlength="8"
+                            style="flex:1;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0;min-width:0;font-family:monospace;">
                     </div>
                     <input type="text" id="notes-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}" placeholder="Notes"
                         style="width:100%;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:3px;margin:0 0 3px 0;">
                     <div style="display:flex;gap:3px;">
-                        <button onclick="submitCoding('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                        <button id="save-btn-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                            onclick="submitCoding('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
                             style="flex:1;font-size:11px;padding:3px;background:#1a3a5c;color:white;border:none;border-radius:3px;cursor:pointer;">Save</button>
                         <button onclick="toggleAddForm('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
                             style="font-size:11px;padding:3px 6px;background:#eee;border:none;border-radius:3px;cursor:pointer;">✕</button>
@@ -101,8 +104,8 @@
             <!-- Row total -->
             <td style="padding:8px 6px;text-align:center;vertical-align:middle;border-left:2px solid #eee;">
                 <span id="row-total-{{ row.agent.pk }}"
-                    style="font-size:11px;font-family:monospace;font-weight:{% if row.total_minutes %}600{% else %}400{% endif %};color:{% if row.total_minutes %}#5d6d7e{% else %}#ccc{% endif %};">
-                    {{ row.total_minutes|minutes_to_hhmmss|default:"—" }}
+                    style="font-size:11px;font-family:monospace;font-weight:{% if row.total_seconds %}600{% else %}400{% endif %};color:{% if row.total_seconds %}#5d6d7e{% else %}#ccc{% endif %};">
+                    {{ row.total_seconds|seconds_to_hhmmss|default:"—" }}
                 </span>
             </td>
         </tr>
@@ -197,15 +200,25 @@ function toggleAddForm(agentId, dateStr) {
 }
 
 async function submitCoding(agentId, dateStr) {
-    const start = document.getElementById(`start-${agentId}-${dateStr}`).value;
-    const end   = document.getElementById(`end-${agentId}-${dateStr}`).value;
+    const btn   = document.getElementById(`save-btn-${agentId}-${dateStr}`);
+    const start = document.getElementById(`start-${agentId}-${dateStr}`).value.trim();
+    const end   = document.getElementById(`end-${agentId}-${dateStr}`).value.trim();
     const notes = document.getElementById(`notes-${agentId}-${dateStr}`).value;
 
     if (!start || !end) {
-        alert('Please enter both a start time and an end time.');
+        alert('Please enter both a start time and end time in HH:MM:SS format (e.g. 16:00:00).');
         return;
     }
 
+    const startSecs = parseHHMMSS(start);
+    const endSecs   = parseHHMMSS(end);
+    if (endSecs <= startSecs) {
+        alert('End time must be after start time. If the shift crossed midnight, split it into two entries.');
+        return;
+    }
+
+    // Disable button immediately to prevent double-submit
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     showStatus('Saving…', '#b45309', '#fef3c7');
 
     try {
@@ -245,7 +258,8 @@ async function submitCoding(agentId, dateStr) {
         setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
 
     } catch (e) {
-        showStatus('⚠ Save failed — check your connection', '#991b1b', '#fee2e2');
+        showStatus('⚠ Save failed — ' + (e.message || 'check your connection'), '#991b1b', '#fee2e2');
+        if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
 }
 

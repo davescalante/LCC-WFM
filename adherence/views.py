@@ -283,6 +283,17 @@ def add_coding_ajax(request):
     if not all([agent_id, date_str, start_time, end_time]):
         return JsonResponse({'ok': False, 'error': 'missing fields'}, status=400)
 
+    # Validate time format and end > start
+    from datetime import time as time_cls
+    try:
+        start_t = time_cls.fromisoformat(start_time)
+        end_t   = time_cls.fromisoformat(end_time)
+    except ValueError:
+        return JsonResponse({'ok': False, 'error': 'Invalid time format. Use HH:MM:SS (e.g. 16:00:00)'}, status=400)
+
+    if end_t <= start_t:
+        return JsonResponse({'ok': False, 'error': 'End time must be after start time. If the shift crossed midnight, split it into two entries.'}, status=400)
+
     try:
         coding = Coding.objects.create(
             agent_id=agent_id,
@@ -291,6 +302,7 @@ def add_coding_ajax(request):
             end_time=end_time,
             notes=notes,
         )
+        coding.refresh_from_db()  # SQLite returns raw strings; refresh to get proper time objects
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=400)
 
@@ -417,22 +429,20 @@ def codings_week(request):
     rows = []
     for agent in agents:
         cells = []
-        agent_total_minutes = 0
+        agent_total_seconds = 0
         for day_date in week_dates:
             entries = coding_map.get((agent.pk, day_date), [])
-            day_minutes = sum(e.total_minutes() for e in entries)
-            agent_total_minutes += day_minutes
+            day_seconds = sum(e.total_seconds_count() for e in entries)
+            agent_total_seconds += day_seconds
             cells.append({
                 'date': day_date,
                 'entries': entries,
-                'total_minutes': day_minutes,
-                'total_hours': round(day_minutes / 60, 2) if day_minutes else 0,
+                'total_seconds': day_seconds,
             })
         rows.append({
             'agent': agent,
             'cells': cells,
-            'total_minutes': agent_total_minutes,
-            'total_hours': round(agent_total_minutes / 60, 2) if agent_total_minutes else 0,
+            'total_seconds': agent_total_seconds,
         })
 
     # Only include rows that have at least one coding OR always show all — show all for adding

@@ -48,22 +48,22 @@ class Coding(models.Model):
     class Meta:
         ordering = ['date', 'agent', 'start_time']
 
-    def total_minutes(self):
+    def total_seconds_count(self):
         start = datetime.combine(date_type.today(), self.start_time)
         end = datetime.combine(date_type.today(), self.end_time)
-        delta = end - start
-        if delta.total_seconds() < 0:
-            delta += timedelta(days=1)
-        return int(delta.total_seconds() // 60)
+        return max(0, int((end - start).total_seconds()))
+
+    def total_minutes(self):
+        return self.total_seconds_count() // 60
 
     def total_hours(self):
-        return round(self.total_minutes() / 60, 2)
+        return round(self.total_seconds_count() / 3600, 6)
 
     def total_hhmmss(self):
-        total_sec = self.total_minutes() * 60
-        h = total_sec // 3600
-        m = (total_sec % 3600) // 60
-        s = total_sec % 60
+        secs = self.total_seconds_count()
+        h = secs // 3600
+        m = (secs % 3600) // 60
+        s = secs % 60
         return f'{h:02d}:{m:02d}:{s:02d}'
 
     def __str__(self):

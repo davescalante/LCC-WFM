@@ -31,3 +31,18 @@ def minutes_to_hhmmss(value):
         return f'{h:02d}:{m:02d}:{s:02d}'
     except (ValueError, TypeError):
         return ''
+
+
+@register.filter
+def seconds_to_hhmmss(value):
+    """Integer seconds → HH:MM:SS string. Returns '' if value is falsy."""
+    if not value:
+        return ''
+    try:
+        secs = int(value)
+        h = secs // 3600
+        m = (secs % 3600) // 60
+        s = secs % 60
+        return f'{h:02d}:{m:02d}:{s:02d}'
+    except (ValueError, TypeError):
+        return ''
