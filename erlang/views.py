@@ -139,6 +139,8 @@ def erlang_calculator(request):
     week_start = _get_week_start(request)
     request.session['erlang_week_start'] = week_start.isoformat()
 
+    week_key = week_start.isoformat()
+
     if request.method == 'POST':
         if 'csv_file' in request.FILES and request.FILES['csv_file'].name:
             try:
@@ -146,7 +148,9 @@ def erlang_calculator(request):
                 if not rows:
                     error = "No valid data found. Check that the file is the Five9 ACD Queue Quality of Service Details - Hourly report."
                 else:
-                    request.session['erlang_rows'] = rows
+                    rows_by_week = request.session.get('erlang_rows_by_week', {})
+                    rows_by_week[week_key] = rows
+                    request.session['erlang_rows_by_week'] = rows_by_week
             except Exception as e:
                 error = f"Error reading file: {e}"
 
@@ -158,9 +162,9 @@ def erlang_calculator(request):
         }
 
         if not error:
-            return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+            return redirect(f"{request.path}?week_start={week_key}")
 
-    raw_rows = request.session.get('erlang_rows', [])
+    raw_rows = request.session.get('erlang_rows_by_week', {}).get(week_key, [])
     _p = request.session.get('erlang_params', {})
     params = {
         'target_sl': _p.get('target_sl', 80),
@@ -242,7 +246,14 @@ def erlang_download(request):
     if request.method != 'POST':
         return redirect('erlang_calculator')
 
-    raw_rows = request.session.get('erlang_rows', [])
+    week_start_str = request.session.get('erlang_week_start', '')
+    try:
+        week_start = date.fromisoformat(week_start_str)
+    except (ValueError, TypeError):
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+
+    raw_rows = request.session.get('erlang_rows_by_week', {}).get(week_start.isoformat(), [])
     _p = request.session.get('erlang_params', {})
     params = {
         'target_sl': _p.get('target_sl', 80),
@@ -253,13 +264,6 @@ def erlang_download(request):
 
     if not raw_rows:
         return redirect('erlang_calculator')
-
-    week_start_str = request.session.get('erlang_week_start', '')
-    try:
-        week_start = date.fromisoformat(week_start_str)
-    except (ValueError, TypeError):
-        today = date.today()
-        week_start = today - timedelta(days=today.weekday())
 
     calculated = calculate_staffing(
         raw_rows,
