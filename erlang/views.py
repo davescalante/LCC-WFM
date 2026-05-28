@@ -1,6 +1,7 @@
 import csv
 import io
 import math
+from datetime import date, timedelta
 
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
@@ -11,8 +12,34 @@ from .calculator import (
     parse_aht, calculate_staffing,
 )
 from .models import ErlangReport
+from scheduling.models import Shift
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+
+def _build_scheduled_map():
+    """Count regular/nightshift agents covering each (day_name, hour) for the current week."""
+    today = date.today()
+    week_mon = today - timedelta(days=today.weekday())
+    week_dates = [week_mon + timedelta(days=i) for i in range(7)]
+
+    shifts = Shift.objects.filter(
+        date__in=week_dates,
+        is_off=False,
+        agent__role_type__in=('regular_agent', 'night_shift'),
+    ).values('date', 'start_time', 'end_time')
+
+    scheduled = {}
+    for s in shifts:
+        day_name = s['date'].strftime('%A')
+        sh = s['start_time'].hour
+        eh = s['end_time'].hour
+        hours = list(range(sh, 24)) + list(range(0, eh)) if eh <= sh else list(range(sh, eh))
+        for h in hours:
+            key = (day_name, h)
+            scheduled[key] = scheduled.get(key, 0) + 1
+
+    return scheduled
 
 
 def _parse_five9_csv(file):
@@ -52,7 +79,7 @@ def _parse_five9_csv(file):
     return rows
 
 
-def _build_days(calculated_rows, params):
+def _build_days(calculated_rows, params, scheduled_map):
     """Group calculated rows by day and compute per-day summary stats."""
     by_day = {d: [] for d in DAYS_ORDER}
     for row in calculated_rows:
@@ -65,6 +92,9 @@ def _build_days(calculated_rows, params):
         if not rows:
             days.append({'name': day_name, 'rows': [], 'has_data': False})
             continue
+
+        for row in rows:
+            row['scheduled_staff'] = scheduled_map.get((day_name, row['hour']), 0)
 
         total_shrink = sum(r['agents_shrinkage'] for r in rows)
         peak = max(rows, key=lambda r: r['agents_shrinkage'])
@@ -126,7 +156,7 @@ def erlang_calculator(request):
             params['shrinkage'],
             params['aht_seconds'],
         )
-        days = _build_days(calculated, params)
+        days = _build_days(calculated, params, _build_scheduled_map())
 
     return render(request, 'erlang/calculator.html', {
         'days': days,
@@ -176,10 +206,11 @@ def erlang_download(request):
     writer = csv.writer(response)
     from .calculator import format_aht
     aht_display = format_aht(params['aht_seconds'])
+    scheduled_map = _build_scheduled_map()
     writer.writerow([
         'Day', 'Hour', 'Avg Calls', f'Avg Handle Time ({aht_display})',
         'Agents Required', f'Agents w/ {params["shrinkage"]}% Shrinkage',
-        'Current Staffing', 'Variance', 'Service Level %',
+        'Scheduled Staff', 'Variance', 'Service Level %',
     ])
 
     by_day = {d: [] for d in DAYS_ORDER}
@@ -190,7 +221,11 @@ def erlang_download(request):
     for day_name in DAYS_ORDER:
         for row in sorted(by_day[day_name], key=lambda r: r['hour']):
             key = f"staffing_{day_name}_{row['hour']}"
-            current = current_staffing.get(key, '')
+            # Use override from POST if provided, else fall back to scheduled count
+            if key in current_staffing:
+                current = current_staffing[key]
+            else:
+                current = scheduled_map.get((day_name, row['hour']), '')
             variance = (current - row['agents_shrinkage']) if isinstance(current, int) else ''
             writer.writerow([
                 row['day'],
