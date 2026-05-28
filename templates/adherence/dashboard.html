@@ -85,7 +85,7 @@
                     {{ cell.actual_hrs|to_hhmmss }}
                 </div>
                 {% if cell.missing_hrs %}
-                <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:2px;">−{{ cell.missing_hrs|to_hhmm }} short</div>
+                <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:2px;">−{{ cell.missing_hrs|to_hhmmss }} short</div>
                 {% endif %}
                 {% endif %}
             </td>
