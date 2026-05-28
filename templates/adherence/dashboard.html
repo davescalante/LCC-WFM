@@ -82,11 +82,8 @@
                     {% endfor %}
                 </select>
                 <div style="font-size:11px;padding:2px 4px;margin-top:2px;font-family:monospace;color:#555;min-height:18px;">
-                    {{ cell.actual_hrs|to_hhmmss }}
+                    {{ cell.display_hrs|to_hhmmss }}
                 </div>
-                {% if cell.cell_coded_hrs %}
-                <div style="font-size:10px;color:#2980b9;font-family:monospace;margin-top:1px;">+{{ cell.cell_coded_hrs|to_hhmmss }} coded</div>
-                {% endif %}
                 {% if cell.missing_hrs %}
                 <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:2px;">−{{ cell.missing_hrs|to_hhmmss }} short</div>
                 {% endif %}

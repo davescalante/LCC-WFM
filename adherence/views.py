@@ -188,6 +188,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             else:
                 missing_hrs = None
 
+            display_hrs = cell_total if (actual_hrs is not None or cell_coded_hrs) else None
+
             cells.append({
                 'date': day_date,
                 'scheduled': (
@@ -200,8 +202,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                 'is_off': is_off,
                 'has_shift': has_shift,
                 'status': status,
-                'actual_hrs': actual_hrs if actual_hrs is not None else '',
-                'cell_coded_hrs': cell_coded_hrs if cell_coded_hrs else None,
+                'display_hrs': display_hrs,
                 'color': cell_color,
                 'key': f'status_{agent.pk}_{day_date.isoformat()}',
                 'hours_key': f'hours_{agent.pk}_{day_date.isoformat()}',
