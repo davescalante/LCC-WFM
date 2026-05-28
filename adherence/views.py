@@ -129,6 +129,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         cells = []
         total_present = 0
         total_absent = 0
+        total_tardy = 0
+        total_incomplete = 0
         sched_total = Decimal('0')
         actual_total = Decimal('0')
         bonus = True          # True = eligible, False = disqualified, None = incomplete
@@ -171,6 +173,10 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                     total_present += 1
                 elif status in ('Absent', 'NCNS'):
                     total_absent += 1
+                if status in ('T', 'T+VTO'):
+                    total_tardy += 1
+                if status == 'I':
+                    total_incomplete += 1
 
                 if actual_hrs:
                     actual_total += actual_hrs
@@ -259,6 +265,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             'cells': cells,
             'total_present': total_present,
             'total_absent': total_absent,
+            'total_tardy': total_tardy,
+            'total_incomplete': total_incomplete,
             'sched_hours': sched_total,
             'actual_hours': actual_total,
             'coded_hours': coded,
