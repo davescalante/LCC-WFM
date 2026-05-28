@@ -3,8 +3,8 @@ from .models import Agent, Shift, Break
 
 @admin.register(Agent)
 class AgentAdmin(admin.ModelAdmin):
-    list_display = ['__str__', 'employee_id', 'role', 'supervisor', 'start_date', 'phone_number']
-    list_filter = ['role']
+    list_display = ['__str__', 'employee_id', 'role', 'role_type', 'supervisor', 'start_date']
+    list_filter = ['role', 'role_type']
     search_fields = ['user__first_name', 'user__last_name', 'agent_name', 'employee_id']
 
 @admin.register(Shift)

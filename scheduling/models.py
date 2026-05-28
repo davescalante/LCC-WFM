@@ -5,11 +5,26 @@ from django.contrib.auth.models import User
 class Agent(models.Model):
     ROLE_CHOICES = [
         ('agent', 'Agent'),
+        ('admin', 'Admin'),
+    ]
+    ROLE_TYPE_CHOICES = [
+        # Agent types
+        ('training', 'Training'),
+        ('incubation', 'Incubation'),
+        ('regular_agent', 'Regular Agent'),
+        ('kill_team', 'Kill Team'),
+        ('night_shift', 'Night Shift'),
+        # Admin types
         ('supervisor', 'Supervisor'),
-        ('coordinator', 'Coordinator'),
+        ('qa', 'QA'),
+        ('cs', 'CS'),
+        ('testing', 'Testing'),
+        ('sms_email', 'SMS/Email'),
+        ('admin_training', 'Training'),
     ]
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='agent')
+    role_type = models.CharField(max_length=20, choices=ROLE_TYPE_CHOICES, blank=True)
     agent_name = models.CharField(max_length=100, blank=True, help_text="Display/call center name")
     employee_id = models.CharField(max_length=50, blank=True, unique=True, null=True)
     start_date = models.DateField(null=True, blank=True)

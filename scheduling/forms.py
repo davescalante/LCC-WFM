@@ -36,7 +36,7 @@ class AgentForm(forms.ModelForm):
     class Meta:
         model = Agent
         fields = [
-            'agent_name', 'employee_id', 'role', 'supervisor',
+            'agent_name', 'employee_id', 'role', 'role_type', 'supervisor',
             'start_date', 'phone_number',
             'five9_username', 'five9_password', 'teams_password',
         ]

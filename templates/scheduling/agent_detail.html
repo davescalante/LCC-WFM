@@ -20,6 +20,7 @@
             <tr><td><strong>Phone</strong></td><td>{{ agent.phone_number|default:"—" }}</td></tr>
             <tr><td><strong>Start Date</strong></td><td>{{ agent.start_date|default:"—" }}</td></tr>
             <tr><td><strong>Role</strong></td><td>{{ agent.get_role_display }}</td></tr>
+            <tr><td><strong>Role Type</strong></td><td>{{ agent.get_role_type_display|default:"—" }}</td></tr>
             <tr><td><strong>Supervisor</strong></td><td>{{ agent.supervisor|default:"—" }}</td></tr>
         </table>
     </div>
