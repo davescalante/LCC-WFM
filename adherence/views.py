@@ -152,6 +152,12 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
                     # V, IMSS, Quit, Baja, etc — not qualifying
                     bonus = False
                     bonus_determined = True
+            elif has_shift and is_off:
+                # Scheduled off — agent may still work (e.g. OT on day off)
+                status = record.status if record else ''
+                actual_hrs = record.actual_hours if record else None
+                if actual_hrs:
+                    actual_total += actual_hrs
             else:
                 status = ''
                 actual_hrs = record.actual_hours if record else None
@@ -160,7 +166,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
             if not has_shift:
                 cell_color = '#fafafa'
             elif is_off:
-                cell_color = '#f0f0f0'
+                # Use status color if supervisor recorded something (e.g. OT on day off)
+                cell_color = STATUS_COLORS.get(status, '#f0f0f0') if status else '#f0f0f0'
             elif status:
                 base = STATUS_COLORS.get(status, '#fff')
                 # Override with hours-based color if actual hours are entered

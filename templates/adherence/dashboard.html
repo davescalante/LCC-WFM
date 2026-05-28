@@ -70,7 +70,7 @@
                     {% else %}{{ cell.scheduled }}{% endif %}
                 </div>
                 {% endif %}
-                {% if not cell.is_off %}
+                {% if cell.has_shift %}
                 <select onchange="onStatusChange(this)"
                     style="width:100%;font-size:11px;padding:2px 2px;border:1px solid #ccc;border-radius:3px;background:transparent;">
                     <option value="">—</option>
