@@ -47,6 +47,7 @@
             <th style="min-width:68px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Coded<br>Hrs</th>
             <th style="min-width:68px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Total<br>Hrs</th>
             <th style="min-width:50px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Bonus</th>
+            <th style="min-width:80px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;font-size:11px;color:#555;">Commission<br>Deduction</th>
         </tr>
     </thead>
     <tbody>
@@ -95,6 +96,13 @@
                 {% if row.bonus == 'Yes' %}<span class="badge badge-green">Yes</span>
                 {% elif row.bonus == 'No' %}<span class="badge badge-red">No</span>
                 {% else %}<span style="color:#aaa;font-size:12px;">—</span>{% endif %}
+            </td>
+            <td style="padding:6px 8px;text-align:center;vertical-align:middle;">
+                <input type="number" min="0" step="0.01"
+                    value="{% if row.commission_deduction %}{{ row.commission_deduction }}{% endif %}"
+                    placeholder="0.00"
+                    onblur="saveCommission('{{ row.agent.pk }}', '{{ week_start|date:'Y-m-d' }}', this)"
+                    style="width:72px;text-align:center;font-size:12px;padding:3px 5px;border:1px solid #ddd;border-radius:4px;">
             </td>
         </tr>
         {% empty %}
@@ -177,6 +185,29 @@ function onHoursBlur(inp) {
     const td = inp.closest('td');
     const sel = td.querySelector('select');
     saveCell(td.dataset.agent, td.dataset.date, sel ? sel.value : '', inp.value);
+}
+
+async function saveCommission(agentId, weekStart, inp) {
+    pendingSaves++;
+    showStatus('Saving…', '#b45309', '#fef3c7');
+    try {
+        const resp = await fetch('/adherence/save-commission/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({agent_id: agentId, week_start: weekStart, amount: inp.value}),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+    } catch (e) {
+        showStatus('⚠ Save failed — check your connection', '#991b1b', '#fee2e2');
+        return;
+    } finally {
+        pendingSaves--;
+    }
+    if (pendingSaves === 0) {
+        showStatus('✓ Saved', '#166534', '#dcfce7');
+        setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
+    }
 }
 </script>
 {% endblock %}

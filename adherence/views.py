@@ -217,6 +217,32 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map):
 
 @login_required
 @require_POST
+def save_commission(request):
+    data = json.loads(request.body)
+    agent_id = data.get('agent_id')
+    week_start_str = data.get('week_start')
+    amount_str = data.get('amount', '').strip()
+
+    try:
+        week_start = date.fromisoformat(week_start_str)
+    except (ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
+
+    try:
+        amount = Decimal(amount_str) if amount_str else Decimal('0')
+    except InvalidOperation:
+        return JsonResponse({'ok': False, 'error': 'invalid amount'}, status=400)
+
+    agent = get_object_or_404(Agent, pk=agent_id)
+    PayrollAdjustment.objects.update_or_create(
+        agent=agent,
+        week_start=week_start,
+        defaults={'commission_deduction': amount},
+    )
+    return JsonResponse({'ok': True})
+
+@login_required
+@require_POST
 def save_adherence_cell(request):
     data = json.loads(request.body)
     agent_id = data.get('agent_id')
@@ -323,6 +349,13 @@ def adherence_week(request):
 
     shift_map, record_map, coded_map = _build_maps(agents, week_dates)
     rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map)
+
+    adj_map = {
+        pa.agent_id: pa.commission_deduction
+        for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
+    }
+    for row in rows:
+        row['commission_deduction'] = adj_map.get(row['agent'].pk, Decimal('0'))
 
     return render(request, 'adherence/dashboard.html', {
         'rows': rows,
