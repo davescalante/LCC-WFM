@@ -109,12 +109,13 @@ def erlang_calculator(request):
             return redirect('erlang_calculator')
 
     raw_rows = request.session.get('erlang_rows', [])
-    params = request.session.get('erlang_params', {
-        'target_sl': 80,
-        'target_seconds': 20,
-        'shrinkage': 0,
-        'aht_seconds': 420,
-    })
+    _p = request.session.get('erlang_params', {})
+    params = {
+        'target_sl': _p.get('target_sl', 80),
+        'target_seconds': _p.get('target_seconds', 20),
+        'shrinkage': _p.get('shrinkage', 0),
+        'aht_seconds': _p.get('aht_seconds', 420),
+    }
 
     days = []
     if raw_rows:
@@ -142,9 +143,13 @@ def erlang_download(request):
         return redirect('erlang_calculator')
 
     raw_rows = request.session.get('erlang_rows', [])
-    params = request.session.get('erlang_params', {
-        'target_sl': 80, 'target_seconds': 20, 'shrinkage': 0, 'aht_seconds': 420,
-    })
+    _p = request.session.get('erlang_params', {})
+    params = {
+        'target_sl': _p.get('target_sl', 80),
+        'target_seconds': _p.get('target_seconds', 20),
+        'shrinkage': _p.get('shrinkage', 0),
+        'aht_seconds': _p.get('aht_seconds', 420),
+    }
 
     if not raw_rows:
         return redirect('erlang_calculator')
