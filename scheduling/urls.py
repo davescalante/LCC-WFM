@@ -17,4 +17,5 @@ urlpatterns = [
     path('overtime/', views.overtime_list, name='overtime_list'),
     path('overtime/week/', views.overtime_week, name='overtime_week'),
     path('overtime/<int:pk>/delete/', views.overtime_delete, name='overtime_delete'),
+    path('activity/', views.activity_log, name='activity_log'),
 ]

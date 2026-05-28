@@ -151,6 +151,24 @@ class OvertimeShift(models.Model):
         return f"{self.agent} — OT {self.date} {self.start_time}–{self.end_time}"
 
 
+class AuditLog(models.Model):
+    timestamp = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')
+    action = models.CharField(max_length=200)
+    detail = models.TextField(blank=True)
+    agent = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.timestamp:%Y-%m-%d %H:%M} — {self.user} — {self.action}"
+
+
+def log_action(user, action, detail='', agent=None):
+    AuditLog.objects.create(user=user, action=action, detail=detail, agent=agent)
+
+
 class Break(models.Model):
     BREAK_TYPES = [
         ('break', 'Break'),

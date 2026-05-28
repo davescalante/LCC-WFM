@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
-from scheduling.models import Shift, Agent, Five9Profile, OvertimeShift
+from scheduling.models import Shift, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
@@ -359,11 +359,16 @@ def save_adherence_cell(request):
             date=day_date,
             defaults={'status': status},
         )
+        display = 'A' if status == 'Absent' else status
+        log_action(request.user, 'Set adherence status',
+                   f'{agent} — {day_date} → {display}', agent=agent)
     else:
         # Only delete if there are no system-written hours to preserve
         AdherenceRecord.objects.filter(
             agent=agent, date=day_date, actual_hours__isnull=True
         ).delete()
+        log_action(request.user, 'Cleared adherence status',
+                   f'{agent} — {day_date}', agent=agent)
 
     return JsonResponse({'ok': True})
 
@@ -404,6 +409,11 @@ def add_coding_ajax(request):
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=400)
 
+    agent = get_object_or_404(Agent, pk=agent_id)
+    log_action(request.user, 'Added coding',
+               f'{agent} — {date_str}: {coding.start_time.strftime("%H:%M")}–{coding.end_time.strftime("%H:%M")}',
+               agent=agent)
+
     return JsonResponse({
         'ok': True,
         'id': coding.pk,
@@ -419,7 +429,12 @@ def add_coding_ajax(request):
 def delete_coding_ajax(request):
     data = json.loads(request.body)
     coding_id = data.get('coding_id')
-    Coding.objects.filter(pk=coding_id).delete()
+    coding = Coding.objects.filter(pk=coding_id).select_related('agent').first()
+    if coding:
+        log_action(request.user, 'Deleted coding',
+                   f'{coding.agent} — {coding.date}: {coding.start_time.strftime("%H:%M")}–{coding.end_time.strftime("%H:%M")}',
+                   agent=coding.agent)
+        coding.delete()
     return JsonResponse({'ok': True})
 
 

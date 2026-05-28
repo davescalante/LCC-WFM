@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, OvertimeShift
+from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, OvertimeShift, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -100,6 +100,7 @@ def agent_create(request):
         agent.user = user
         agent.save()
         _save_five9_profiles(request, agent)
+        log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
         messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
     return render(request, 'scheduling/agent_form.html', {
@@ -163,6 +164,7 @@ def agent_edit(request, pk):
                 i += 1
 
             _save_five9_profiles(request, agent)
+            log_action(request.user, 'Edited agent profile', f'Edited {user.get_full_name()}', agent=agent)
             messages.success(request, f"User {user.get_full_name()} updated successfully.")
             return redirect('agent_detail', pk=agent.pk)
     else:
@@ -186,6 +188,7 @@ def agent_delete(request, pk):
     agent = get_object_or_404(Agent, pk=pk)
     if request.method == 'POST':
         name = agent.user.get_full_name()
+        log_action(request.user, 'Deleted agent profile', f'Deleted {name}')
         agent.user.delete()
         messages.success(request, f"User {name} deleted.")
         return redirect('agent_list')
@@ -407,6 +410,7 @@ def shift_week(request):
                             'notes': notes,
                         }
                     )
+            log_action(request.user, 'Saved recurring schedule', f'Permanent schedule for {agent} week of {week_start}', agent=agent)
             messages.success(request, f"Recurring schedule saved for {agent}. This schedule will appear every week.")
 
         elif edit_type == 'one_time':
@@ -421,6 +425,7 @@ def shift_week(request):
                             'notes': notes,
                         }
                     )
+            log_action(request.user, 'Saved one-time schedule', f'One-time schedule for {agent} week of {week_start}', agent=agent)
             messages.success(request, f"One-time schedule saved for week of {week_start.strftime('%B %d, %Y')} for {agent}.")
 
         elif edit_type == 'date_range':
@@ -453,6 +458,8 @@ def shift_week(request):
                         )
                 current_week += timedelta(days=7)
                 week_count += 1
+            log_action(request.user, 'Saved date-range schedule',
+                       f'Schedule for {agent} from {range_start} to {range_end} ({week_count} weeks)', agent=agent)
             messages.success(
                 request,
                 f"Schedule applied to {week_count} week(s) "
@@ -627,7 +634,7 @@ def overtime_week(request):
                 ot_notes = request.POST.get(f'ot_notes_{agent.pk}_{date_iso}', '').strip()
 
                 if ot_start and ot_end:
-                    OvertimeShift.objects.update_or_create(
+                    _, created = OvertimeShift.objects.update_or_create(
                         agent=agent,
                         date=day_date,
                         defaults={
@@ -636,8 +643,14 @@ def overtime_week(request):
                             'notes': ot_notes,
                         }
                     )
+                    verb = 'Added' if created else 'Updated'
+                    log_action(request.user, f'{verb} OT shift',
+                               f'{agent} on {date_iso}: {ot_start}–{ot_end}', agent=agent)
                 else:
-                    OvertimeShift.objects.filter(agent=agent, date=day_date).delete()
+                    deleted, _ = OvertimeShift.objects.filter(agent=agent, date=day_date).delete()
+                    if deleted:
+                        log_action(request.user, 'Removed OT shift',
+                                   f'{agent} on {date_iso}', agent=agent)
 
         messages.success(request, f"OT shifts saved for week of {ws.strftime('%B %d, %Y')}.")
         return redirect(f"{reverse('overtime_list')}?week_start={ws.isoformat()}")
@@ -675,4 +688,41 @@ def overtime_delete(request, pk):
     return render(request, 'scheduling/confirm_delete.html', {
         'object': ot_shift,
         'cancel_url': reverse('overtime_list'),
+    })
+
+
+@login_required
+def activity_log(request):
+    from .models import AuditLog
+    from django.contrib.auth.models import User
+
+    logs = AuditLog.objects.select_related('user', 'agent__user').order_by('-timestamp')
+
+    # Filter by user
+    user_filter = request.GET.get('user', '')
+    if user_filter:
+        try:
+            logs = logs.filter(user_id=int(user_filter))
+        except (ValueError, TypeError):
+            pass
+
+    # Filter by date
+    date_filter = request.GET.get('date', '')
+    if date_filter:
+        try:
+            from datetime import datetime
+            filter_date = date.fromisoformat(date_filter)
+            logs = logs.filter(timestamp__date=filter_date)
+        except (ValueError, TypeError):
+            pass
+
+    logs = logs[:500]
+
+    users = User.objects.filter(audit_logs__isnull=False).distinct().order_by('last_name', 'first_name')
+
+    return render(request, 'scheduling/activity_log.html', {
+        'logs': logs,
+        'users': users,
+        'selected_user': user_filter,
+        'selected_date': date_filter,
     })

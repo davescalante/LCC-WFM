@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+{% block title %} - Activity Log{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Activity Log</h1>
+</div>
+
+<!-- Filters -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <form method="get" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">User:</label>
+            <select name="user" onchange="this.form.submit()"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+                <option value="">All Users</option>
+                {% for u in users %}
+                <option value="{{ u.pk }}" {% if selected_user == u.pk|stringformat:"s" %}selected{% endif %}>
+                    {{ u.get_full_name|default:u.username }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+            <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Date:</label>
+            <input type="date" name="date" value="{{ selected_date }}"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;"
+                onchange="this.form.submit()">
+        </div>
+        {% if selected_user or selected_date %}
+        <a href="{% url 'activity_log' %}" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear filters</a>
+        {% endif %}
+        <span style="font-size:12px;color:#aaa;margin-left:auto;">Showing last {{ logs|length }} entries</span>
+    </form>
+</div>
+
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="border-collapse:collapse;width:100%;min-width:700px;">
+    <thead>
+        <tr style="background:#f0f4f8;">
+            <th style="padding:10px 14px;border-bottom:2px solid #ddd;text-align:left;font-size:12px;color:#555;white-space:nowrap;">Time</th>
+            <th style="padding:10px 14px;border-bottom:2px solid #ddd;text-align:left;font-size:12px;color:#555;">User</th>
+            <th style="padding:10px 14px;border-bottom:2px solid #ddd;text-align:left;font-size:12px;color:#555;">Action</th>
+            <th style="padding:10px 14px;border-bottom:2px solid #ddd;text-align:left;font-size:12px;color:#555;">Detail</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in logs %}
+        <tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:9px 14px;font-size:12px;color:#888;white-space:nowrap;font-family:monospace;">
+                {{ entry.timestamp|date:"M d, Y" }}<br>
+                <span style="color:#aaa;">{{ entry.timestamp|date:"H:i:s" }}</span>
+            </td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:600;color:#1a3a5c;white-space:nowrap;">
+                {{ entry.user.get_full_name|default:entry.user.username|default:"—" }}
+            </td>
+            <td style="padding:9px 14px;font-size:13px;">
+                <span style="
+                    display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;
+                    {% if 'Created' in entry.action %}background:#d4edda;color:#155724;
+                    {% elif 'Edited' in entry.action or 'Updated' in entry.action or 'Saved' in entry.action %}background:#d1ecf1;color:#0c5460;
+                    {% elif 'Deleted' in entry.action or 'Removed' in entry.action or 'Cleared' in entry.action %}background:#f8d7da;color:#721c24;
+                    {% elif 'Set' in entry.action or 'Added' in entry.action %}background:#fff3cd;color:#856404;
+                    {% else %}background:#e2e3e5;color:#383d41;{% endif %}
+                ">{{ entry.action }}</span>
+            </td>
+            <td style="padding:9px 14px;font-size:13px;color:#555;">
+                {% if entry.agent %}
+                <a href="{% url 'agent_detail' entry.agent.pk %}" style="color:#1a3a5c;font-weight:600;text-decoration:none;">{{ entry.agent }}</a>
+                &nbsp;—&nbsp;
+                {% endif %}
+                {{ entry.detail }}
+            </td>
+        </tr>
+        {% empty %}
+        <tr>
+            <td colspan="4" style="padding:40px;text-align:center;color:#aaa;font-size:14px;">
+                No activity recorded yet.
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+{% endblock %}
