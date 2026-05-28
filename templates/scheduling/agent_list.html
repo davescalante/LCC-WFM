@@ -1,11 +1,15 @@
 {% extends 'base.html' %}
 {% block title %} - Agents{% endblock %}
 {% block content %}
-<h1>Agents</h1>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Agents</h1>
+    <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add Agent</a>
+</div>
+{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 <div class="card">
     <table>
         <thead>
-            <tr><th>Name</th><th>Role</th><th>Team</th><th>Email</th></tr>
+            <tr><th>Name</th><th>Role</th><th>Team</th><th>Email</th><th>Actions</th></tr>
         </thead>
         <tbody>
             {% for agent in agents %}
@@ -14,9 +18,13 @@
                 <td><span class="badge badge-blue">{{ agent.get_role_display }}</span></td>
                 <td>{{ agent.team }}</td>
                 <td>{{ agent.user.email }}</td>
+                <td>
+                    <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-primary" style="padding:4px 10px;font-size:12px;">Edit</a>
+                    <a href="{% url 'agent_delete' agent.pk %}" class="btn" style="padding:4px 10px;font-size:12px;background:#c0392b;color:white;">Delete</a>
+                </td>
             </tr>
             {% empty %}
-            <tr><td colspan="4" style="color:#888;">No agents found.</td></tr>
+            <tr><td colspan="5" style="color:#888;">No agents found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
             {% endfor %}
         </tbody>
     </table>

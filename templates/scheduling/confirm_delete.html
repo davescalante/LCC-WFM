@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %} - Confirm Delete{% endblock %}
+{% block content %}
+<div class="card" style="max-width:480px;margin:40px auto;text-align:center;">
+    <h1 style="margin-bottom:12px;">Confirm Delete</h1>
+    <p style="color:#555;margin-bottom:24px;">Are you sure you want to delete <strong>{{ object }}</strong>? This cannot be undone.</p>
+    <form method="post">
+        {% csrf_token %}
+        <button type="submit" class="btn" style="background:#c0392b;color:white;margin-right:12px;">Yes, Delete</button>
+        <a href="{{ cancel_url }}" class="btn" style="background:#888;color:white;">Cancel</a>
+    </form>
+</div>
+{% endblock %}
