@@ -30,24 +30,7 @@
             <label>Role</label>
             {{ agent_form.role }}
             <label>Role Type</label>
-            <select name="role_type" id="id_role_type">
-                <option value="">---------</option>
-                <optgroup label="Agent" class="agent-options">
-                    <option value="training" {% if agent_form.instance.role_type == 'training' %}selected{% endif %}>Training</option>
-                    <option value="incubation" {% if agent_form.instance.role_type == 'incubation' %}selected{% endif %}>Incubation</option>
-                    <option value="regular_agent" {% if agent_form.instance.role_type == 'regular_agent' %}selected{% endif %}>Regular Agent</option>
-                    <option value="kill_team" {% if agent_form.instance.role_type == 'kill_team' %}selected{% endif %}>Kill Team</option>
-                    <option value="night_shift" {% if agent_form.instance.role_type == 'night_shift' %}selected{% endif %}>Night Shift</option>
-                </optgroup>
-                <optgroup label="Admin" class="admin-options">
-                    <option value="supervisor" {% if agent_form.instance.role_type == 'supervisor' %}selected{% endif %}>Supervisor</option>
-                    <option value="qa" {% if agent_form.instance.role_type == 'qa' %}selected{% endif %}>QA</option>
-                    <option value="cs" {% if agent_form.instance.role_type == 'cs' %}selected{% endif %}>CS</option>
-                    <option value="testing" {% if agent_form.instance.role_type == 'testing' %}selected{% endif %}>Testing</option>
-                    <option value="sms_email" {% if agent_form.instance.role_type == 'sms_email' %}selected{% endif %}>SMS/Email</option>
-                    <option value="admin_training" {% if agent_form.instance.role_type == 'admin_training' %}selected{% endif %}>Training</option>
-                </optgroup>
-            </select>
+            <select name="role_type" id="id_role_type"></select>
             <label>Supervisor</label>
             {{ agent_form.supervisor }}
         </div>
@@ -92,26 +75,43 @@
     label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
 </style>
 <script>
-    function filterRoleTypes() {
+    const ROLE_TYPES = {
+        agent: [
+            ['training', 'Training'],
+            ['incubation', 'Incubation'],
+            ['regular_agent', 'Regular Agent'],
+            ['kill_team', 'Kill Team'],
+            ['night_shift', 'Night Shift'],
+        ],
+        admin: [
+            ['supervisor', 'Supervisor'],
+            ['qa', 'QA'],
+            ['cs', 'CS'],
+            ['testing', 'Testing'],
+            ['sms_email', 'SMS/Email'],
+            ['admin_training', 'Training'],
+            ['coordinator', 'Coordinator'],
+        ]
+    };
+
+    const CURRENT_ROLE_TYPE = "{{ agent_form.instance.role_type }}";
+
+    function updateRoleTypes() {
         const role = document.getElementById('id_role').value;
-        const roleType = document.getElementById('id_role_type');
-        const agentGroup = roleType.querySelector('.agent-options');
-        const adminGroup = roleType.querySelector('.admin-options');
-
-        agentGroup.style.display = role === 'agent' ? '' : 'none';
-        adminGroup.style.display = role === 'admin' ? '' : 'none';
-
-        // Reset selection if current value doesn't match role
-        const selected = roleType.value;
-        const agentVals = ['training','incubation','regular_agent','kill_team','night_shift'];
-        const adminVals = ['supervisor','qa','cs','testing','sms_email','admin_training'];
-        if (role === 'agent' && adminVals.includes(selected)) roleType.value = '';
-        if (role === 'admin' && agentVals.includes(selected)) roleType.value = '';
+        const select = document.getElementById('id_role_type');
+        select.innerHTML = '<option value="">---------</option>';
+        (ROLE_TYPES[role] || []).forEach(function([val, label]) {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = label;
+            if (val === CURRENT_ROLE_TYPE) opt.selected = true;
+            select.appendChild(opt);
+        });
     }
 
     document.addEventListener('DOMContentLoaded', function() {
-        filterRoleTypes();
-        document.getElementById('id_role').addEventListener('change', filterRoleTypes);
+        updateRoleTypes();
+        document.getElementById('id_role').addEventListener('change', updateRoleTypes);
     });
 </script>
 {% endblock %}
