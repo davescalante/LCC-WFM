@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
-from scheduling.models import Shift, Agent, Five9Profile, OvertimeShift, log_action
+from scheduling.models import Shift, ShiftTemplate, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
@@ -108,11 +108,22 @@ def _build_maps(agents, week_dates):
     shifts_qs = Shift.objects.filter(date__in=week_dates, agent__in=agents)
     shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
 
+    # Fill gaps with recurring templates where no specific Shift record exists
+    template_qs = ShiftTemplate.objects.filter(agent__in=agents)
+    template_map = {(t.agent_id, t.day_of_week): t for t in template_qs}
+    agent_ids = [a.pk for a in agents]
+    for day_date in week_dates:
+        for agent_id in agent_ids:
+            if (agent_id, day_date) not in shift_map:
+                tmpl = template_map.get((agent_id, day_date.weekday()))
+                if tmpl:
+                    shift_map[(agent_id, day_date)] = tmpl
+
     records_qs = AdherenceRecord.objects.filter(date__in=week_dates, agent__in=agents)
     record_map = {(r.agent_id, r.date): r for r in records_qs}
 
     codings_qs = Coding.objects.filter(date__in=week_dates, agent__in=agents)
-    coded_map = {}  # (agent_id, date) -> Decimal hours
+    coded_map = {}
     for c in codings_qs:
         key = (c.agent_id, c.date)
         coded_map[key] = coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
@@ -439,7 +450,9 @@ def adherence_week(request):
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
     agents = agents.filter(
-        Q(shifts__date__in=week_dates) | Q(overtime_shifts__date__in=week_dates)
+        Q(shifts__date__in=week_dates) |
+        Q(overtime_shifts__date__in=week_dates) |
+        Q(shift_templates__isnull=False)
     ).distinct()
 
     if request.method == 'POST':
