@@ -152,7 +152,7 @@
                             data-day="{{ day.name }}"
                             data-value="{{ row.scheduled_staff }}"
                             style="display:inline-block;width:40px;font-size:14px;font-weight:700;color:#1a3a5c;">
-                            {{ row.scheduled_staff|default:"—" }}
+                            {{ row.scheduled_staff }}
                         </span>
                     </td>
                     <td style="padding:6px 10px;text-align:center;">
@@ -262,7 +262,7 @@ function updateVariance(dayName, hour) {
     const required = parseInt(display.dataset.required);
     const val = parseInt(display.dataset.value);
 
-    if (isNaN(val) || val === 0) {
+    if (isNaN(val)) {
         cell.textContent = '—';
         cell.style.color = '#aaa';
     } else {
@@ -295,7 +295,7 @@ function updateDayBadge(dayName) {
     displays.forEach(el => {
         const req = parseInt(el.dataset.required);
         const val = parseInt(el.dataset.value);
-        if (!isNaN(val) && val > 0 && val < req) under++;
+        if (!isNaN(val) && val < req) under++;
     });
     const badge = document.getElementById('badge-' + dayName);
     if (badge) {

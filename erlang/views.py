@@ -339,9 +339,9 @@ def erlang_download(request):
 
     for day_name in DAYS_ORDER:
         for row in sorted(by_day[day_name], key=lambda r: r['hour']):
-            scheduled = scheduled_map.get((day_name, row['hour']), '')
+            scheduled = scheduled_map.get((day_name, row['hour']), 0)
             actual = actual_map.get((day_name, row['hour']), '')
-            variance = (scheduled - row['agents_shrinkage']) if isinstance(scheduled, int) else ''
+            variance = scheduled - row['agents_shrinkage']
             writer.writerow([
                 row['day'],
                 row['hour_label'],
