@@ -13,7 +13,7 @@ from .calculator import (
     parse_aht, calculate_staffing, format_aht,
 )
 from .models import ErlangReport, ErlangActualStaff, ErlangCallRow
-from scheduling.models import Shift, Five9Profile, OvertimeShift
+from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -35,40 +35,53 @@ def _build_scheduled_map(week_start):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
     # Only count agents who have a Five9 profile with a regular-call role type
-    call_agent_ids = Five9Profile.objects.filter(
+    call_agent_ids = set(Five9Profile.objects.filter(
         role_type__in=('regular_agent', 'night_shift')
-    ).values_list('agent_id', flat=True).distinct()
+    ).values_list('agent_id', flat=True).distinct())
 
+    def _add_hours(scheduled, day_name, start_hour, end_hour):
+        hours = (
+            list(range(start_hour, 24)) + list(range(0, end_hour))
+            if end_hour <= start_hour
+            else list(range(start_hour, end_hour))
+        )
+        for h in hours:
+            scheduled[(day_name, h)] = scheduled.get((day_name, h), 0) + 1
+
+    scheduled = {}
+
+    # Specific shift overrides for this week
     shifts = Shift.objects.filter(
         date__in=week_dates,
         is_off=False,
         agent_id__in=call_agent_ids,
-    ).values('date', 'start_time', 'end_time')
+    ).values('agent_id', 'date', 'start_time', 'end_time')
 
-    scheduled = {}
+    agents_with_shift_override = set()
     for s in shifts:
-        day_name = s['date'].strftime('%A')
-        sh = s['start_time'].hour
-        eh = s['end_time'].hour
-        hours = list(range(sh, 24)) + list(range(0, eh)) if eh <= sh else list(range(sh, eh))
-        for h in hours:
-            key = (day_name, h)
-            scheduled[key] = scheduled.get(key, 0) + 1
+        agents_with_shift_override.add((s['agent_id'], s['date']))
+        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour)
 
-    # Also count OT shifts for call agents
+    # Recurring templates — only for days not covered by a specific Shift record
+    templates = ShiftTemplate.objects.filter(
+        agent_id__in=call_agent_ids,
+        is_off=False,
+    ).values('agent_id', 'day_of_week', 'start_time', 'end_time')
+
+    for t in templates:
+        for day_date in week_dates:
+            if day_date.weekday() == t['day_of_week']:
+                if (t['agent_id'], day_date) not in agents_with_shift_override:
+                    _add_hours(scheduled, day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour)
+
+    # OT shifts for call agents
     ot_shifts = OvertimeShift.objects.filter(
         date__in=week_dates,
         agent_id__in=call_agent_ids,
     ).values('date', 'start_time', 'end_time')
 
     for s in ot_shifts:
-        day_name = s['date'].strftime('%A')
-        sh = s['start_time'].hour
-        eh = s['end_time'].hour
-        hours = list(range(sh, 24)) + list(range(0, eh)) if eh <= sh else list(range(sh, eh))
-        for h in hours:
-            key = (day_name, h)
-            scheduled[key] = scheduled.get(key, 0) + 1
+        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour)
 
     return scheduled
 
