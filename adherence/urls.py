@@ -12,6 +12,7 @@ urlpatterns = [
     path('delete-coding/', views.delete_coding_ajax, name='delete_coding_ajax'),
     path('daily/upload/', views.upload_daily_file, name='upload_daily_file'),
     path('daily/delete/', views.delete_daily_upload_ajax, name='delete_daily_upload'),
+    path('daily/rematch/', views.rematch_daily_upload, name='rematch_daily_upload'),
     path('notes/', views.adherence_notes, name='adherence_notes'),
     path('notes/edit/', views.edit_adherence_note, name='edit_adherence_note'),
     path('notes/delete/', views.delete_adherence_note, name='delete_adherence_note'),

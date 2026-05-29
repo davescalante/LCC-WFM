@@ -905,6 +905,60 @@ def upload_daily_file(request):
 
 @login_required
 @require_POST
+def rematch_daily_upload(request):
+    """Re-match unmatched DailyAgentHours rows against the current Five9Profile list."""
+    data = json.loads(request.body)
+    date_str = data.get('date')
+    try:
+        upload_date = date.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'Invalid date'}, status=400)
+
+    upload = DailyUpload.objects.filter(date=upload_date).first()
+    if not upload:
+        return JsonResponse({'ok': False, 'error': 'No upload found for this date'}, status=404)
+
+    agent_map = {
+        p.five9_username.strip().lower(): p.agent
+        for p in Five9Profile.objects.filter(
+            five9_username__gt='', agent__status='active'
+        ).select_related('agent')
+    }
+
+    newly_matched = 0
+    for dah in DailyAgentHours.objects.filter(upload=upload, agent__isnull=True):
+        agent = agent_map.get(dah.five9_username.strip().lower())
+        if not agent:
+            continue
+        dah.agent = agent
+        dah.save(update_fields=['agent'])
+        newly_matched += 1
+
+        coded_secs = sum(
+            c.total_seconds_count()
+            for c in Coding.objects.filter(agent=agent, date=upload_date)
+        )
+        total_secs = dah.login_seconds + coded_secs
+        allowance_secs = int(total_secs * 0.125)
+        excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
+        final_secs = max(0, total_secs - excess_secs)
+        final_hours = Decimal(str(round(final_secs / 3600, 6)))
+
+        AdherenceRecord.objects.update_or_create(
+            agent=agent,
+            date=upload_date,
+            defaults={'actual_hours': final_hours},
+        )
+
+    still_unmatched = DailyAgentHours.objects.filter(upload=upload, agent__isnull=True).count()
+    upload.unmatched_count = still_unmatched
+    upload.save(update_fields=['unmatched_count'])
+
+    return JsonResponse({'ok': True, 'newly_matched': newly_matched, 'still_unmatched': still_unmatched})
+
+
+@login_required
+@require_POST
 def delete_daily_upload_ajax(request):
     data = json.loads(request.body)
     date_str = data.get('date')
