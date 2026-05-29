@@ -200,7 +200,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 if actual_hrs:
                     actual_total += actual_hrs
             else:
-                status = ''
+                status = record.status if record else ''
                 actual_hrs = record.actual_hours if record else None
 
             cell_coded_hrs = coded_map.get((agent.pk, day_date), Decimal('0'))
