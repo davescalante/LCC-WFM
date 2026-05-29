@@ -915,6 +915,30 @@ def delete_daily_upload_ajax(request):
 
 
 @login_required
+@require_POST
+def edit_adherence_note(request):
+    note_id = request.POST.get('note_id')
+    body = (request.POST.get('body') or '').strip()
+    if not body:
+        return JsonResponse({'error': 'Empty note'}, status=400)
+    note = get_object_or_404(AdherenceNote, pk=note_id)
+    note.body = body
+    note.save()
+    return JsonResponse({'ok': True, 'body': note.body})
+
+
+@login_required
+@require_POST
+def delete_adherence_note(request):
+    note_id = request.POST.get('note_id')
+    note = get_object_or_404(AdherenceNote, pk=note_id)
+    agent_id, date_val = note.agent_id, note.date
+    note.delete()
+    new_count = AdherenceNote.objects.filter(agent_id=agent_id, date=date_val).count()
+    return JsonResponse({'ok': True, 'new_count': new_count})
+
+
+@login_required
 def adherence_notes(request):
     """GET: list notes for agent+date. POST: add a new note."""
     agent_id = request.GET.get('agent') or request.POST.get('agent')

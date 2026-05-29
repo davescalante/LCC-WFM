@@ -266,7 +266,6 @@ function openNotes(btn) {
 
     document.getElementById('np-agent').textContent = btn.dataset.agentName || '';
     document.getElementById('np-date').textContent = _noteDate;
-    document.getElementById('np-list').innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:14px 0;">Loading…</div>';
     document.getElementById('np-body').value = '';
 
     pop.style.display = 'flex';
@@ -278,15 +277,20 @@ function openNotes(btn) {
     pop.style.left = left + 'px';
     pop.style.top  = top  + 'px';
 
-    fetch(`/adherence/notes/?agent=${_noteAgent}&date=${_noteDate}`)
-        .then(r => r.json())
-        .then(d => _renderNotes(d.notes || []))
-        .catch(() => { document.getElementById('np-list').innerHTML = '<div style="color:#c00;font-size:12px;text-align:center;">Failed to load notes.</div>'; });
+    loadNotes();
 }
 
 function closeNotes() {
     document.getElementById('note-popover').style.display = 'none';
     _noteBtn = null;
+}
+
+function loadNotes() {
+    document.getElementById('np-list').innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:14px 0;">Loading…</div>';
+    fetch(`/adherence/notes/?agent=${_noteAgent}&date=${_noteDate}`)
+        .then(r => r.json())
+        .then(d => _renderNotes(d.notes || []))
+        .catch(() => { document.getElementById('np-list').innerHTML = '<div style="color:#c00;font-size:12px;text-align:center;">Failed to load notes.</div>'; });
 }
 
 function _renderNotes(notes) {
@@ -296,15 +300,88 @@ function _renderNotes(notes) {
         return;
     }
     list.innerHTML = notes.map(n => `
-        <div style="background:#f0f4f8;border-radius:7px;padding:8px 11px;">
-            <div style="font-size:11px;color:#888;margin-bottom:3px;">
-                <strong style="color:#1a3a5c;">${_esc(n.author)}</strong>
-                <span style="margin-left:6px;">${_esc(n.created_at)}</span>
+        <div data-note-id="${n.id}" data-body="${_esc(n.body)}" style="background:#f0f4f8;border-radius:7px;padding:8px 11px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:3px;">
+                <div style="font-size:11px;color:#888;">
+                    <strong style="color:#1a3a5c;">${_esc(n.author)}</strong>
+                    <span style="margin-left:6px;">${_esc(n.created_at)}</span>
+                </div>
+                <div style="display:flex;gap:6px;flex-shrink:0;margin-left:8px;">
+                    <button onclick="editNote(${n.id})" style="background:none;border:none;cursor:pointer;font-size:11px;color:#6b7280;padding:0;text-decoration:underline;" title="Edit note">Edit</button>
+                    <button onclick="deleteNote(${n.id})" style="background:none;border:none;cursor:pointer;font-size:11px;color:#ef4444;padding:0;text-decoration:underline;" title="Delete note">Delete</button>
+                </div>
             </div>
-            <div style="font-size:13px;color:#222;white-space:pre-wrap;word-break:break-word;line-height:1.45;">${_esc(n.body)}</div>
+            <div class="note-body" style="font-size:13px;color:#222;white-space:pre-wrap;word-break:break-word;line-height:1.45;">${_esc(n.body)}</div>
         </div>
     `).join('');
     list.scrollTop = list.scrollHeight;
+}
+
+function editNote(noteId) {
+    const noteEl = document.querySelector(`[data-note-id="${noteId}"]`);
+    if (!noteEl || noteEl.dataset.editing) return;
+    noteEl.dataset.editing = '1';
+
+    const bodyEl = noteEl.querySelector('.note-body');
+    const rawBody = noteEl.dataset.body;
+    bodyEl.style.display = 'none';
+
+    const ta = document.createElement('textarea');
+    ta.value = rawBody;
+    ta.rows = 4;
+    ta.style.cssText = 'width:100%;font-size:13px;padding:5px 7px;border:1px solid #93c5fd;border-radius:4px;resize:none;box-sizing:border-box;font-family:inherit;margin-top:4px;';
+    ta.onkeydown = function(e) { if (e.ctrlKey && e.key === 'Enter') { saveEdit(noteId); e.preventDefault(); } };
+
+    const controls = document.createElement('div');
+    controls.style.cssText = 'display:flex;gap:6px;margin-top:5px;justify-content:flex-end;';
+    controls.innerHTML = `
+        <button onclick="loadNotes()" style="font-size:12px;padding:3px 10px;background:#eee;border:none;border-radius:4px;cursor:pointer;color:#555;">Cancel</button>
+        <button onclick="saveEdit(${noteId})" style="font-size:12px;padding:3px 10px;background:#1a3a5c;color:white;border:none;border-radius:4px;cursor:pointer;">Save</button>
+    `;
+
+    noteEl.appendChild(ta);
+    noteEl.appendChild(controls);
+    ta.focus(); ta.select();
+}
+
+async function saveEdit(noteId) {
+    const noteEl = document.querySelector(`[data-note-id="${noteId}"]`);
+    if (!noteEl) return;
+    const ta = noteEl.querySelector('textarea');
+    const body = ta ? ta.value.trim() : '';
+    if (!body) { alert('Note cannot be empty.'); return; }
+
+    const fd = new FormData();
+    fd.append('note_id', noteId);
+    fd.append('body', body);
+    fd.append('csrfmiddlewaretoken', csrfToken());
+
+    try {
+        const resp = await fetch('/adherence/notes/edit/', {method:'POST', body:fd});
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+        loadNotes();
+    } catch(e) {
+        alert('Failed to save edit. Please try again.');
+    }
+}
+
+async function deleteNote(noteId) {
+    if (!confirm('Delete this note?')) return;
+
+    const fd = new FormData();
+    fd.append('note_id', noteId);
+    fd.append('csrfmiddlewaretoken', csrfToken());
+
+    try {
+        const resp = await fetch('/adherence/notes/delete/', {method:'POST', body:fd});
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+        _syncNoteIcon(data.new_count);
+        loadNotes();
+    } catch(e) {
+        alert('Failed to delete note. Please try again.');
+    }
 }
 
 async function submitNote() {
@@ -325,36 +402,24 @@ async function submitNote() {
         if (!data.ok) throw new Error(data.error || 'error');
 
         document.getElementById('np-body').value = '';
-
-        const list = document.getElementById('np-list');
-        if (list.textContent.includes('No notes yet')) list.innerHTML = '';
-        const el = document.createElement('div');
-        el.style.cssText = 'background:#f0f4f8;border-radius:7px;padding:8px 11px;';
-        el.innerHTML = `
-            <div style="font-size:11px;color:#888;margin-bottom:3px;">
-                <strong style="color:#1a3a5c;">${_esc(data.author)}</strong>
-                <span style="margin-left:6px;">${_esc(data.created_at)}</span>
-            </div>
-            <div style="font-size:13px;color:#222;white-space:pre-wrap;word-break:break-word;line-height:1.45;">${_esc(data.body)}</div>
-        `;
-        list.appendChild(el);
-        list.scrollTop = list.scrollHeight;
-
-        // Update icon
-        if (_noteBtn) {
-            _noteBtn.style.color = '#2563eb';
-            let badge = _noteBtn.querySelector('.note-count-badge');
-            if (!badge) {
-                badge = document.createElement('span');
-                badge.className = 'note-count-badge';
-                _noteBtn.appendChild(badge);
-            }
-            badge.textContent = data.new_count > 9 ? '9+' : data.new_count;
-        }
+        _syncNoteIcon(data.new_count);
+        loadNotes();
     } catch(e) {
         alert('Failed to save note. Please try again.');
     } finally {
         btn.disabled = false; btn.textContent = 'Add Note';
+    }
+}
+
+function _syncNoteIcon(count) {
+    if (!_noteBtn) return;
+    _noteBtn.style.color = count > 0 ? '#2563eb' : '#d1d5db';
+    let badge = _noteBtn.querySelector('.note-count-badge');
+    if (count > 0) {
+        if (!badge) { badge = document.createElement('span'); badge.className = 'note-count-badge'; _noteBtn.appendChild(badge); }
+        badge.textContent = count > 9 ? '9+' : count;
+    } else if (badge) {
+        badge.remove();
     }
 }
 

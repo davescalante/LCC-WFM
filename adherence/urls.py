@@ -13,5 +13,7 @@ urlpatterns = [
     path('daily/upload/', views.upload_daily_file, name='upload_daily_file'),
     path('daily/delete/', views.delete_daily_upload_ajax, name='delete_daily_upload'),
     path('notes/', views.adherence_notes, name='adherence_notes'),
+    path('notes/edit/', views.edit_adherence_note, name='edit_adherence_note'),
+    path('notes/delete/', views.delete_adherence_note, name='delete_adherence_note'),
     path('poll/', views.adherence_poll, name='adherence_poll'),
 ]
