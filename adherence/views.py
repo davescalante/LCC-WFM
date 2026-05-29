@@ -151,24 +151,23 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             effective_sched = Decimal('0')
 
+            # Always read status and actual hours from the record
+            status = record.status if record else ''
+            actual_hrs = record.actual_hours if record else None
+
+            # Scheduled hours only apply when a shift is set up
             if is_scheduled_day:
-                status = record.status if record else ''
-                actual_hrs = record.actual_hours if record else None
-
                 raw_sched = sched_hrs + ot_hrs
-
-                # VTO/LOA all-day: remove scheduled requirement entirely
-                # P+VTO/T+VTO: cap scheduled to what they actually worked
                 if status in ('VTO', 'LOA'):
                     effective_sched = Decimal('0')
                 elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
                     effective_sched = min(actual_hrs, raw_sched)
                 else:
                     effective_sched = raw_sched
-
                 sched_total += effective_sched
 
-                # Totals
+            # Present/A/T/I counts and bonus apply whenever a status is set
+            if status:
                 if status in ('P', 'OT', 'MUT', 'VTO', 'P+VTO', 'T', 'T+VTO', 'I'):
                     total_present += 1
                 elif status in ('Absent', 'NCNS'):
@@ -178,30 +177,18 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 if status == 'I':
                     total_incomplete += 1
 
-                if actual_hrs:
-                    actual_total += actual_hrs
-
-                # Bonus logic
                 if status in BONUS_DISQUALIFYING:
                     bonus = False
                     bonus_determined = True
                 elif status in BONUS_QUALIFYING:
                     bonus_determined = True
-                elif status == '':
-                    pass  # not yet filled
                 else:
-                    # V, IMSS, Quit, Baja, LOA, etc — not qualifying
                     bonus = False
                     bonus_determined = True
-            elif has_shift and is_off:
-                # Scheduled off — agent may still work (e.g. OT on day off)
-                status = record.status if record else ''
-                actual_hrs = record.actual_hours if record else None
-                if actual_hrs:
-                    actual_total += actual_hrs
-            else:
-                status = record.status if record else ''
-                actual_hrs = record.actual_hours if record else None
+
+            # Login hours accumulate whenever actual hours exist
+            if actual_hrs:
+                actual_total += actual_hrs
 
             cell_coded_hrs = coded_map.get((agent.pk, day_date), Decimal('0'))
 
