@@ -621,71 +621,84 @@ def overtime_list(request):
 
 @login_required
 def overtime_week(request):
-    week_start = _get_week_start(request)
-    week_dates = [week_start + timedelta(days=i) for i in range(7)]
-    week_end = week_dates[-1]
+    DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
     agents = Agent.objects.filter(status='active').select_related('user').order_by(
         'user__last_name', 'user__first_name'
     )
 
-    if request.method == 'POST':
-        week_start_str = request.POST.get('week_start')
-        try:
-            ws = date.fromisoformat(week_start_str) if week_start_str else week_start
-            ws = ws - timedelta(days=ws.weekday())
-        except (ValueError, TypeError):
-            ws = week_start
-        week_dates_post = [ws + timedelta(days=i) for i in range(7)]
+    today = timezone.localdate()
+    default_week_start = today - timedelta(days=today.weekday())
 
-        for agent in agents:
-            for day_date in week_dates_post:
-                date_iso = day_date.isoformat()
-                ot_start = request.POST.get(f'ot_start_{agent.pk}_{date_iso}', '').strip()
-                ot_end = request.POST.get(f'ot_end_{agent.pk}_{date_iso}', '').strip()
-                ot_notes = request.POST.get(f'ot_notes_{agent.pk}_{date_iso}', '').strip()
+    selected_agent_id = request.GET.get('agent') or request.POST.get('agent')
+    week_start_str = request.GET.get('week_start') or request.POST.get('week_start')
 
-                if ot_start and ot_end:
-                    _, created = OvertimeShift.objects.update_or_create(
-                        agent=agent,
-                        date=day_date,
-                        defaults={
-                            'start_time': ot_start,
-                            'end_time': ot_end,
-                            'notes': ot_notes,
-                        }
-                    )
-                    verb = 'Added' if created else 'Updated'
-                    log_action(request.user, f'{verb} OT shift',
-                               f'{agent} on {date_iso}: {ot_start}–{ot_end}', agent=agent)
-                else:
-                    deleted, _ = OvertimeShift.objects.filter(agent=agent, date=day_date).delete()
-                    if deleted:
-                        log_action(request.user, 'Removed OT shift',
-                                   f'{agent} on {date_iso}', agent=agent)
+    try:
+        week_start = date.fromisoformat(week_start_str) if week_start_str else default_week_start
+        week_start = week_start - timedelta(days=week_start.weekday())
+    except (ValueError, TypeError):
+        week_start = default_week_start
 
-        messages.success(request, f"OT shifts saved for week of {ws.strftime('%B %d, %Y')}.")
-        return redirect(f"{reverse('overtime_list')}?week_start={ws.isoformat()}")
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
-    # GET: pre-fill from existing OT records
-    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
-    ot_map = {(s.agent_id, s.date): s for s in ot_qs}
+    if request.method == 'POST' and selected_agent_id:
+        agent = get_object_or_404(Agent, pk=selected_agent_id)
+        for i, day_date in enumerate(week_dates):
+            ot_start = request.POST.get(f'day_{i}_start', '').strip()
+            ot_end = request.POST.get(f'day_{i}_end', '').strip()
+            ot_notes = request.POST.get(f'day_{i}_notes', '').strip()
+            date_iso = day_date.isoformat()
 
-    rows = []
-    for agent in agents:
-        cells = []
-        for day_date in week_dates:
-            ot_shift = ot_map.get((agent.pk, day_date))
-            cells.append({'date': day_date, 'ot_shift': ot_shift})
-        rows.append({'agent': agent, 'cells': cells})
+            if ot_start and ot_end:
+                _, created = OvertimeShift.objects.update_or_create(
+                    agent=agent,
+                    date=day_date,
+                    defaults={
+                        'start_time': ot_start,
+                        'end_time': ot_end,
+                        'notes': ot_notes,
+                    }
+                )
+                verb = 'Added' if created else 'Updated'
+                log_action(request.user, f'{verb} OT shift',
+                           f'{agent} on {date_iso}: {ot_start}–{ot_end}', agent=agent)
+            else:
+                deleted, _ = OvertimeShift.objects.filter(agent=agent, date=day_date).delete()
+                if deleted:
+                    log_action(request.user, 'Removed OT shift',
+                               f'{agent} on {date_iso}', agent=agent)
+
+        messages.success(request, f"OT shifts saved for {agent} — week of {week_start.strftime('%B %d, %Y')}.")
+        return redirect(f"{reverse('overtime_list')}?week_start={week_start.isoformat()}")
+
+    # GET: pre-fill from existing OT records for selected agent
+    days = []
+    if selected_agent_id:
+        ot_map = {
+            s.date: s
+            for s in OvertimeShift.objects.filter(agent_id=selected_agent_id, date__in=week_dates)
+        }
+        for i, day_date in enumerate(week_dates):
+            ot_shift = ot_map.get(day_date)
+            days.append({
+                'index': i,
+                'name': DAYS[i],
+                'date': day_date,
+                'start': ot_shift.start_time.strftime('%H:%M') if ot_shift else '',
+                'end': ot_shift.end_time.strftime('%H:%M') if ot_shift else '',
+                'notes': ot_shift.notes if ot_shift else '',
+                'has_ot': bool(ot_shift),
+            })
 
     return render(request, 'scheduling/overtime_week.html', {
-        'rows': rows,
-        'week_dates': week_dates,
+        'agents': agents,
+        'selected_agent_id': int(selected_agent_id) if selected_agent_id else None,
+        'days': days,
         'week_start': week_start,
-        'week_end': week_end,
+        'week_end': week_dates[-1],
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'week_start_iso': week_start.isoformat(),
     })
 
 
