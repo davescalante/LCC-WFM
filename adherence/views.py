@@ -438,6 +438,9 @@ def adherence_week(request):
         'user__last_name', 'user__first_name'
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
+    agents = agents.filter(
+        Q(shifts__date__in=week_dates) | Q(overtime_shifts__date__in=week_dates)
+    ).distinct()
 
     if request.method == 'POST':
         shift_map, record_map, _, _ot = _build_maps(agents, week_dates)
