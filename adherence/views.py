@@ -93,6 +93,29 @@ def _ot_hours(ot_shift):
     return Decimal(str(round(delta.total_seconds() / 3600, 6)))
 
 
+def _hours_evening(shift):
+    """Hours attributed to the shift-start calendar day: start→midnight for overnight, full for same-day."""
+    if not shift or getattr(shift, 'is_off', False):
+        return Decimal('0')
+    s, e = shift.start_time, shift.end_time
+    if e < s:  # overnight — only count start→midnight
+        secs = 86400 - (s.hour * 3600 + s.minute * 60 + s.second)
+    else:
+        secs = (e.hour * 3600 + e.minute * 60 + e.second) - (s.hour * 3600 + s.minute * 60 + s.second)
+    return Decimal(str(round(max(0, secs) / 3600, 6)))
+
+
+def _hours_morning(shift):
+    """Spillover hours on the next calendar day: midnight→end for overnight (0 for same-day)."""
+    if not shift or getattr(shift, 'is_off', False):
+        return Decimal('0')
+    s, e = shift.start_time, shift.end_time
+    if e < s:  # overnight — only the post-midnight portion spills
+        secs = e.hour * 3600 + e.minute * 60 + e.second
+        return Decimal(str(round(secs / 3600, 6)))
+    return Decimal('0')
+
+
 def _get_week_start(request):
     today = timezone.localdate()
     default = today - timedelta(days=today.weekday())
@@ -136,6 +159,10 @@ def _build_maps(agents, week_dates):
 
 def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None):
     rows = []
+    week_dates_set = set(week_dates)
+    # Template map for cross-week prev-day lookups (keyed by (agent_id, weekday))
+    template_map = {(t.agent_id, t.day_of_week): t for t in ShiftTemplate.objects.filter(agent__in=agents)}
+
     for agent in agents:
         cells = []
         total_present = 0
@@ -152,13 +179,39 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             record = record_map.get((agent.pk, day_date))
             ot_shift = (ot_map or {}).get((agent.pk, day_date))
 
-            sched_hrs = _scheduled_hours(shift)
-            ot_hrs = _ot_hours(ot_shift)
             is_off = shift.is_off if shift else False
             has_shift = shift is not None
 
-            # A day is scheduled if there's a non-off regular shift OR an OT shift
-            is_scheduled_day = (has_shift and not is_off) or bool(ot_shift)
+            # Split overnight shifts at midnight — attribute each portion to its calendar day
+            sched_hrs = _hours_evening(shift)    # this day's evening portion
+            ot_hrs = _hours_evening(ot_shift)    # this day's OT evening portion
+
+            # Previous calendar day: spillover from overnight shifts starting yesterday
+            prev_date = day_date - timedelta(days=1)
+            if prev_date in week_dates_set:
+                prev_shift = shift_map.get((agent.pk, prev_date))
+                prev_ot = (ot_map or {}).get((agent.pk, prev_date))
+            else:
+                prev_shift = template_map.get((agent.pk, prev_date.weekday()))
+                prev_ot = None
+            prev_not_off = prev_shift is not None and not getattr(prev_shift, 'is_off', False)
+            spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
+            spill_hrs += _hours_morning(prev_ot) if prev_ot else Decimal('0')
+            has_spillover = spill_hrs > 0
+
+            # Calendar-day scheduled hours = this evening + yesterday's post-midnight continuation
+            cal_sched = sched_hrs + ot_hrs + spill_hrs
+
+            # Spillover label for off days: show "↳ 00:00–HH:MM" in purple
+            spill_label = None
+            if has_spillover and is_off:
+                if prev_not_off and prev_shift and _hours_morning(prev_shift) > 0:
+                    spill_label = f"00:00–{prev_shift.end_time.strftime('%H:%M')}"
+                elif prev_ot and _hours_morning(prev_ot) > 0:
+                    spill_label = f"00:00–{prev_ot.end_time.strftime('%H:%M')}"
+
+            # A day is scheduled if there's a non-off shift, OT shift, or overnight spillover
+            is_scheduled_day = (has_shift and not is_off) or bool(ot_shift) or has_spillover
 
             effective_sched = Decimal('0')
 
@@ -168,13 +221,12 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             # Scheduled hours only apply when a shift is set up
             if is_scheduled_day:
-                raw_sched = sched_hrs + ot_hrs
                 if status in ('VTO', 'LOA'):
                     effective_sched = Decimal('0')
                 elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
-                    effective_sched = min(actual_hrs, raw_sched)
+                    effective_sched = min(actual_hrs, cal_sched)
                 else:
-                    effective_sched = raw_sched
+                    effective_sched = cal_sched
                 sched_total += effective_sched
 
             # Present/A/T/I counts and bonus apply whenever a status is set
@@ -205,9 +257,11 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             # Cell color — use total (login + codings) vs effective scheduled for color logic
             cell_total = (actual_hrs or Decimal('0')) + cell_coded_hrs
-            if not has_shift and not ot_shift:
+            # Off day with spillover is treated as a partial working day (not grey)
+            effective_is_off = is_off and not ot_shift and not has_spillover
+            if not has_shift and not ot_shift and not has_spillover:
                 cell_color = '#fafafa'
-            elif is_off and not ot_shift:
+            elif effective_is_off:
                 cell_color = STATUS_COLORS.get(status, '#f0f0f0') if status else '#f0f0f0'
             elif status:
                 base = STATUS_COLORS.get(status, '#fff')
@@ -232,15 +286,17 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             cells.append({
                 'date': day_date,
                 'scheduled': (
-                    'Off' if (is_off and not ot_shift)
+                    'Off' if effective_is_off
                     else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift and not is_off
                     else ''
                 ),
                 'ot_time': f"{ot_shift.start_time.strftime('%H:%M')}–{ot_shift.end_time.strftime('%H:%M')}" if ot_shift else None,
                 'sched_hrs': cell_sched_hrs,
                 'missing_hrs': missing_hrs,
-                'is_off': is_off and not ot_shift,
+                'is_off': effective_is_off,
                 'has_shift': is_scheduled_day or (has_shift and is_off),
+                'has_spillover': has_spillover,
+                'spill_label': spill_label,
                 'status': status,
                 'display_hrs': display_hrs,
                 'color': cell_color,

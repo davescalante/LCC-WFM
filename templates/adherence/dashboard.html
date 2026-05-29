@@ -75,6 +75,9 @@
                 {% if cell.ot_time %}
                 <div style="font-size:10px;color:#7c3aed;font-weight:600;margin-bottom:2px;white-space:nowrap;">OT {{ cell.ot_time }}</div>
                 {% endif %}
+                {% if cell.spill_label %}
+                <div style="font-size:10px;color:#7c3aed;font-weight:600;margin-bottom:2px;white-space:nowrap;">↳ {{ cell.spill_label }}</div>
+                {% endif %}
                 {% if cell.sched_hrs %}
                 <div style="font-size:10px;color:#aaa;margin-bottom:3px;">{{ cell.sched_hrs|to_hhmm }}h sched</div>
                 {% endif %}
