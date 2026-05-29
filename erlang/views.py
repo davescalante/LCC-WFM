@@ -39,14 +39,16 @@ def _build_scheduled_map(week_start):
         role_type__in=('regular_agent', 'night_shift')
     ).values_list('agent_id', flat=True).distinct())
 
-    def _add_hours(scheduled, day_name, start_hour, end_hour):
-        hours = (
-            list(range(start_hour, 24)) + list(range(0, end_hour))
-            if end_hour <= start_hour
-            else list(range(start_hour, end_hour))
-        )
-        for h in hours:
-            scheduled[(day_name, h)] = scheduled.get((day_name, h), 0) + 1
+    def _add_hours(scheduled, day_name, start_hour, end_hour, next_day_name=None):
+        if end_hour <= start_hour:  # overnight — split at midnight
+            for h in range(start_hour, 24):
+                scheduled[(day_name, h)] = scheduled.get((day_name, h), 0) + 1
+            nd = next_day_name or day_name
+            for h in range(0, end_hour):
+                scheduled[(nd, h)] = scheduled.get((nd, h), 0) + 1
+        else:
+            for h in range(start_hour, end_hour):
+                scheduled[(day_name, h)] = scheduled.get((day_name, h), 0) + 1
 
     scheduled = {}
 
@@ -60,7 +62,8 @@ def _build_scheduled_map(week_start):
     agents_with_shift_override = set()
     for s in shifts:
         agents_with_shift_override.add((s['agent_id'], s['date']))
-        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour)
+        next_day = (s['date'] + timedelta(days=1)).strftime('%A')
+        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour, next_day)
 
     # Recurring templates — only for days not covered by a specific Shift record
     templates = ShiftTemplate.objects.filter(
@@ -72,7 +75,8 @@ def _build_scheduled_map(week_start):
         for day_date in week_dates:
             if day_date.weekday() == t['day_of_week']:
                 if (t['agent_id'], day_date) not in agents_with_shift_override:
-                    _add_hours(scheduled, day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour)
+                    next_day = (day_date + timedelta(days=1)).strftime('%A')
+                    _add_hours(scheduled, day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour, next_day)
 
     # OT shifts count all users regardless of role — used to fill staffing gaps
     ot_shifts = OvertimeShift.objects.filter(
@@ -80,7 +84,8 @@ def _build_scheduled_map(week_start):
     ).values('date', 'start_time', 'end_time')
 
     for s in ot_shifts:
-        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour)
+        next_day = (s['date'] + timedelta(days=1)).strftime('%A')
+        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour, next_day)
 
     return scheduled
 
