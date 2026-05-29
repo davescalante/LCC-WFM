@@ -74,10 +74,9 @@ def _build_scheduled_map(week_start):
                 if (t['agent_id'], day_date) not in agents_with_shift_override:
                     _add_hours(scheduled, day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour)
 
-    # OT shifts for call agents
+    # OT shifts count all users regardless of role — used to fill staffing gaps
     ot_shifts = OvertimeShift.objects.filter(
         date__in=week_dates,
-        agent_id__in=call_agent_ids,
     ).values('date', 'start_time', 'end_time')
 
     for s in ot_shifts:
