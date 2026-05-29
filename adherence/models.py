@@ -105,6 +105,22 @@ class DailyAgentHours(models.Model):
         return f"{self.five9_username} — {self.upload.date}"
 
 
+class AdherenceNote(models.Model):
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='adherence_notes')
+    date = models.DateField()
+    author = models.ForeignKey(
+        'auth.User', on_delete=models.SET_NULL, null=True, related_name='adherence_notes_authored'
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.agent} — {self.date}"
+
+
 class PayrollAdjustment(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='payroll_adjustments')
     week_start = models.DateField()

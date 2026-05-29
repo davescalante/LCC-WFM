@@ -91,6 +91,15 @@
                 {% if cell.missing_hrs %}
                 <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:2px;">−{{ cell.missing_hrs|to_hhmmss }} short</div>
                 {% endif %}
+                <button class="note-btn"
+                    data-agent="{{ row.agent.pk }}"
+                    data-agent-name="{{ row.agent }}"
+                    data-date="{{ cell.date|date:'Y-m-d' }}"
+                    onclick="openNotes(this)"
+                    title="{% if cell.note_count %}{{ cell.note_count }} note{% if cell.note_count != 1 %}s{% endif %}{% else %}Add note{% endif %}"
+                    style="color:{% if cell.note_count %}#2563eb{% else %}#d1d5db{% endif %};">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>{% if cell.note_count %}<span class="note-count-badge">{% if cell.note_count > 9 %}9+{% else %}{{ cell.note_count }}{% endif %}</span>{% endif %}
+                </button>
             </td>
             {% endfor %}
 
@@ -140,6 +149,58 @@
         Bonus = all scheduled days coded P / OT / MUT / VTO / P+VTO
     </div>
 </div>
+
+<!-- Note popover (single shared, repositioned by JS) -->
+<div id="note-popover" style="display:none;position:fixed;z-index:10000;width:340px;max-width:calc(100vw - 20px);background:white;border:1px solid #ddd;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);flex-direction:column;overflow:hidden;">
+    <div style="padding:10px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:flex-start;background:#f8f9fa;">
+        <div>
+            <div id="np-agent" style="font-size:13px;font-weight:700;color:#1a3a5c;"></div>
+            <div id="np-date" style="font-size:11px;color:#888;margin-top:1px;"></div>
+        </div>
+        <button onclick="closeNotes()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa;line-height:1;padding:0 2px;margin-top:-2px;">&times;</button>
+    </div>
+    <div id="np-list" style="overflow-y:auto;max-height:240px;padding:10px 14px;display:flex;flex-direction:column;gap:8px;min-height:60px;"></div>
+    <div style="padding:10px 14px;border-top:1px solid #eee;background:#fafafa;">
+        <textarea id="np-body" rows="3" placeholder="Type a note or paste login timestamp…"
+            style="width:100%;font-size:13px;padding:7px 9px;border:1px solid #ddd;border-radius:5px;resize:none;box-sizing:border-box;font-family:inherit;"
+            onkeydown="if(event.ctrlKey&&event.key==='Enter'){submitNote();event.preventDefault();}"></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+            <span style="font-size:10px;color:#bbb;">Ctrl+Enter to send</span>
+            <button id="np-submit" onclick="submitNote()" style="padding:6px 16px;background:#1a3a5c;color:white;border:none;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;">Add Note</button>
+        </div>
+    </div>
+</div>
+
+<style>
+.note-btn {
+    position: relative;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 3px;
+    line-height: 1;
+    display: inline-block;
+    vertical-align: middle;
+    margin-top: 3px;
+    transition: color 0.15s;
+}
+.note-btn:hover { color: #1d4ed8 !important; }
+.note-count-badge {
+    position: absolute;
+    top: -3px;
+    right: -4px;
+    background: #ef4444;
+    color: white;
+    border-radius: 10px;
+    font-size: 8px;
+    padding: 0 3px;
+    min-width: 13px;
+    text-align: center;
+    line-height: 13px;
+    font-weight: 700;
+    pointer-events: none;
+}
+</style>
 
 <script>
 const STATUS_COLORS = {
@@ -192,6 +253,123 @@ function onStatusChange(sel) {
     td.style.background = STATUS_COLORS[sel.value] || '#fff';
     saveCell(td.dataset.agent, td.dataset.date, sel.value);
 }
+
+// ── Note popover ─────────────────────────────────────────────────────────────
+let _noteBtn = null, _noteAgent = null, _noteDate = null;
+
+function openNotes(btn) {
+    const pop = document.getElementById('note-popover');
+    if (_noteBtn === btn && pop.style.display !== 'none') { closeNotes(); return; }
+    _noteBtn = btn;
+    _noteAgent = btn.dataset.agent;
+    _noteDate = btn.dataset.date;
+
+    document.getElementById('np-agent').textContent = btn.dataset.agentName || '';
+    document.getElementById('np-date').textContent = _noteDate;
+    document.getElementById('np-list').innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:14px 0;">Loading…</div>';
+    document.getElementById('np-body').value = '';
+
+    pop.style.display = 'flex';
+    const rect = btn.getBoundingClientRect();
+    const pw = 340, ph = 420, vw = window.innerWidth, vh = window.innerHeight;
+    let left = rect.left, top = rect.bottom + 6;
+    if (left + pw > vw - 10) left = Math.max(10, vw - pw - 10);
+    if (top + ph > vh)       top = Math.max(10, rect.top - ph - 6);
+    pop.style.left = left + 'px';
+    pop.style.top  = top  + 'px';
+
+    fetch(`/adherence/notes/?agent=${_noteAgent}&date=${_noteDate}`)
+        .then(r => r.json())
+        .then(d => _renderNotes(d.notes || []))
+        .catch(() => { document.getElementById('np-list').innerHTML = '<div style="color:#c00;font-size:12px;text-align:center;">Failed to load notes.</div>'; });
+}
+
+function closeNotes() {
+    document.getElementById('note-popover').style.display = 'none';
+    _noteBtn = null;
+}
+
+function _renderNotes(notes) {
+    const list = document.getElementById('np-list');
+    if (!notes.length) {
+        list.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:16px 0;">No notes yet.<br>Add the first one below.</div>';
+        return;
+    }
+    list.innerHTML = notes.map(n => `
+        <div style="background:#f0f4f8;border-radius:7px;padding:8px 11px;">
+            <div style="font-size:11px;color:#888;margin-bottom:3px;">
+                <strong style="color:#1a3a5c;">${_esc(n.author)}</strong>
+                <span style="margin-left:6px;">${_esc(n.created_at)}</span>
+            </div>
+            <div style="font-size:13px;color:#222;white-space:pre-wrap;word-break:break-word;line-height:1.45;">${_esc(n.body)}</div>
+        </div>
+    `).join('');
+    list.scrollTop = list.scrollHeight;
+}
+
+async function submitNote() {
+    const body = document.getElementById('np-body').value.trim();
+    if (!body) return;
+    const btn = document.getElementById('np-submit');
+    btn.disabled = true; btn.textContent = 'Saving…';
+
+    try {
+        const fd = new FormData();
+        fd.append('agent', _noteAgent);
+        fd.append('date', _noteDate);
+        fd.append('body', body);
+        fd.append('csrfmiddlewaretoken', csrfToken());
+
+        const resp = await fetch('/adherence/notes/', {method:'POST', body:fd});
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+
+        document.getElementById('np-body').value = '';
+
+        const list = document.getElementById('np-list');
+        if (list.textContent.includes('No notes yet')) list.innerHTML = '';
+        const el = document.createElement('div');
+        el.style.cssText = 'background:#f0f4f8;border-radius:7px;padding:8px 11px;';
+        el.innerHTML = `
+            <div style="font-size:11px;color:#888;margin-bottom:3px;">
+                <strong style="color:#1a3a5c;">${_esc(data.author)}</strong>
+                <span style="margin-left:6px;">${_esc(data.created_at)}</span>
+            </div>
+            <div style="font-size:13px;color:#222;white-space:pre-wrap;word-break:break-word;line-height:1.45;">${_esc(data.body)}</div>
+        `;
+        list.appendChild(el);
+        list.scrollTop = list.scrollHeight;
+
+        // Update icon
+        if (_noteBtn) {
+            _noteBtn.style.color = '#2563eb';
+            let badge = _noteBtn.querySelector('.note-count-badge');
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'note-count-badge';
+                _noteBtn.appendChild(badge);
+            }
+            badge.textContent = data.new_count > 9 ? '9+' : data.new_count;
+        }
+    } catch(e) {
+        alert('Failed to save note. Please try again.');
+    } finally {
+        btn.disabled = false; btn.textContent = 'Add Note';
+    }
+}
+
+function _esc(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('mousedown', function(e) {
+    const pop = document.getElementById('note-popover');
+    if (pop.style.display === 'none') return;
+    if (!pop.contains(e.target) && !e.target.closest('.note-btn')) closeNotes();
+});
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeNotes(); });
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function saveCommission(agentId, weekStart, inp) {
     pendingSaves++;

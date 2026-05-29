@@ -4,7 +4,7 @@ import csv
 import io
 import json
 
-from django.db.models import Q
+from django.db.models import Q, Count as DbCount
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
@@ -14,7 +14,7 @@ from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
 from scheduling.models import Shift, ShiftTemplate, Agent, Five9Profile, OvertimeShift, log_action
-from .models import AdherenceRecord, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
+from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
 BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
@@ -484,8 +484,16 @@ def adherence_week(request):
         pa.agent_id: pa.commission_deduction
         for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
     }
+    note_count_map = {
+        (n['agent_id'], n['date']): n['count']
+        for n in AdherenceNote.objects.filter(
+            agent__in=agents, date__in=week_dates
+        ).values('agent_id', 'date').annotate(count=DbCount('pk'))
+    }
     for row in rows:
         row['commission_deduction'] = adj_map.get(row['agent'].pk, Decimal('0'))
+        for cell in row['cells']:
+            cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
     return render(request, 'adherence/dashboard.html', {
         'rows': rows,
@@ -904,6 +912,58 @@ def delete_daily_upload_ajax(request):
     except (ValueError, TypeError):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
     return JsonResponse({'ok': True})
+
+
+@login_required
+def adherence_notes(request):
+    """GET: list notes for agent+date. POST: add a new note."""
+    agent_id = request.GET.get('agent') or request.POST.get('agent')
+    date_str = request.GET.get('date') or request.POST.get('date')
+
+    try:
+        date_val = date.fromisoformat(date_str) if date_str else None
+        if not date_val:
+            raise ValueError
+    except (TypeError, ValueError):
+        return JsonResponse({'error': 'Invalid date'}, status=400)
+
+    if not agent_id:
+        return JsonResponse({'error': 'Missing agent'}, status=400)
+
+    if request.method == 'POST':
+        body = (request.POST.get('body') or '').strip()
+        if not body:
+            return JsonResponse({'error': 'Empty note'}, status=400)
+        note = AdherenceNote.objects.create(
+            agent_id=agent_id,
+            date=date_val,
+            author=request.user,
+            body=body,
+        )
+        new_count = AdherenceNote.objects.filter(agent_id=agent_id, date=date_val).count()
+        return JsonResponse({
+            'ok': True,
+            'id': note.pk,
+            'author': request.user.get_full_name() or request.user.username,
+            'body': note.body,
+            'created_at': note.created_at.strftime('%b %d %I:%M %p'),
+            'new_count': new_count,
+        })
+
+    notes = AdherenceNote.objects.filter(
+        agent_id=agent_id, date=date_val
+    ).select_related('author')
+    return JsonResponse({
+        'notes': [
+            {
+                'id': n.pk,
+                'author': (n.author.get_full_name() or n.author.username) if n.author else 'Unknown',
+                'body': n.body,
+                'created_at': n.created_at.strftime('%b %d %I:%M %p'),
+            }
+            for n in notes
+        ]
+    })
 
 
 @login_required
