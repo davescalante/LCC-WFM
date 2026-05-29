@@ -411,6 +411,7 @@ def shift_week(request):
                 yield i, day_date, is_off, start, end, notes
 
         if edit_type == 'permanent':
+            partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
                     ShiftTemplate.objects.update_or_create(
@@ -422,10 +423,15 @@ def shift_week(request):
                             'notes': notes,
                         }
                     )
+                elif (start and not end) or (end and not start):
+                    partial_days.append(DAYS[i])
+            if partial_days:
+                messages.warning(request, f"⚠ {', '.join(partial_days)} not saved — both a start and end time are required. Please re-enter those days.")
             log_action(request.user, 'Saved recurring schedule', f'Permanent schedule for {agent} week of {week_start}', agent=agent)
             messages.success(request, f"Recurring schedule saved for {agent}. This schedule will appear every week.")
 
         elif edit_type == 'one_time':
+            partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
                     Shift.objects.update_or_create(
@@ -437,6 +443,10 @@ def shift_week(request):
                             'notes': notes,
                         }
                     )
+                elif (start and not end) or (end and not start):
+                    partial_days.append(DAYS[i])
+            if partial_days:
+                messages.warning(request, f"⚠ {', '.join(partial_days)} not saved — both a start and end time are required. Please re-enter those days.")
             log_action(request.user, 'Saved one-time schedule', f'One-time schedule for {agent} week of {week_start}', agent=agent)
             messages.success(request, f"One-time schedule saved for week of {week_start.strftime('%B %d, %Y')} for {agent}.")
 

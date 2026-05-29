@@ -452,7 +452,8 @@ def adherence_week(request):
     agents = agents.filter(
         Q(shifts__date__in=week_dates) |
         Q(overtime_shifts__date__in=week_dates) |
-        Q(shift_templates__isnull=False)
+        Q(shift_templates__isnull=False) |
+        Q(adherence_records__date__in=week_dates)
     ).distinct()
 
     if request.method == 'POST':
