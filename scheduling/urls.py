@@ -16,7 +16,9 @@ urlpatterns = [
     path('shifts/<int:pk>/delete/', views.shift_delete, name='shift_delete'),
     path('overtime/', views.overtime_list, name='overtime_list'),
     path('overtime/week/', views.overtime_week, name='overtime_week'),
+    path('overtime/export/', views.overtime_export, name='overtime_export'),
     path('overtime/<int:pk>/delete/', views.overtime_delete, name='overtime_delete'),
+    path('overtime/<int:pk>/toggle-complete/', views.overtime_toggle_complete, name='overtime_toggle_complete'),
     path('activity/', views.activity_log, name='activity_log'),
     path('poll/', views.live_poll, name='live_poll'),
 ]

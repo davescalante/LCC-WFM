@@ -621,10 +621,18 @@ def overtime_list(request):
     rows = []
     for agent in agents:
         cells = []
+        week_offered = None
+        week_earned = None
         for day_date in week_dates:
             ot_shift = ot_map.get((agent.pk, day_date))
-            cells.append({'date': day_date, 'ot_shift': ot_shift})
-        rows.append({'agent': agent, 'cells': cells})
+            offered = ot_shift.incentive_offered() if ot_shift else None
+            earned = ot_shift.incentive_earned() if ot_shift else None
+            if offered is not None:
+                week_offered = (week_offered or 0) + float(offered)
+            if earned is not None:
+                week_earned = (week_earned or 0) + float(earned)
+            cells.append({'date': day_date, 'ot_shift': ot_shift, 'offered': offered, 'earned': earned})
+        rows.append({'agent': agent, 'cells': cells, 'week_offered': week_offered, 'week_earned': week_earned})
 
     return render(request, 'scheduling/overtime_list.html', {
         'rows': rows,
@@ -666,9 +674,22 @@ def overtime_week(request):
             ot_start = request.POST.get(f'day_{i}_start', '').strip()
             ot_end = request.POST.get(f'day_{i}_end', '').strip()
             ot_notes = request.POST.get(f'day_{i}_notes', '').strip()
+            ot_incentive_type = request.POST.get(f'day_{i}_incentive_type', 'none').strip()
+            ot_incentivized_hours = request.POST.get(f'day_{i}_incentivized_hours', '').strip()
+            ot_base_rate = request.POST.get(f'day_{i}_base_hourly_rate', '').strip()
             date_iso = day_date.isoformat()
 
             if ot_start and ot_end:
+                from decimal import Decimal, InvalidOperation
+                try:
+                    inc_hrs = Decimal(ot_incentivized_hours) if ot_incentivized_hours else None
+                except InvalidOperation:
+                    inc_hrs = None
+                try:
+                    base_rate = Decimal(ot_base_rate) if ot_base_rate else None
+                except InvalidOperation:
+                    base_rate = None
+
                 _, created = OvertimeShift.objects.update_or_create(
                     agent=agent,
                     date=day_date,
@@ -676,6 +697,9 @@ def overtime_week(request):
                         'start_time': ot_start,
                         'end_time': ot_end,
                         'notes': ot_notes,
+                        'incentive_type': ot_incentive_type if ot_incentive_type in ('none', 'time_and_a_half', 'power_hour') else 'none',
+                        'incentivized_hours': inc_hrs,
+                        'base_hourly_rate': base_rate,
                     }
                 )
                 verb = 'Added' if created else 'Updated'
@@ -692,7 +716,15 @@ def overtime_week(request):
 
     # GET: pre-fill from existing OT records for selected agent
     days = []
+    agent_hourly_rate = ''
     if selected_agent_id:
+        try:
+            selected_agent = Agent.objects.get(pk=selected_agent_id)
+            if selected_agent.hourly_rate:
+                agent_hourly_rate = str(selected_agent.hourly_rate)
+        except Agent.DoesNotExist:
+            selected_agent = None
+
         ot_map = {
             s.date: s
             for s in OvertimeShift.objects.filter(agent_id=selected_agent_id, date__in=week_dates)
@@ -707,6 +739,10 @@ def overtime_week(request):
                 'end': ot_shift.end_time.strftime('%H:%M') if ot_shift else '',
                 'notes': ot_shift.notes if ot_shift else '',
                 'has_ot': bool(ot_shift),
+                'incentive_type': ot_shift.incentive_type if ot_shift else 'none',
+                'incentivized_hours': str(ot_shift.incentivized_hours) if ot_shift and ot_shift.incentivized_hours is not None else '',
+                'base_hourly_rate': str(ot_shift.base_hourly_rate) if ot_shift and ot_shift.base_hourly_rate is not None else agent_hourly_rate,
+                'ot_pk': ot_shift.pk if ot_shift else None,
             })
 
     return render(request, 'scheduling/overtime_week.html', {
@@ -718,6 +754,7 @@ def overtime_week(request):
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'week_start_iso': week_start.isoformat(),
+        'agent_hourly_rate': agent_hourly_rate,
     })
 
 
@@ -733,6 +770,96 @@ def overtime_delete(request, pk):
         'object': ot_shift,
         'cancel_url': reverse('overtime_list'),
     })
+
+
+@login_required
+def overtime_export(request):
+    import csv
+    from django.http import HttpResponse
+
+    date_from_str = request.GET.get('date_from', '')
+    date_to_str = request.GET.get('date_to', '')
+    supervisor_id = request.GET.get('supervisor', '')
+
+    try:
+        date_from = date.fromisoformat(date_from_str)
+    except (ValueError, TypeError):
+        date_from = timezone.localdate() - timedelta(days=30)
+    try:
+        date_to = date.fromisoformat(date_to_str)
+    except (ValueError, TypeError):
+        date_to = timezone.localdate()
+
+    ot_qs = OvertimeShift.objects.filter(
+        date__range=[date_from, date_to]
+    ).select_related('agent__user', 'agent__supervisor__user').order_by('date', 'agent__user__last_name')
+
+    if supervisor_id:
+        try:
+            ot_qs = ot_qs.filter(agent__supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="ot_payroll_{date_from}_{date_to}.csv"'
+    writer = csv.writer(response)
+    writer.writerow([
+        'Agent Name', 'Employee ID', 'Employer', 'Supervisor',
+        'Week Start', 'Date', 'Day of Week',
+        'Start Time', 'End Time', 'Total Hours',
+        'Incentive Type', 'Incentivized Hours', 'Base Hourly Rate ($)',
+        'Base Pay ($)', 'Incentive Bonus ($)', 'Total Pay Offered ($)',
+        'Completed',
+    ])
+    for ot in ot_qs:
+        from decimal import Decimal
+        total_hrs = ot.total_shift_hours()
+        base_rate = ot.base_hourly_rate or Decimal('0')
+        inc_hrs = ot.incentivized_hours or Decimal('0')
+        if ot.incentive_type == 'time_and_a_half':
+            premium = Decimal('0.5')
+        elif ot.incentive_type == 'power_hour':
+            premium = Decimal('1.0')
+        else:
+            premium = Decimal('0')
+        base_pay = (total_hrs * base_rate).quantize(Decimal('0.01')) if base_rate else ''
+        incentive_bonus = (inc_hrs * base_rate * premium).quantize(Decimal('0.01')) if base_rate else ''
+        total_offered = ot.incentive_offered() or ''
+        week_start = ot.date - timedelta(days=ot.date.weekday())
+        writer.writerow([
+            str(ot.agent),
+            ot.agent.employee_id or '',
+            ot.agent.employer,
+            str(ot.agent.supervisor) if ot.agent.supervisor else '',
+            week_start.strftime('%Y-%m-%d'),
+            ot.date.strftime('%Y-%m-%d'),
+            ot.date.strftime('%A'),
+            ot.start_time.strftime('%H:%M'),
+            ot.end_time.strftime('%H:%M'),
+            str(total_hrs),
+            ot.get_incentive_type_display(),
+            str(inc_hrs) if ot.incentivized_hours is not None else '',
+            str(ot.base_hourly_rate) if ot.base_hourly_rate is not None else '',
+            str(base_pay),
+            str(incentive_bonus),
+            str(total_offered),
+            'Yes' if ot.is_completed else 'No',
+        ])
+    return response
+
+
+@login_required
+def overtime_toggle_complete(request, pk):
+    from django.http import JsonResponse
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    ot_shift = get_object_or_404(OvertimeShift, pk=pk)
+    ot_shift.is_completed = not ot_shift.is_completed
+    ot_shift.save(update_fields=['is_completed'])
+    log_action(request.user, 'Toggled OT completion',
+               f'{ot_shift.agent} on {ot_shift.date}: completed={ot_shift.is_completed}',
+               agent=ot_shift.agent)
+    return JsonResponse({'is_completed': ot_shift.is_completed, 'pk': pk})
 
 
 @login_required

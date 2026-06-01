@@ -58,6 +58,7 @@ class Agent(models.Model):
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_reports'
     )
+    hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     notes = models.TextField(blank=True)
 
     def __str__(self):
@@ -148,10 +149,19 @@ class Shift(models.Model):
 
 
 class OvertimeShift(models.Model):
+    INCENTIVE_CHOICES = [
+        ('none', 'No Incentive'),
+        ('time_and_a_half', 'Time & a Half (1.5x)'),
+        ('power_hour', 'Power Hour (2x)'),
+    ]
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='overtime_shifts')
     date = models.DateField()
     start_time = models.TimeField()
     end_time = models.TimeField()
+    incentive_type = models.CharField(max_length=20, choices=INCENTIVE_CHOICES, default='none')
+    incentivized_hours = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    base_hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    is_completed = models.BooleanField(default=False)
     notes = models.TextField(blank=True)
 
     class Meta:
@@ -160,6 +170,34 @@ class OvertimeShift(models.Model):
 
     def __str__(self):
         return f"{self.agent} — OT {self.date} {self.start_time}–{self.end_time}"
+
+    def total_shift_hours(self):
+        from decimal import Decimal
+        s, e = self.start_time, self.end_time
+        secs = (e.hour * 3600 + e.minute * 60 + e.second) - (s.hour * 3600 + s.minute * 60 + s.second)
+        if secs < 0:
+            secs += 86400
+        return Decimal(str(round(secs / 3600, 2)))
+
+    def incentive_offered(self):
+        from decimal import Decimal
+        rate = self.base_hourly_rate
+        if not rate:
+            return None
+        total_hrs = self.total_shift_hours()
+        inc_hrs = self.incentivized_hours or Decimal('0')
+        if self.incentive_type == 'time_and_a_half':
+            premium = Decimal('0.5')
+        elif self.incentive_type == 'power_hour':
+            premium = Decimal('1.0')
+        else:
+            premium = Decimal('0')
+        return (total_hrs * rate + inc_hrs * rate * premium).quantize(Decimal('0.01'))
+
+    def incentive_earned(self):
+        if not self.is_completed:
+            return None
+        return self.incentive_offered()
 
 
 class AuditLog(models.Model):

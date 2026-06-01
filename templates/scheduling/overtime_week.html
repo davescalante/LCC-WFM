@@ -39,7 +39,7 @@
 </div>
 
 {% if selected_agent_id %}
-<form method="post">
+<form method="post" id="ot-form">
     {% csrf_token %}
     <input type="hidden" name="agent" value="{{ selected_agent_id }}">
     <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
@@ -47,43 +47,77 @@
     <div class="card">
         <h2 style="margin-bottom:16px;">Week of {{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</h2>
 
-        <table style="table-layout:fixed;">
-            <thead>
-                <tr>
-                    <th style="width:120px;">Day</th>
-                    <th style="width:110px;">Date</th>
-                    <th>Start Time</th>
-                    <th>End Time</th>
-                    <th>Notes</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for day in days %}
-                <tr style="border-bottom:1px solid #f0f0f0;{% if day.has_ot %}background:#f0fdf4;{% endif %}">
-                    <td>
-                        <strong>{{ day.name }}</strong>
-                        {% if day.has_ot %}
-                        <span style="font-size:10px;color:#16a34a;display:block;font-weight:400;">OT scheduled</span>
-                        {% endif %}
-                    </td>
-                    <td style="color:#888;font-size:13px;">{{ day.date|date:"M d" }}</td>
-                    <td>
-                        <input type="time" name="day_{{ day.index }}_start"
-                            value="{{ day.start }}">
-                    </td>
-                    <td>
-                        <input type="time" name="day_{{ day.index }}_end"
-                            value="{{ day.end }}">
-                    </td>
-                    <td>
-                        <input type="text" name="day_{{ day.index }}_notes"
-                            value="{{ day.notes }}"
-                            placeholder="Optional">
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        {% for day in days %}
+        <div class="ot-day-block" id="day-block-{{ day.index }}" style="border:1px solid #e8e8e8;border-radius:8px;margin-bottom:12px;overflow:hidden;">
+            <!-- Main row -->
+            <div style="display:grid;grid-template-columns:120px 100px 130px 130px 1fr;gap:10px;align-items:end;padding:12px 14px;{% if day.has_ot %}background:#f0fdf4;{% else %}background:#fafafa;{% endif %}">
+                <div>
+                    <div style="font-weight:700;font-size:14px;color:#1a3a5c;">{{ day.name }}</div>
+                    <div style="font-size:12px;color:#888;">{{ day.date|date:"M d" }}</div>
+                    {% if day.has_ot %}
+                    <div style="font-size:10px;color:#16a34a;font-weight:600;margin-top:2px;">OT scheduled</div>
+                    {% endif %}
+                </div>
+                <div></div>
+                <div>
+                    <label style="font-size:11px;color:#888;margin-bottom:3px;">Start Time</label>
+                    <input type="time" name="day_{{ day.index }}_start" id="d{{ day.index }}_start"
+                        value="{{ day.start }}" onchange="onTimeChange({{ day.index }})">
+                </div>
+                <div>
+                    <label style="font-size:11px;color:#888;margin-bottom:3px;">End Time</label>
+                    <input type="time" name="day_{{ day.index }}_end" id="d{{ day.index }}_end"
+                        value="{{ day.end }}" onchange="onTimeChange({{ day.index }})">
+                </div>
+                <div>
+                    <label style="font-size:11px;color:#888;margin-bottom:3px;">Notes</label>
+                    <input type="text" name="day_{{ day.index }}_notes"
+                        value="{{ day.notes }}" placeholder="Optional">
+                </div>
+            </div>
+
+            <!-- Incentive section (shown only when times are filled) -->
+            <div id="incentive-{{ day.index }}" style="display:{% if day.has_ot %}block{% else %}none{% endif %};border-top:1px solid #e0f0e0;background:#f8fffe;padding:12px 14px;">
+                <input type="hidden" name="day_{{ day.index }}_incentive_type" id="inc_type_{{ day.index }}" value="{{ day.incentive_type }}">
+
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+                    <span style="font-size:12px;font-weight:600;color:#555;margin-right:4px;">Incentive:</span>
+                    <button type="button" class="inc-btn" id="btn_none_{{ day.index }}"
+                        onclick="setIncentive({{ day.index }}, 'none')"
+                        style="padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #ddd;">
+                        No Incentive
+                    </button>
+                    <button type="button" class="inc-btn" id="btn_half_{{ day.index }}"
+                        onclick="setIncentive({{ day.index }}, 'time_and_a_half')"
+                        style="padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #ddd;">
+                        1.5x Time &amp; a Half
+                    </button>
+                    <button type="button" class="inc-btn" id="btn_power_{{ day.index }}"
+                        onclick="setIncentive({{ day.index }}, 'power_hour')"
+                        style="padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #ddd;">
+                        2x Power Hour
+                    </button>
+                </div>
+
+                <!-- Details shown only when incentive is active -->
+                <div id="inc-details-{{ day.index }}" style="display:{% if day.incentive_type != 'none' %}flex{% else %}none{% endif %};gap:16px;align-items:end;flex-wrap:wrap;">
+                    <div>
+                        <label style="font-size:11px;color:#888;margin-bottom:3px;">Incentivized Hours</label>
+                        <input type="number" name="day_{{ day.index }}_incentivized_hours" id="inc_hrs_{{ day.index }}"
+                            value="{{ day.incentivized_hours }}" min="0" max="24" step="0.25" style="width:110px;"
+                            oninput="calcPay({{ day.index }})">
+                    </div>
+                    <div>
+                        <label style="font-size:11px;color:#888;margin-bottom:3px;">Base Hourly Rate ($)</label>
+                        <input type="number" name="day_{{ day.index }}_base_hourly_rate" id="inc_rate_{{ day.index }}"
+                            value="{{ day.base_hourly_rate|default:agent_hourly_rate }}" min="0" step="0.01" style="width:110px;"
+                            oninput="calcPay({{ day.index }})">
+                    </div>
+                    <div id="pay-preview-{{ day.index }}" style="font-size:13px;color:#1a5c2a;font-weight:600;padding-bottom:2px;"></div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
     </div>
 
     <div style="margin-top:16px;display:flex;gap:12px;align-items:center;">
@@ -100,9 +134,92 @@
 
 <style>
     label { display:block; font-size:13px; font-weight:600; margin-bottom:4px; color:#555; }
-    select, input[type="date"], input[type="time"], input[type="text"] {
+    select, input[type="date"], input[type="time"], input[type="text"], input[type="number"] {
         width:100%; padding:7px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;
     }
+    .inc-btn.active-none  { background:#e2e8f0; color:#334155; border-color:#94a3b8; font-weight:600; }
+    .inc-btn.active-half  { background:#fef9c3; color:#854d0e; border-color:#fbbf24; font-weight:600; }
+    .inc-btn.active-power { background:#ffedd5; color:#9a3412; border-color:#f97316; font-weight:600; }
 </style>
 
+<script>
+const AGENT_RATE = "{{ agent_hourly_rate }}";
+
+function onTimeChange(i) {
+    const s = document.getElementById('d'+i+'_start').value;
+    const e = document.getElementById('d'+i+'_end').value;
+    const section = document.getElementById('incentive-'+i);
+    if (s && e) {
+        section.style.display = 'block';
+        const dayBlock = document.getElementById('day-block-'+i);
+        dayBlock.querySelector('div').style.background = '#f0fdf4';
+        calcPay(i);
+    } else {
+        section.style.display = 'none';
+        const dayBlock = document.getElementById('day-block-'+i);
+        dayBlock.querySelector('div').style.background = '#fafafa';
+    }
+}
+
+function setIncentive(i, type) {
+    document.getElementById('inc_type_'+i).value = type;
+    const details = document.getElementById('inc-details-'+i);
+    details.style.display = (type !== 'none') ? 'flex' : 'none';
+
+    ['none','half','power'].forEach(k => {
+        const btn = document.getElementById('btn_'+k+'_'+i);
+        btn.className = 'inc-btn';
+    });
+    if (type === 'none') {
+        document.getElementById('btn_none_'+i).className = 'inc-btn active-none';
+    } else if (type === 'time_and_a_half') {
+        document.getElementById('btn_half_'+i).className = 'inc-btn active-half';
+    } else if (type === 'power_hour') {
+        document.getElementById('btn_power_'+i).className = 'inc-btn active-power';
+    }
+
+    if (type !== 'none') {
+        const rateEl = document.getElementById('inc_rate_'+i);
+        if (!rateEl.value && AGENT_RATE) rateEl.value = AGENT_RATE;
+        calcPay(i);
+    } else {
+        document.getElementById('pay-preview-'+i).textContent = '';
+    }
+}
+
+function calcPay(i) {
+    const type = document.getElementById('inc_type_'+i).value;
+    if (type === 'none') { document.getElementById('pay-preview-'+i).textContent = ''; return; }
+
+    const sEl = document.getElementById('d'+i+'_start');
+    const eEl = document.getElementById('d'+i+'_end');
+    const rateVal = parseFloat(document.getElementById('inc_rate_'+i).value) || 0;
+    const incHrs = parseFloat(document.getElementById('inc_hrs_'+i).value) || 0;
+
+    if (!sEl.value || !eEl.value || !rateVal) {
+        document.getElementById('pay-preview-'+i).textContent = '';
+        return;
+    }
+
+    // Total hours
+    const [sh, sm] = sEl.value.split(':').map(Number);
+    const [eh, em] = eEl.value.split(':').map(Number);
+    let totalSecs = (eh * 3600 + em * 60) - (sh * 3600 + sm * 60);
+    if (totalSecs < 0) totalSecs += 86400;
+    const totalHrs = totalSecs / 3600;
+
+    const premium = type === 'time_and_a_half' ? 0.5 : 1.0;
+    const offered = totalHrs * rateVal + incHrs * rateVal * premium;
+
+    document.getElementById('pay-preview-'+i).textContent =
+        `Est. offered: $${offered.toFixed(2)} (${totalHrs.toFixed(2)} hrs total)`;
+}
+
+// Initialize button states on page load
+document.addEventListener('DOMContentLoaded', function() {
+    {% for day in days %}
+    setIncentive({{ day.index }}, '{{ day.incentive_type }}');
+    {% endfor %}
+});
+</script>
 {% endblock %}
