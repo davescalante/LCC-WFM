@@ -654,11 +654,7 @@ def adherence_week(request):
         for cell in row['cells']:
             cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
-    # Cost of Schedule — only visible to non-supervisor/coordinator roles
-    try:
-        show_cos = request.user.agent.role_type not in ('supervisor', 'coordinator')
-    except Exception:
-        show_cos = True  # superusers without an agent profile always see it
+    show_cos = True  # visible to all logged-in users for now
 
     if show_cos:
         cos_days, cos_week = _calculate_cos(rows, week_dates)
