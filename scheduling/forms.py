@@ -43,6 +43,7 @@ class AgentForm(forms.ModelForm):
         model = Agent
         fields = [
             'agent_name', 'employee_id', 'role', 'role_type', 'status', 'supervisor',
+            'employer', 'billing_status', 'track_attendance',
             'phone_country_code', 'phone_number',
             'teams_password', 'notes',
         ]
@@ -55,6 +56,9 @@ class AgentForm(forms.ModelForm):
             'employee_id': 'Employee ID',
             'teams_password': 'Teams Password',
             'phone_number': 'Phone Number',
+            'employer': 'Employer',
+            'billing_status': 'Billing Status',
+            'track_attendance': 'Track Attendance',
         }
 
 

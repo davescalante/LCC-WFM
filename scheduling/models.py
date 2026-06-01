@@ -27,10 +27,21 @@ class Agent(models.Model):
         ('active', 'Active'),
         ('inactive', 'Inactive'),
     ]
+    EMPLOYER_CHOICES = [
+        ('LCC', 'LCC'),
+        ('Infinity', 'Infinity'),
+    ]
+    BILLING_STATUS_CHOICES = [
+        ('Billed', 'Billed'),
+        ('Not Billed', 'Not Billed'),
+    ]
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='agent')
     role_type = models.CharField(max_length=20, choices=ROLE_TYPE_CHOICES, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+    employer = models.CharField(max_length=20, choices=EMPLOYER_CHOICES, default='Infinity')
+    billing_status = models.CharField(max_length=20, choices=BILLING_STATUS_CHOICES, default='Not Billed')
+    track_attendance = models.BooleanField(default=False)
     agent_name = models.CharField(max_length=100, blank=True, help_text="Display/call center name")
     employee_id = models.CharField(max_length=50, blank=True, unique=True, null=True)
     start_date = models.DateField(null=True, blank=True)

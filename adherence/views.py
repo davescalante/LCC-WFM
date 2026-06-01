@@ -501,7 +501,7 @@ def adherence_week(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
+    agents = Agent.objects.filter(status='active', track_attendance=True).select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
@@ -652,7 +652,7 @@ def payroll_export(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
+    agents = Agent.objects.filter(status='active', track_attendance=True).select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
@@ -716,6 +716,7 @@ def payroll_export(request):
         writer = csv.writer(response)
         writer.writerow([
             'Legal Name', 'Agent Name', 'Employee ID', 'Five9 Username', 'Supervisor',
+            'Employer', 'Billing Status',
             'Scheduled Hours', 'Actual Login Hours', 'Coded Hours',
             'Adjusted Total Hours', 'Commission Deduction %', 'Adherence Bonus',
         ])
@@ -770,6 +771,8 @@ def payroll_export(request):
                 agent.employee_id or '',
                 agent.five9_profiles.values_list('five9_username', flat=True).first() or '',
                 supervisor_name,
+                agent.employer,
+                agent.billing_status,
                 _decimal_to_hhmmss(sched_total),
                 _decimal_to_hhmmss(actual_total),
                 _decimal_to_hhmmss(coded),
