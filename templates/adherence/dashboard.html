@@ -54,7 +54,7 @@
     </thead>
     <tbody>
         {% for row in rows %}
-        <tr style="border-bottom:1px solid #e8e8e8;">
+        <tr class="agent-row" style="border-bottom:1px solid #e8e8e8;">
             <td style="padding:8px 10px;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 <div style="font-size:13px;font-weight:600;line-height:1.3;">{{ row.agent }}</div>
                 {% for p in row.agent.five9_profiles.all %}<div style="font-size:11px;color:#888;margin-top:2px;">{{ p.five9_username }}{% if p.label %} · {{ p.label }}{% endif %}</div>{% endfor %}
@@ -65,6 +65,8 @@
             <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
                 data-agent="{{ row.agent.pk }}"
                 data-date="{{ cell.date|date:'Y-m-d' }}"
+                data-sched-hrs="{{ cell.sched_hrs|default:'0' }}"
+                data-actual-hrs="{{ cell.display_hrs|default:'0' }}"
                 style="padding:4px 3px;vertical-align:top;text-align:center;background:{{ cell.color }};">
                 {% if cell.scheduled %}
                 <div style="font-size:10px;color:#777;margin-bottom:2px;white-space:nowrap;">
@@ -133,6 +135,47 @@
         {% empty %}
         <tr><td colspan="18" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
         {% endfor %}
+
+        {% if show_cos %}
+        <tr style="background:#f0f4f8;border-top:2px solid #c8d4e0;">
+            <td style="padding:8px 10px;font-size:12px;font-weight:700;color:#1a3a5c;position:sticky;left:0;background:#f0f4f8;z-index:1;border-right:1px solid #eee;white-space:nowrap;">
+                Cost of Schedule
+            </td>
+            {% for day in cos_days %}
+            <td id="cos-day-{{ forloop.counter0 }}"
+                data-cos-absent="{{ day.absent_count }}"
+                data-cos-tardy-count="{{ day.tardy_count }}"
+                data-cos-tardy-hrs="{{ day.tardy_loss }}"
+                data-cos-offset="{{ day.ot_offset }}"
+                data-cos-loss="{{ day.net_loss }}"
+                data-cos-sched="{{ day.sched_hours }}"
+                style="padding:8px 6px;text-align:center;cursor:help;"
+                onmouseenter="showCosTooltip(event,this)" onmouseleave="hideCosTooltip()">
+                {% if day.has_data %}
+                <span class="cos-pct" style="font-size:12px;font-weight:700;color:{{ day.cos_color }};">{{ day.cos_pct }}%</span>
+                {% else %}
+                <span class="cos-pct" style="font-size:12px;color:#aaa;">—</span>
+                {% endif %}
+            </td>
+            {% endfor %}
+            <td id="cos-week" colspan="10"
+                data-cos-absent="{{ cos_week.absent_count }}"
+                data-cos-tardy-count="{{ cos_week.tardy_count }}"
+                data-cos-tardy-hrs="{{ cos_week.tardy_loss }}"
+                data-cos-offset="{{ cos_week.ot_offset }}"
+                data-cos-loss="{{ cos_week.net_loss }}"
+                data-cos-sched="{{ cos_week.sched_hours }}"
+                style="padding:8px 6px;text-align:center;border-left:2px solid #ddd;cursor:help;"
+                onmouseenter="showCosTooltip(event,this)" onmouseleave="hideCosTooltip()">
+                <span style="font-size:11px;color:#888;margin-right:4px;">Week avg</span>
+                {% if cos_week.has_data %}
+                <span class="cos-pct" style="font-size:12px;font-weight:700;color:{{ cos_week.cos_color }};">{{ cos_week.cos_pct }}%</span>
+                {% else %}
+                <span class="cos-pct" style="font-size:12px;color:#aaa;">—</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endif %}
     </tbody>
 </table>
 </div>
@@ -152,6 +195,9 @@
         Bonus = all scheduled days coded P / OT / MUT / VTO / P+VTO
     </div>
 </div>
+
+<!-- Cost of Schedule tooltip -->
+<div id="cos-tooltip" style="display:none;position:fixed;z-index:9500;background:#1a3a5c;color:white;padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;max-width:240px;"></div>
 
 <!-- Note popover (single shared, repositioned by JS) -->
 <div id="note-popover" style="display:none;position:fixed;z-index:10000;width:340px;max-width:calc(100vw - 20px);background:white;border:1px solid #ddd;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);flex-direction:column;overflow:hidden;">
@@ -255,6 +301,7 @@ function onStatusChange(sel) {
     const td = sel.closest('td');
     td.style.background = STATUS_COLORS[sel.value] || '#fff';
     saveCell(td.dataset.agent, td.dataset.date, sel.value);
+    recomputeCoS();
 }
 
 // ── Note popover ─────────────────────────────────────────────────────────────
@@ -437,6 +484,105 @@ document.addEventListener('mousedown', function(e) {
     if (!pop.contains(e.target) && !e.target.closest('.note-btn')) closeNotes();
 });
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeNotes(); });
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Cost of Schedule ──────────────────────────────────────────────────────────
+const _COS_INCLUDE = new Set(['P', 'Absent', 'NCNS', 'IMSS', 'T', 'OT', 'MUT']);
+const _COS_DATES = [{% for d in week_dates %}'{{ d|date:"Y-m-d" }}'{% if not forloop.last %},{% endif %}{% endfor %}];
+const _DEFAULT_TARDY = 0.25;
+
+function cosColor(pct) {
+    if (pct === null || isNaN(pct)) return '#aaa';
+    if (pct === 0) return '#22c55e';
+    if (pct <= 10) return '#4ade80';
+    if (pct <= 20) return '#d97706';
+    if (pct <= 35) return '#ea580c';
+    return '#dc2626';
+}
+
+function recomputeCoS() {
+    if (!document.getElementById('cos-day-0')) return;
+    const agentRows = document.querySelectorAll('tbody tr.agent-row');
+    let weekSched = 0, weekLoss = 0;
+    let weekAbsent = 0, weekTardyCount = 0, weekTardyHrs = 0, weekOffset = 0;
+
+    _COS_DATES.forEach((dateStr, idx) => {
+        let sched = 0, rawLoss = 0, offset = 0;
+        let absent = 0, tardyCount = 0, tardyHrs = 0;
+
+        agentRows.forEach(tr => {
+            const td = tr.querySelector(`td[data-date="${dateStr}"]`);
+            if (!td) return;
+            const schedHrs = parseFloat(td.dataset.schedHrs) || 0;
+            const actualHrs = parseFloat(td.dataset.actualHrs) || 0;
+            const sel = td.querySelector('select');
+            const status = sel ? sel.value : '';
+            if (!_COS_INCLUDE.has(status)) return;
+            sched += schedHrs;
+            if (['Absent', 'NCNS', 'IMSS'].includes(status)) {
+                rawLoss += schedHrs; absent++;
+            } else if (status === 'T') {
+                const lost = actualHrs > 0 ? Math.max(0, schedHrs - actualHrs) : _DEFAULT_TARDY;
+                rawLoss += lost; tardyHrs += lost; tardyCount++;
+            } else if (['OT', 'MUT'].includes(status)) {
+                if (actualHrs > schedHrs) offset += actualHrs - schedHrs;
+            }
+        });
+
+        const netLoss = Math.max(0, rawLoss - offset);
+        const pct = sched > 0 ? netLoss / sched * 100 : null;
+        weekSched += sched; weekLoss += netLoss;
+        weekAbsent += absent; weekTardyCount += tardyCount;
+        weekTardyHrs += tardyHrs; weekOffset += offset;
+
+        const cosCell = document.getElementById(`cos-day-${idx}`);
+        if (!cosCell) return;
+        const span = cosCell.querySelector('.cos-pct');
+        if (span) { span.textContent = pct !== null ? pct.toFixed(1) + '%' : '—'; span.style.color = cosColor(pct); }
+        Object.assign(cosCell.dataset, {
+            cosAbsent: absent, cosTardyCount: tardyCount,
+            cosTardyHrs: tardyHrs.toFixed(2), cosOffset: offset.toFixed(2),
+            cosLoss: netLoss.toFixed(2), cosSched: sched.toFixed(2),
+        });
+    });
+
+    const weekPct = weekSched > 0 ? weekLoss / weekSched * 100 : null;
+    const weekCell = document.getElementById('cos-week');
+    if (weekCell) {
+        const span = weekCell.querySelector('.cos-pct');
+        if (span) { span.textContent = weekPct !== null ? weekPct.toFixed(1) + '%' : '—'; span.style.color = cosColor(weekPct); }
+        Object.assign(weekCell.dataset, {
+            cosAbsent: weekAbsent, cosTardyCount: weekTardyCount,
+            cosTardyHrs: weekTardyHrs.toFixed(2), cosOffset: weekOffset.toFixed(2),
+            cosLoss: weekLoss.toFixed(2), cosSched: weekSched.toFixed(2),
+        });
+    }
+}
+
+function showCosTooltip(e, td) {
+    const absent = parseInt(td.dataset.cosAbsent) || 0;
+    const tardyCount = parseInt(td.dataset.cosTardyCount) || 0;
+    const tardyHrs = parseFloat(td.dataset.cosTardyHrs) || 0;
+    const offset = parseFloat(td.dataset.cosOffset) || 0;
+    const loss = parseFloat(td.dataset.cosLoss) || 0;
+    const sched = parseFloat(td.dataset.cosSched) || 0;
+    const pctEl = td.querySelector('.cos-pct');
+    const pct = pctEl ? pctEl.textContent : '—';
+    let lines = [`<strong>Cost of Schedule: ${pct}</strong>`, `Scheduled: ${sched.toFixed(1)}h`];
+    if (absent > 0) lines.push(`Absent / NCNS / IMSS: ${absent} agent${absent !== 1 ? 's' : ''}`);
+    if (tardyCount > 0) lines.push(`Tardy: ${tardyCount} agent${tardyCount !== 1 ? 's' : ''} (${tardyHrs.toFixed(1)}h lost)`);
+    if (offset > 0) lines.push(`OT / MUT offset: −${offset.toFixed(1)}h`);
+    lines.push(`Net loss: ${loss.toFixed(1)}h`);
+    const tt = document.getElementById('cos-tooltip');
+    tt.innerHTML = lines.join('<br>');
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 12, window.innerWidth - 250) + 'px';
+    tt.style.top = Math.min(e.clientY - 10, window.innerHeight - 200) + 'px';
+}
+
+function hideCosTooltip() { document.getElementById('cos-tooltip').style.display = 'none'; }
+
+document.addEventListener('DOMContentLoaded', recomputeCoS);
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function saveCommission(agentId, weekStart, inp) {

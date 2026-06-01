@@ -116,6 +116,108 @@ def _hours_morning(shift):
     return Decimal('0')
 
 
+# ── Cost of Schedule ──────────────────────────────────────────────────────────
+
+COS_INCLUDE_STATUSES = frozenset({'P', 'Absent', 'NCNS', 'IMSS', 'T', 'OT', 'MUT'})
+_DEFAULT_TARDY = Decimal('0.25')  # 15-minute default if no actual hours logged
+
+
+def _cos_color(pct):
+    if pct is None:
+        return '#aaa'
+    if pct == 0:
+        return '#22c55e'
+    if pct <= 10:
+        return '#4ade80'
+    if pct <= 20:
+        return '#d97706'
+    if pct <= 35:
+        return '#ea580c'
+    return '#dc2626'
+
+
+def _calculate_cos(rows, week_dates):
+    """
+    Returns (day_data list, cos_week dict) for Cost of Schedule.
+    day_data has one entry per day with pct, breakdown, and color.
+    Week loss = sum of per-day capped losses (OT can only offset within its own day).
+    """
+    day_data = []
+    week_sched = Decimal('0')
+    week_net_loss = Decimal('0')
+    week_absent = 0
+    week_tardy_count = 0
+    week_tardy_loss = Decimal('0')
+    week_ot_offset = Decimal('0')
+
+    for i, day_date in enumerate(week_dates):
+        sched = Decimal('0')
+        raw_loss = Decimal('0')
+        ot_offset = Decimal('0')
+        absent_count = 0
+        tardy_count = 0
+        tardy_loss = Decimal('0')
+
+        for row in rows:
+            cell = row['cells'][i]
+            status = cell.get('status', '') or ''
+            if status not in COS_INCLUDE_STATUSES:
+                continue
+            sched_hrs = cell.get('sched_hrs') or Decimal('0')
+            actual_hrs = cell.get('display_hrs') or Decimal('0')
+
+            sched += sched_hrs
+
+            if status in ('Absent', 'NCNS', 'IMSS'):
+                raw_loss += sched_hrs
+                absent_count += 1
+            elif status == 'T':
+                lost = max(Decimal('0'), sched_hrs - actual_hrs) if actual_hrs > 0 else _DEFAULT_TARDY
+                raw_loss += lost
+                tardy_loss += lost
+                tardy_count += 1
+            elif status in ('OT', 'MUT'):
+                if actual_hrs > sched_hrs:
+                    ot_offset += actual_hrs - sched_hrs
+
+        net_loss = max(Decimal('0'), raw_loss - ot_offset)
+        cos_pct = float(net_loss / sched * 100) if sched > 0 else None
+
+        day_data.append({
+            'date': day_date,
+            'cos_pct': round(cos_pct, 1) if cos_pct is not None else None,
+            'cos_color': _cos_color(cos_pct),
+            'has_data': sched > 0,
+            'sched_hours': float(sched),
+            'net_loss': float(net_loss),
+            'absent_count': absent_count,
+            'tardy_count': tardy_count,
+            'tardy_loss': float(tardy_loss),
+            'ot_offset': float(ot_offset),
+        })
+
+        week_sched += sched
+        week_net_loss += net_loss
+        week_absent += absent_count
+        week_tardy_count += tardy_count
+        week_tardy_loss += tardy_loss
+        week_ot_offset += ot_offset
+
+    week_pct = float(week_net_loss / week_sched * 100) if week_sched > 0 else None
+    cos_week = {
+        'cos_pct': round(week_pct, 1) if week_pct is not None else None,
+        'cos_color': _cos_color(week_pct),
+        'has_data': week_sched > 0,
+        'sched_hours': float(week_sched),
+        'net_loss': float(week_net_loss),
+        'absent_count': week_absent,
+        'tardy_count': week_tardy_count,
+        'tardy_loss': float(week_tardy_loss),
+        'ot_offset': float(week_ot_offset),
+    }
+    return day_data, cos_week
+
+
 def _get_week_start(request):
     today = timezone.localdate()
     default = today - timedelta(days=today.weekday())
@@ -552,6 +654,17 @@ def adherence_week(request):
         for cell in row['cells']:
             cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
+    # Cost of Schedule — only visible to non-supervisor/coordinator roles
+    try:
+        show_cos = request.user.agent.role_type not in ('supervisor', 'coordinator')
+    except Exception:
+        show_cos = True  # superusers without an agent profile always see it
+
+    if show_cos:
+        cos_days, cos_week = _calculate_cos(rows, week_dates)
+    else:
+        cos_days, cos_week = [], {}
+
     return render(request, 'adherence/dashboard.html', {
         'rows': rows,
         'week_dates': week_dates,
@@ -562,6 +675,9 @@ def adherence_week(request):
         'status_choices': AdherenceRecord.STATUS_CHOICES,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'show_cos': show_cos,
+        'cos_days': cos_days,
+        'cos_week': cos_week,
     })
 
 
