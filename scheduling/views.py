@@ -301,6 +301,7 @@ def shift_list(request):
         'has_this_week': has_this_week,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'today': today,
     })
 
 
@@ -611,6 +612,11 @@ def shift_delete(request, pk):
     from django.http import JsonResponse
     shift = get_object_or_404(Shift, pk=pk)
     if request.method == 'POST':
+        if shift.date < date.today():
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return JsonResponse({'error': 'Cannot delete a past shift.'}, status=400)
+            messages.error(request, "Cannot delete a past shift — historical records are preserved.")
+            return redirect(f"{reverse('shift_list')}?week_start={(shift.date - timedelta(days=shift.date.weekday())).isoformat()}")
         week_start = shift.date - timedelta(days=shift.date.weekday())
         agent = shift.agent
         log_action(request.user, 'Deleted shift override',

@@ -110,10 +110,12 @@
                     {% endif %}
                     <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
                        style="font-size:10px;color:#d97706;display:block;margin-top:2px;">override</a>
+                    {% if cell.date >= today %}
                     <button class="shift-del-btn"
                         onclick="confirmDeleteShift({{ cell.shift.pk }}, '{{ row.agent|escapejs }}', '{{ cell.date|date:'D M d' }}')"
                         title="Delete this day's override"
                         style="display:none;position:absolute;top:-6px;right:-20px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;width:20px;height:20px;cursor:pointer;font-size:11px;line-height:1;padding:0;">🗑</button>
+                    {% endif %}
                 </div>
                 {% elif cell.template %}
                     {% if cell.template.is_off %}
@@ -258,7 +260,7 @@ function restoreCellAfterDelete(td) {
 function confirmClearRecurring(agentName, agentPk) {
     document.getElementById('sdm-title').textContent = 'Clear Recurring Schedule?';
     document.getElementById('sdm-desc').textContent =
-        `This will permanently remove ${agentName}'s recurring weekly schedule. One-time shift overrides are not affected.`;
+        `This removes ${agentName}'s recurring weekly schedule going forward. Past attendance and payroll records are not affected — only how future unscheduled weeks are displayed.`;
     document.getElementById('sdm-confirm').textContent = 'Clear Recurring';
     document.getElementById('sdm-confirm').onclick = () => executeClearRecurring(agentPk, agentName);
     document.getElementById('shift-delete-modal').style.display = 'flex';
