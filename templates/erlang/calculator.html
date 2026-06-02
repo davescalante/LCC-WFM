@@ -150,8 +150,12 @@
                             id="staffing-{{ day.name }}-{{ row.hour }}"
                             data-required="{{ row.agents_shrinkage }}"
                             data-day="{{ day.name }}"
+                            data-hour="{{ row.hour }}"
+                            data-hour-label="{{ row.hour_label }}"
                             data-value="{{ row.scheduled_staff }}"
-                            style="display:inline-block;width:40px;font-size:14px;font-weight:700;color:#1a3a5c;">
+                            onclick="openStaffPopover(this)"
+                            style="display:inline-block;min-width:40px;font-size:14px;font-weight:700;color:#1a3a5c;cursor:{% if row.scheduled_staff %}pointer{% else %}default{% endif %};"
+                            title="{% if row.scheduled_staff %}Click to see who's scheduled{% endif %}">
                             {{ row.scheduled_staff }}
                         </span>
                     </td>
@@ -378,6 +382,93 @@ function submitDownload() {
     });
 })();
 {% endif %}
+</script>
+
+<!-- Scheduled-agents popover -->
+<div id="staff-popover"
+     style="display:none;position:fixed;z-index:9000;background:white;border:1px solid #e2e8f0;
+            border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.14);width:280px;
+            max-height:360px;overflow:hidden;flex-direction:column;">
+    <div style="padding:12px 16px;border-bottom:1px solid #f0f4f8;background:#f8fafc;">
+        <div id="sp-title" style="font-size:13px;font-weight:700;color:#1a3a5c;"></div>
+        <div id="sp-count" style="font-size:11px;color:#94a3b8;margin-top:2px;"></div>
+    </div>
+    <div id="sp-list" style="overflow-y:auto;max-height:280px;padding:8px 0;"></div>
+</div>
+
+<style>
+.staffing-display:hover { text-decoration: underline dotted #1a3a5c; }
+</style>
+
+<script>
+const SCHEDULED_AGENTS = {{ agents_map_json|safe }};
+
+function openStaffPopover(el) {
+    const day = el.dataset.day;
+    const hour = el.dataset.hour;
+    const label = el.dataset.hourLabel;
+    const key = day + ':' + hour;
+    const entries = SCHEDULED_AGENTS[key] || [];
+
+    const pop = document.getElementById('staff-popover');
+    if (pop.style.display === 'flex' && pop._sourceEl === el) {
+        closeStaffPopover();
+        return;
+    }
+    pop._sourceEl = el;
+
+    document.getElementById('sp-title').textContent = day + ' · ' + label;
+    document.getElementById('sp-count').textContent =
+        entries.length === 0 ? 'No agents scheduled'
+        : entries.length === 1 ? '1 agent scheduled'
+        : entries.length + ' agents scheduled';
+
+    const list = document.getElementById('sp-list');
+    list.innerHTML = '';
+    if (entries.length === 0) {
+        list.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8;font-size:13px;">—</div>';
+    } else {
+        entries.forEach(e => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 16px;gap:8px;';
+            row.innerHTML = `
+                <span style="font-size:13px;color:#1e293b;font-weight:${e.ot ? '400' : '500'};flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                      title="${e.name}">${e.name}</span>
+                <span style="font-size:11px;color:#64748b;white-space:nowrap;flex-shrink:0;">${e.time}</span>
+                ${e.ot ? '<span style="font-size:9px;font-weight:700;background:#ede9fe;color:#6d28d9;padding:1px 5px;border-radius:3px;flex-shrink:0;">OT</span>' : ''}
+            `;
+            list.appendChild(row);
+        });
+    }
+
+    // Position below the clicked element
+    pop.style.display = 'flex';
+    const rect = el.getBoundingClientRect();
+    const popW = 280, popH = Math.min(360, 80 + entries.length * 36);
+    let left = rect.left + rect.width / 2 - popW / 2;
+    let top = rect.bottom + 8;
+    // Keep on screen
+    if (left + popW > window.innerWidth - 12) left = window.innerWidth - popW - 12;
+    if (left < 8) left = 8;
+    if (top + popH > window.innerHeight - 12) top = rect.top - popH - 8;
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+}
+
+function closeStaffPopover() {
+    const pop = document.getElementById('staff-popover');
+    pop.style.display = 'none';
+    pop._sourceEl = null;
+}
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('#staff-popover') && !e.target.classList.contains('staffing-display')) {
+        closeStaffPopover();
+    }
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeStaffPopover();
+});
 </script>
 
 {% endblock %}

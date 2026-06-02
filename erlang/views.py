@@ -13,7 +13,7 @@ from .calculator import (
     parse_aht, calculate_staffing, format_aht,
 )
 from .models import ErlangReport, ErlangActualStaff, ErlangCallRow
-from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift
+from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift, Agent
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -31,63 +31,79 @@ def _get_week_start(request):
 
 
 def _build_scheduled_map(week_start):
-    """Count regular/nightshift agents covering each (day_name, hour) for the given week."""
+    """Count agents covering each (day_name, hour); also return which agents and their shift times."""
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
-    # Only count agents who have a Five9 profile with a regular-call role type
     call_agent_ids = set(Five9Profile.objects.filter(
         role_type__in=('regular_agent', 'night_shift')
     ).values_list('agent_id', flat=True).distinct())
 
-    def _add_hours(scheduled, day_name, start_hour, end_hour, next_day_name=None):
+    # Pre-fetch agent display names for lookups below
+    agent_names = {
+        a.pk: str(a)
+        for a in Agent.objects.select_related('user').filter(status='active')
+    }
+
+    scheduled = {}    # {(day_name, hour): int}
+    agents_map = {}   # {(day_name, hour): [{'name': str, 'time': str, 'ot': bool}]}
+
+    def _add(day_name, h, entry):
+        key = (day_name, h)
+        scheduled[key] = scheduled.get(key, 0) + 1
+        agents_map.setdefault(key, []).append(entry)
+
+    def _add_hours(day_name, start_hour, end_hour, entry, next_day_name=None):
         if end_hour <= start_hour:  # overnight — split at midnight
             for h in range(start_hour, 24):
-                scheduled[(day_name, h)] = scheduled.get((day_name, h), 0) + 1
+                _add(day_name, h, entry)
             nd = next_day_name or day_name
             for h in range(0, end_hour):
-                scheduled[(nd, h)] = scheduled.get((nd, h), 0) + 1
+                _add(nd, h, entry)
         else:
             for h in range(start_hour, end_hour):
-                scheduled[(day_name, h)] = scheduled.get((day_name, h), 0) + 1
-
-    scheduled = {}
+                _add(day_name, h, entry)
 
     # Specific shift overrides for this week
     shifts = Shift.objects.filter(
-        date__in=week_dates,
-        is_off=False,
-        agent_id__in=call_agent_ids,
+        date__in=week_dates, is_off=False, agent_id__in=call_agent_ids,
     ).values('agent_id', 'date', 'start_time', 'end_time')
 
     agents_with_shift_override = set()
     for s in shifts:
         agents_with_shift_override.add((s['agent_id'], s['date']))
+        name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
+        label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         next_day = (s['date'] + timedelta(days=1)).strftime('%A')
-        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour, next_day)
+        _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
+                   {'name': name, 'time': label, 'ot': False}, next_day)
 
-    # Recurring templates — only for days not covered by a specific Shift record
+    # Recurring templates — only for days not covered by a specific Shift
     templates = ShiftTemplate.objects.filter(
-        agent_id__in=call_agent_ids,
-        is_off=False,
+        agent_id__in=call_agent_ids, is_off=False,
     ).values('agent_id', 'day_of_week', 'start_time', 'end_time')
 
     for t in templates:
         for day_date in week_dates:
             if day_date.weekday() == t['day_of_week']:
                 if (t['agent_id'], day_date) not in agents_with_shift_override:
+                    name = agent_names.get(t['agent_id'], f"Agent {t['agent_id']}")
+                    label = f"{t['start_time'].strftime('%H:%M')}–{t['end_time'].strftime('%H:%M')}"
                     next_day = (day_date + timedelta(days=1)).strftime('%A')
-                    _add_hours(scheduled, day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour, next_day)
+                    _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
+                               {'name': name, 'time': label, 'ot': False}, next_day)
 
-    # OT shifts count all users regardless of role — used to fill staffing gaps
-    ot_shifts = OvertimeShift.objects.filter(
-        date__in=week_dates,
-    ).values('date', 'start_time', 'end_time')
-
+    # OT shifts — all agents regardless of role
+    ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).values(
+        'agent_id', 'date', 'start_time', 'end_time'
+    )
     for s in ot_shifts:
+        name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
+        label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         next_day = (s['date'] + timedelta(days=1)).strftime('%A')
-        _add_hours(scheduled, s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour, next_day)
+        _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
+                   {'name': name, 'time': label, 'ot': True}, next_day)
 
-    return scheduled
+    return scheduled, agents_map
 
 
 def _build_actual_map(week_start):
@@ -222,6 +238,7 @@ def erlang_calculator(request):
     }
 
     days = []
+    agents_map_json = '{}'
     if raw_rows:
         calculated = calculate_staffing(
             raw_rows,
@@ -230,11 +247,17 @@ def erlang_calculator(request):
             params['shrinkage'],
             params['aht_seconds'],
         )
+        scheduled_map, agents_map = _build_scheduled_map(week_start)
         days = _build_days(
             calculated, params,
-            _build_scheduled_map(week_start),
+            scheduled_map,
             _build_actual_map(week_start),
         )
+        import json
+        agents_map_json = json.dumps({
+            f"{day}:{hour}": sorted(entries, key=lambda e: e['name'])
+            for (day, hour), entries in agents_map.items()
+        })
 
     prev_week = week_start - timedelta(days=7)
     next_week = week_start + timedelta(days=7)
@@ -253,6 +276,7 @@ def erlang_calculator(request):
         'next_week': next_week,
         'is_current_week': week_start == current_week,
         'current_week': current_week,
+        'agents_map_json': agents_map_json,
     })
 
 
