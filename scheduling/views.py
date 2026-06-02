@@ -273,6 +273,12 @@ def shift_list(request):
     else:
         supervisor_id = request.session.get('shift_supervisor_filter', '')
 
+    if 'section' in request.GET:
+        section_filter = request.GET.get('section', '')
+        request.session['shift_section_filter'] = section_filter
+    else:
+        section_filter = request.session.get('shift_section_filter', '')
+
     agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by('user__last_name', 'user__first_name')
     if supervisor_id:
         try:
@@ -335,12 +341,16 @@ def shift_list(request):
             ),
         })
 
-    # Classify each agent as morning / afternoon / admin and sort into groups
-    _GROUP_ORDER = {'morning': 0, 'afternoon': 1, 'admin': 2}
+    # Classify each agent into one of four sections
+    _GROUP_ORDER = {'morning': 0, 'afternoon': 1, 'kill_team': 2, 'admin': 3}
+    # Fixed sort priority for admin supervisors; others sort alphabetically after
+    _ADMIN_SUP_PRIORITY = {'Jesus Urbina': 0, 'Andrea Jones': 1}
 
     def _shift_group(agent, tmpl_map, cells):
         if agent.role == 'admin':
             return 'admin'
+        if agent.role_type == 'kill_team':
+            return 'kill_team'
         for d in range(7):
             t = tmpl_map.get((agent.pk, d))
             if t and not t.is_off and t.start_time:
@@ -358,13 +368,23 @@ def shift_list(request):
         g = _GROUP_ORDER[r['group']]
         a = r['agent']
         if r['group'] == 'admin':
-            sup_ln = a.supervisor.user.last_name if a.supervisor else '\xff'
-            sup_fn = a.supervisor.user.first_name if a.supervisor else '\xff'
+            if not a.supervisor:
+                sup_sort = (2, '', '')
+            else:
+                name = a.supervisor.user.get_full_name()
+                if name in _ADMIN_SUP_PRIORITY:
+                    sup_sort = (_ADMIN_SUP_PRIORITY[name], '', '')
+                else:
+                    sup_sort = (3, a.supervisor.user.last_name, a.supervisor.user.first_name)
         else:
-            sup_ln = sup_fn = ''
-        return (g, sup_ln, sup_fn, a.user.last_name, a.user.first_name)
+            sup_sort = (0, '', '')
+        return (g,) + sup_sort + (a.user.last_name, a.user.first_name)
 
     rows.sort(key=_sort_key)
+
+    # Apply section filter
+    if section_filter:
+        rows = [r for r in rows if r['group'] == section_filter]
 
     # Flag first admin row per supervisor so template can draw sub-dividers
     prev_admin_sup_id = None
@@ -386,6 +406,7 @@ def shift_list(request):
         'has_this_week': has_this_week,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'section_filter': section_filter,
         'today': today,
     })
 

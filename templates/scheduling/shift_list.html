@@ -63,10 +63,21 @@ tbody tr.row-b td.fc { background:#f9fafb; }
 
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 
-<!-- Supervisor filter -->
+<!-- Filters -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
-    <form method="get" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <form method="get" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+
+        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Section:</label>
+        <select name="section" onchange="this.form.submit()"
+            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+            <option value="">All</option>
+            <option value="morning" {% if section_filter == 'morning' %}selected{% endif %}>Morning</option>
+            <option value="afternoon" {% if section_filter == 'afternoon' %}selected{% endif %}>Afternoon</option>
+            <option value="kill_team" {% if section_filter == 'kill_team' %}selected{% endif %}>Kill Team</option>
+            <option value="admin" {% if section_filter == 'admin' %}selected{% endif %}>Admins</option>
+        </select>
+
         <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Supervisor:</label>
         <select name="supervisor" onchange="this.form.submit()"
             style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
@@ -77,8 +88,9 @@ tbody tr.row-b td.fc { background:#f9fafb; }
             </option>
             {% endfor %}
         </select>
-        {% if selected_supervisor %}
-        <a href="?week_start={{ week_start|date:'Y-m-d' }}" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear</a>
+
+        {% if selected_supervisor or section_filter %}
+        <a href="?week_start={{ week_start|date:'Y-m-d' }}" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear filters</a>
         {% endif %}
     </form>
 </div>
@@ -86,13 +98,14 @@ tbody tr.row-b td.fc { background:#f9fafb; }
 <!-- Week navigation -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <a href="?week_start={{ prev_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+        <a href="?week_start={{ prev_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}{% if section_filter %}&section={{ section_filter }}{% endif %}"
            class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
-        <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+        <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}{% if section_filter %}&section={{ section_filter }}{% endif %}"
            class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
         <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
             {% if selected_supervisor %}<input type="hidden" name="supervisor" value="{{ selected_supervisor }}">{% endif %}
+            {% if section_filter %}<input type="hidden" name="section" value="{{ section_filter }}">{% endif %}
             <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
@@ -138,6 +151,7 @@ tbody tr.row-b td.fc { background:#f9fafb; }
         <td colspan="9">
             {% if row.group == 'morning' %}Morning &mdash; 12:00 AM – 9:00 AM
             {% elif row.group == 'afternoon' %}Afternoon &mdash; 10:00 AM – 11:59 PM
+            {% elif row.group == 'kill_team' %}Kill Team
             {% else %}Admins{% endif %}
         </td>
     </tr>
