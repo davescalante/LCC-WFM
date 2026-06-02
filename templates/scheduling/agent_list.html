@@ -22,23 +22,7 @@
             {% endfor %}
         </select>
 
-        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;margin-left:8px;">Employer:</label>
-        <select name="employer" onchange="this.form.submit()"
-            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
-            <option value="">All</option>
-            <option value="LCC" {% if employer_filter == 'LCC' %}selected{% endif %}>LCC</option>
-            <option value="Infinity" {% if employer_filter == 'Infinity' %}selected{% endif %}>Infinity</option>
-        </select>
-
-        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;margin-left:8px;">Billing Status:</label>
-        <select name="billing_status" onchange="this.form.submit()"
-            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
-            <option value="">All</option>
-            <option value="Billed" {% if billing_filter == 'Billed' %}selected{% endif %}>Billed</option>
-            <option value="Not Billed" {% if billing_filter == 'Not Billed' %}selected{% endif %}>Not Billed</option>
-        </select>
-
-        {% if selected_supervisor or employer_filter or billing_filter %}
+        {% if selected_supervisor %}
         <a href="?" style="font-size:12px;color:#888;text-decoration:none;margin-left:4px;">✕ Clear filters</a>
         {% endif %}
     </form>
@@ -52,8 +36,6 @@
                 <th>Role</th>
                 <th>Role Type</th>
                 <th>Supervisor</th>
-                <th>Employer</th>
-                <th>Billing Status</th>
                 <th style="text-align:center;">Track Attendance</th>
                 <th>Status</th>
                 <th>Actions</th>
@@ -66,14 +48,6 @@
                 <td><span class="badge badge-blue">{{ agent.get_role_display }}</span></td>
                 <td>{{ agent.get_role_type_display|default:"—" }}</td>
                 <td style="color:#555;font-size:13px;">{{ agent.supervisor|default:"—" }}</td>
-                <td style="font-size:13px;">{{ agent.employer }}</td>
-                <td style="font-size:13px;">
-                    {% if agent.billing_status == 'Billed' %}
-                    <span class="badge badge-green">Billed</span>
-                    {% else %}
-                    <span style="font-size:12px;color:#888;">Not Billed</span>
-                    {% endif %}
-                </td>
                 <td style="text-align:center;">
                     {% if agent.track_attendance %}
                     <span style="color:#27ae60;font-size:15px;" title="Tracked">✓</span>
@@ -88,7 +62,7 @@
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="9" style="color:#888;">No users found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
+            <tr><td colspan="7" style="color:#888;">No users found. <a href="{% url 'agent_create' %}">Add one.</a></td></tr>
             {% endfor %}
         </tbody>
     </table>

@@ -34,9 +34,6 @@ def agent_list(request):
     else:
         supervisor_id = request.session.get('supervisor_filter', '')
 
-    employer_filter = request.GET.get('employer', '')
-    billing_filter = request.GET.get('billing_status', '')
-
     agents = Agent.objects.select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
@@ -45,17 +42,11 @@ def agent_list(request):
             agents = agents.filter(supervisor_id=int(supervisor_id))
         except (ValueError, TypeError):
             pass
-    if employer_filter:
-        agents = agents.filter(employer=employer_filter)
-    if billing_filter:
-        agents = agents.filter(billing_status=billing_filter)
 
     return render(request, 'scheduling/agent_list.html', {
         'agents': agents,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
-        'employer_filter': employer_filter,
-        'billing_filter': billing_filter,
     })
 
 
