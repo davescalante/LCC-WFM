@@ -270,12 +270,16 @@ def shift_list(request):
     )
     this_week_override_ids = {s.agent_id for s in shifts_qs}
 
+    # Templates only apply to the current week and future — never back-fill past weeks.
+    current_week_start = today - timedelta(days=today.weekday())
+    show_templates = week_start >= current_week_start
+
     rows = []
     for agent in agents:
         cells = []
         for day_date in week_dates:
             override = shift_map.get((agent.pk, day_date))
-            template = template_map.get((agent.pk, day_date.weekday()))
+            template = template_map.get((agent.pk, day_date.weekday())) if show_templates else None
             cells.append({
                 'date': day_date,
                 'shift': override,
