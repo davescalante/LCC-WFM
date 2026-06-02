@@ -10,6 +10,7 @@ class AdherenceRecord(models.Model):
         ('T',       'T — Tardy'),
         ('Absent',  'Absent'),
         ('NCNS',    'NCNS — No Call No Show'),
+        ('S',       'S — Suspension'),
         ('VTO',     'VTO — Voluntary Time Off'),
         ('IMSS',    'IMSS — Medical/IMSS Leave'),
         ('MUT',     'MUT — Make Up Time'),

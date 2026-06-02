@@ -18,7 +18,7 @@ from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, D
 
 
 BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
-BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA'}
+BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA', 'S'}
 VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
 
 STATUS_COLORS = {
@@ -37,6 +37,7 @@ STATUS_COLORS = {
     'V':     '#e3f2fd',
     'IMSS':  '#e0f2f1',
     'LOA':   '#f3e5f5',
+    'S':     '#ffccbc',
 }
 
 
@@ -128,7 +129,7 @@ def _block_hours(start_time, end_time):
 
 # ── Cost of Schedule ──────────────────────────────────────────────────────────
 
-COS_INCLUDE_STATUSES = frozenset({'P', 'Absent', 'NCNS', 'IMSS', 'T', 'OT', 'MUT'})
+COS_INCLUDE_STATUSES = frozenset({'P', 'Absent', 'NCNS', 'IMSS', 'T', 'OT', 'MUT', 'S'})
 _DEFAULT_TARDY = Decimal('0.25')  # 15-minute default if no actual hours logged
 
 
@@ -178,7 +179,7 @@ def _calculate_cos(rows, week_dates):
 
             sched += sched_hrs
 
-            if status in ('Absent', 'NCNS', 'IMSS'):
+            if status in ('Absent', 'NCNS', 'IMSS', 'S'):
                 raw_loss += sched_hrs
                 absent_count += 1
             elif status == 'T':
@@ -388,7 +389,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             if status:
                 if status in ('P', 'OT', 'MUT', 'VTO', 'P+VTO', 'T', 'T+VTO', 'I'):
                     total_present += 1
-                elif status in ('Absent', 'NCNS'):
+                elif status in ('Absent', 'NCNS', 'S'):
                     total_absent += 1
                 if status in ('T', 'T+VTO'):
                     total_tardy += 1
@@ -890,6 +891,7 @@ def payroll_export(request):
             'Employer', 'Billing Status',
             'Scheduled Hours', 'Actual Login Hours', 'Coded Hours',
             'Adjusted Total Hours', 'Commission Deduction %', 'Adherence Bonus',
+            'Suspended Days',
         ])
 
         for agent in agents:
@@ -897,6 +899,7 @@ def payroll_export(request):
             actual_total = Decimal('0')
             bonus = True
             bonus_determined = False
+            suspended_days = 0
 
             for day_date in week_dates:
                 shift = shift_map.get((agent.pk, day_date))
@@ -918,6 +921,8 @@ def payroll_export(request):
                     else:
                         effective_sched = raw_sched
                     sched_total += effective_sched
+                    if status == 'S':
+                        suspended_days += 1
                     if status in BONUS_DISQUALIFYING:
                         bonus = False
                         bonus_determined = True
@@ -950,6 +955,7 @@ def payroll_export(request):
                 _decimal_to_hhmmss(adjusted),
                 f'{commission:.1f}%',
                 bonus_label,
+                suspended_days,
             ])
 
         return response
