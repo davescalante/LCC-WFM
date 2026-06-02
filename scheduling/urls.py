@@ -14,6 +14,7 @@ urlpatterns = [
     path('shifts/copy-agent-from-prev/', views.shift_copy_agent_from_prev, name='shift_copy_agent_from_prev'),
     path('shifts/<int:pk>/edit/', views.shift_edit, name='shift_edit'),
     path('shifts/<int:pk>/delete/', views.shift_delete, name='shift_delete'),
+    path('shifts/clear-recurring/', views.shift_clear_recurring, name='shift_clear_recurring'),
     path('overtime/', views.overtime_list, name='overtime_list'),
     path('overtime/week/', views.overtime_week, name='overtime_week'),
     path('overtime/export/', views.overtime_export, name='overtime_export'),

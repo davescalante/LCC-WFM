@@ -608,16 +608,38 @@ def shift_edit(request, pk):
 
 @login_required
 def shift_delete(request, pk):
+    from django.http import JsonResponse
     shift = get_object_or_404(Shift, pk=pk)
     if request.method == 'POST':
         week_start = shift.date - timedelta(days=shift.date.weekday())
+        agent = shift.agent
+        log_action(request.user, 'Deleted shift override',
+                   f'{agent} on {shift.date.isoformat()}: '
+                   f'{shift.start_time.strftime("%H:%M")}–{shift.end_time.strftime("%H:%M")}',
+                   agent=agent)
         shift.delete()
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'deleted': True, 'pk': pk})
         messages.success(request, "Shift deleted.")
         return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
     return render(request, 'scheduling/confirm_delete.html', {
         'object': shift,
         'cancel_url': reverse('shift_list'),
     })
+
+
+@login_required
+def shift_clear_recurring(request):
+    """AJAX: delete all ShiftTemplates for an agent (clears their recurring weekly schedule)."""
+    from django.http import JsonResponse
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    agent_pk = request.POST.get('agent_pk')
+    agent = get_object_or_404(Agent, pk=agent_pk)
+    count, _ = ShiftTemplate.objects.filter(agent=agent).delete()
+    log_action(request.user, 'Cleared recurring schedule',
+               f'{agent}: {count} template day(s) removed', agent=agent)
+    return JsonResponse({'deleted': count})
 
 
 def _get_week_start(request):

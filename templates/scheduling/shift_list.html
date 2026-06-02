@@ -73,7 +73,7 @@
     </thead>
     <tbody>
         {% for row in rows %}
-        <tr style="border-bottom:1px solid #e8e8e8;">
+        <tr data-agent-row="{{ row.agent.pk }}" style="border-bottom:1px solid #e8e8e8;">
             <td style="padding:10px 12px;font-weight:600;font-size:13px;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
                 {% if row.agent.status == 'inactive' %}
@@ -81,13 +81,23 @@
                 {% endif %}
             </td>
             {% for cell in row.cells %}
-            <td style="padding:6px 4px;text-align:center;vertical-align:middle;
+            <td id="shift-cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+                class="shift-cell"
+                data-agent="{{ row.agent.pk }}"
+                data-date="{{ cell.date|date:'Y-m-d' }}"
+                {% if cell.template and not cell.template.is_off %}
+                data-tmpl-start="{{ cell.template.start_time|time:'H:i' }}"
+                data-tmpl-end="{{ cell.template.end_time|time:'H:i' }}"
+                {% endif %}
+                {% if cell.template and cell.template.is_off %}data-tmpl-off="1"{% endif %}
+                style="padding:6px 4px;text-align:center;vertical-align:middle;
                 {% if cell.shift %}
                     {% if cell.shift.is_off %}background:#fafafa;{% else %}background:#f0fdf4;{% endif %}
                 {% elif cell.template %}
                     {% if cell.template.is_off %}background:#f0f4ff;{% else %}background:#eff6ff;{% endif %}
                 {% endif %}">
                 {% if cell.shift %}
+                <div class="shift-override-wrap" style="position:relative;display:inline-block;">
                     {% if cell.shift.is_off %}
                         <span style="font-size:12px;color:#aaa;font-weight:600;">OFF</span>
                     {% else %}
@@ -100,6 +110,11 @@
                     {% endif %}
                     <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
                        style="font-size:10px;color:#d97706;display:block;margin-top:2px;">override</a>
+                    <button class="shift-del-btn"
+                        onclick="confirmDeleteShift({{ cell.shift.pk }}, '{{ row.agent|escapejs }}', '{{ cell.date|date:'D M d' }}')"
+                        title="Delete this day's override"
+                        style="display:none;position:absolute;top:-6px;right:-20px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;width:20px;height:20px;cursor:pointer;font-size:11px;line-height:1;padding:0;">🗑</button>
+                </div>
                 {% elif cell.template %}
                     {% if cell.template.is_off %}
                         <span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span>
@@ -121,6 +136,14 @@
                 <div style="display:flex;flex-direction:column;gap:6px;align-items:center;">
                     <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
                        class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;width:100%;">Edit Week</a>
+                    {% if row.has_template %}
+                    <button type="button"
+                        onclick="confirmClearRecurring('{{ row.agent|escapejs }}', {{ row.agent.pk }})"
+                        style="width:100%;padding:4px 10px;font-size:11px;white-space:nowrap;
+                               background:#fff0f0;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;cursor:pointer;">
+                        ✕ Clear Recurring
+                    </button>
+                    {% endif %}
                     {% if row.has_prev_week_shifts %}
                     <form method="post" action="{% url 'shift_copy_agent_from_prev' %}"
                           id="agent-copy-form-{{ row.agent.pk }}" style="margin:0;width:100%;">
@@ -147,7 +170,137 @@
 </table>
 </div>
 
+<!-- Shared delete confirmation modal -->
+<div id="shift-delete-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 id="sdm-title" style="margin:0 0 8px;font-size:17px;color:#1a3a5c;"></h3>
+        <p id="sdm-desc" style="margin:0 0 6px;font-size:14px;color:#555;line-height:1.5;"></p>
+        <p style="margin:0 0 24px;font-size:12px;color:#888;">This cannot be undone.</p>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button onclick="closeShiftModal()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Cancel</button>
+            <button id="sdm-confirm" style="padding:8px 20px;border:none;border-radius:6px;background:#dc2626;color:white;font-size:14px;font-weight:600;cursor:pointer;">Delete</button>
+        </div>
+    </div>
+</div>
+
+<style>
+.shift-override-wrap:hover .shift-del-btn { display: inline-flex !important; align-items: center; justify-content: center; }
+</style>
+
 <script>
+function getCookie(name) {
+    let v = null;
+    document.cookie.split(';').forEach(c => {
+        const [k, val] = c.trim().split('=');
+        if (k === name) v = decodeURIComponent(val);
+    });
+    return v;
+}
+
+function closeShiftModal() {
+    document.getElementById('shift-delete-modal').style.display = 'none';
+    document.getElementById('sdm-confirm').onclick = null;
+}
+document.getElementById('shift-delete-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeShiftModal();
+});
+
+function confirmDeleteShift(pk, agentName, dateLabel) {
+    document.getElementById('sdm-title').textContent = 'Delete Shift Override?';
+    document.getElementById('sdm-desc').textContent =
+        `Remove the scheduled shift for ${agentName} on ${dateLabel}? The recurring schedule (if any) will show through again.`;
+    document.getElementById('sdm-confirm').textContent = 'Delete Override';
+    document.getElementById('sdm-confirm').onclick = () => executeDeleteShift(pk);
+    document.getElementById('shift-delete-modal').style.display = 'flex';
+}
+
+function executeDeleteShift(pk) {
+    const btn = document.getElementById('sdm-confirm');
+    btn.textContent = 'Deleting…'; btn.disabled = true;
+    fetch(`/shifts/${pk}/delete/`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': getCookie('csrftoken'), 'X-Requested-With': 'XMLHttpRequest'},
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.deleted) {
+            closeShiftModal();
+            // Find the td containing this shift's delete button and restore it
+            const delBtn = document.querySelector(`.shift-del-btn[onclick*="(${pk},"]`);
+            if (delBtn) {
+                const td = delBtn.closest('td.shift-cell');
+                if (td) restoreCellAfterDelete(td);
+            }
+        }
+    })
+    .catch(() => closeShiftModal())
+    .finally(() => { btn.textContent = 'Delete Override'; btn.disabled = false; });
+}
+
+function restoreCellAfterDelete(td) {
+    const tmplStart = td.dataset.tmplStart;
+    const tmplEnd   = td.dataset.tmplEnd;
+    const tmplOff   = td.dataset.tmplOff;
+    // Reset background
+    if (tmplStart || tmplOff) {
+        td.style.background = tmplOff ? '#f0f4ff' : '#eff6ff';
+        if (tmplOff) {
+            td.innerHTML = '<span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span><span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:0.03em;">RECURRING</span>';
+        } else {
+            td.innerHTML = `<div style="font-size:12px;font-weight:600;color:#2563eb;white-space:nowrap;">${tmplStart}–${tmplEnd}</div><span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:0.03em;">RECURRING</span>`;
+        }
+    } else {
+        td.style.background = '';
+        td.innerHTML = '<span style="color:#ddd;font-size:12px;">—</span>';
+    }
+}
+
+function confirmClearRecurring(agentName, agentPk) {
+    document.getElementById('sdm-title').textContent = 'Clear Recurring Schedule?';
+    document.getElementById('sdm-desc').textContent =
+        `This will permanently remove ${agentName}'s recurring weekly schedule. One-time shift overrides are not affected.`;
+    document.getElementById('sdm-confirm').textContent = 'Clear Recurring';
+    document.getElementById('sdm-confirm').onclick = () => executeClearRecurring(agentPk, agentName);
+    document.getElementById('shift-delete-modal').style.display = 'flex';
+}
+
+function executeClearRecurring(agentPk, agentName) {
+    const btn = document.getElementById('sdm-confirm');
+    btn.textContent = 'Clearing…'; btn.disabled = true;
+    const fd = new FormData();
+    fd.append('agent_pk', agentPk);
+    fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+    fetch('{% url "shift_clear_recurring" %}', {
+        method: 'POST',
+        headers: {'X-Requested-With': 'XMLHttpRequest'},
+        body: fd,
+    })
+    .then(r => r.json())
+    .then(data => {
+        closeShiftModal();
+        // Wipe all RECURRING cells for this agent
+        document.querySelectorAll(`td.shift-cell[data-agent="${agentPk}"]`).forEach(td => {
+            if (td.querySelector('.shift-override-wrap')) return;  // has override, leave it
+            const hasTmpl = td.dataset.tmplStart || td.dataset.tmplOff;
+            if (hasTmpl) {
+                td.style.background = '';
+                td.innerHTML = '<span style="color:#ddd;font-size:12px;">—</span>';
+                delete td.dataset.tmplStart;
+                delete td.dataset.tmplEnd;
+                delete td.dataset.tmplOff;
+            }
+        });
+        // Hide the "Clear Recurring" button for this agent
+        const row = document.querySelector(`tr[data-agent-row="${agentPk}"]`);
+        if (row) {
+            const clearBtn = [...row.querySelectorAll('button')].find(b => b.textContent.includes('Clear Recurring'));
+            if (clearBtn) clearBtn.style.display = 'none';
+        }
+    })
+    .catch(() => closeShiftModal())
+    .finally(() => { btn.textContent = 'Clear Recurring'; btn.disabled = false; });
+}
+
 function confirmCopy() {
     {% if has_this_week %}
     if (!confirm("This will overwrite this week's existing schedule with last week's. Continue?")) return;
