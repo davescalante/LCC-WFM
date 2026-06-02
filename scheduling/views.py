@@ -219,6 +219,47 @@ def agent_delete(request, pk):
     })
 
 
+def _save_shift_template(agent, day_of_week, week_start, is_off, start, end, notes):
+    """
+    Cap any existing active template before week_start and create a new one from week_start.
+    If an active template already starts on this exact week, just update it in place.
+    Returns the (template, created) tuple.
+    """
+    active = (
+        ShiftTemplate.objects
+        .filter(agent=agent, day_of_week=day_of_week)
+        .filter(
+            models.Q(effective_from__isnull=True) | models.Q(effective_from__lte=week_start)
+        )
+        .filter(
+            models.Q(effective_until__isnull=True) | models.Q(effective_until__gte=week_start)
+        )
+        .order_by(models.F('effective_from').desc(nulls_last=True))
+        .first()
+    )
+    if active and active.effective_from == week_start:
+        # Same week — update in place; no history to preserve
+        active.start_time = start or '09:00'
+        active.end_time = end or '17:00'
+        active.is_off = is_off
+        active.notes = notes
+        active.effective_until = None
+        active.save()
+        return active, False
+    if active:
+        # Older week — cap it so past weeks keep their display
+        active.effective_until = week_start - timedelta(days=1)
+        active.save(update_fields=['effective_until'])
+    tmpl = ShiftTemplate.objects.create(
+        agent=agent, day_of_week=day_of_week,
+        start_time=start or '09:00',
+        end_time=end or '17:00',
+        is_off=is_off, notes=notes,
+        effective_from=week_start, effective_until=None,
+    )
+    return tmpl, True
+
+
 @login_required
 def shift_list(request):
     today = timezone.localdate()
@@ -258,9 +299,21 @@ def shift_list(request):
     shifts_qs = Shift.objects.filter(date__in=week_dates, agent__in=agents)
     shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
 
-    # Recurring templates (day-of-week defaults)
+    # Recurring templates — pick the template that covers this specific week for each agent+day.
     templates_qs = ShiftTemplate.objects.filter(agent__in=agents)
-    template_map = {(t.agent_id, t.day_of_week): t for t in templates_qs}
+    template_map = {}
+    for t in templates_qs:
+        in_range = (
+            (t.effective_from is None or t.effective_from <= week_start)
+            and (t.effective_until is None or t.effective_until >= week_start)
+        )
+        if not in_range:
+            continue
+        key = (t.agent_id, t.day_of_week)
+        existing = template_map.get(key)
+        # Prefer the template with the latest effective_from (most specific)
+        if existing is None or (t.effective_from or date.min) > (existing.effective_from or date.min):
+            template_map[key] = t
 
     has_prev_week = Shift.objects.filter(date__in=prev_week_dates).exists()
     has_this_week = shifts_qs.exists() or templates_qs.exists()
@@ -276,12 +329,6 @@ def shift_list(request):
         for day_date in week_dates:
             override = shift_map.get((agent.pk, day_date))
             t = template_map.get((agent.pk, day_date.weekday()))
-            # Only show the template if it covers this week.
-            # NULL effective_from = legacy/always. NULL effective_until = no end.
-            if t and t.effective_from and t.effective_from > week_start:
-                t = None
-            if t and t.effective_until is not None and t.effective_until < week_start:
-                t = None
             cells.append({
                 'date': day_date,
                 'shift': override,
@@ -434,17 +481,7 @@ def shift_week(request):
             partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
-                    tmpl, _ = ShiftTemplate.objects.update_or_create(
-                        agent=agent, day_of_week=i,
-                        defaults={
-                            'start_time': start or '09:00',
-                            'end_time': end or '17:00',
-                            'is_off': is_off,
-                            'notes': notes,
-                            'effective_from': week_start,
-                            'effective_until': None,  # reset any previous end date
-                        }
-                    )
+                    tmpl, _ = _save_shift_template(agent, i, week_start, is_off, start, end, notes)
                     ShiftTemplateBlock.objects.filter(shift_template=tmpl).delete()
                     for n in (2, 3):
                         b_start = request.POST.get(f'day_{i}_block{n}_start', '').strip()
@@ -970,13 +1007,7 @@ def shift_quick_edit(request):
     if permanent:
         day_of_week = day_date.weekday()
         edit_week_start = day_date - timedelta(days=day_date.weekday())
-        defaults = {'is_off': is_off, 'effective_from': edit_week_start, 'effective_until': None}
-        if not is_off:
-            defaults['start_time'] = start
-            defaults['end_time'] = end
-        tmpl, _ = ShiftTemplate.objects.update_or_create(
-            agent=agent, day_of_week=day_of_week, defaults=defaults
-        )
+        tmpl, _ = _save_shift_template(agent, day_of_week, edit_week_start, is_off, start, end, '')
         ShiftTemplateBlock.objects.filter(shift_template=tmpl).delete()
         for n, block in enumerate(extra_blocks[:2], start=2):
             bs = (block.get('start') or '').strip()

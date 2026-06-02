@@ -127,8 +127,7 @@ class ShiftTemplate(models.Model):
     effective_until = models.DateField(null=True, blank=True)
 
     class Meta:
-        unique_together = ('agent', 'day_of_week')
-        ordering = ['day_of_week']
+        ordering = ['day_of_week', 'effective_from']
 
     def __str__(self):
         day = self.get_day_of_week_display()
