@@ -186,6 +186,11 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 .cell-status  { width: 100%; font-size: 10px; padding: 1px 2px; border: 1px solid #ccc; border-radius: 3px; background: transparent; }
 .cell-log     { font-size: 10px; padding: 1px 3px; margin-top: 1px; font-family: monospace; color: #555; min-height: 14px; }
 .cell-missing { font-size: 9px; color: #c0392b; font-weight: 600; margin-top: 1px; }
+
+/* ── Column sort ────────────────────────────────────────────────────────── */
+.th-sortable { cursor:pointer; user-select:none; }
+.th-sortable:hover { filter:brightness(.93); }
+.sort-arrow { font-size:9px; color:#888; margin-left:2px; }
 </style>
 
 <div class="card" style="overflow-x:auto;padding:0;">
@@ -1013,5 +1018,35 @@ document.getElementById('qe-modal').addEventListener('click', function(e) {
         setInterval(poll, POLL_INTERVAL);
     }, 5000);
 })();
+</script>
+<script>
+// Frozen cols: 0=Supervisor 1=Agent 2=Five9 3=EmpID  — day/summary cols not sortable
+(function(tid,sc,dc){
+    var t=document.getElementById(tid);if(!t)return;
+    var tb=t.querySelector('tbody');if(!tb)return;
+    var orig=Array.from(tb.children);
+    var div=function(r){return dc.some(function(c){return r.classList.contains(c);});};
+    var ac=-1,ad=0;
+    Array.from(t.querySelectorAll('thead th')).forEach(function(th,i){
+        if(sc.indexOf(i)<0)return;
+        th.classList.add('th-sortable');
+        var sp=document.createElement('span');sp.className='sort-arrow';th.appendChild(sp);
+        th.addEventListener('click',function(){
+            ad=ac===i?(ad+1)%3:(ac=i,1);
+            t.querySelectorAll('.sort-arrow').forEach(function(a){a.textContent='';});
+            if(ad>0)sp.textContent=ad===1?' ▲':' ▼';
+            while(tb.firstChild)tb.removeChild(tb.firstChild);
+            if(ad===0){ac=-1;orig.forEach(function(r){tb.appendChild(r);});return;}
+            var ci=ac,di=ad,v=function(r){
+                var c=r.cells?r.cells[ci]:null;
+                var s=c?c.textContent.replace(/[▲▼]/g,'').trim().replace(/\s+/g,' '):'';
+                return(!s||s==='—')?'￿':s.toLowerCase();
+            };
+            orig.filter(function(r){return!div(r);}).slice()
+                .sort(function(a,b){var cmp=v(a).localeCompare(v(b),undefined,{numeric:true,sensitivity:'base'});return di===1?cmp:-cmp;})
+                .forEach(function(r){tb.appendChild(r);});
+        });
+    });
+})('adh-table',[0,1,2,3],['group-hdr']);
 </script>
 {% endblock %}
