@@ -857,16 +857,95 @@ def overtime_week(request):
 
 @login_required
 def overtime_delete(request, pk):
+    from django.http import JsonResponse
     ot_shift = get_object_or_404(OvertimeShift, pk=pk)
     if request.method == 'POST':
         week_start = ot_shift.date - timedelta(days=ot_shift.date.weekday())
+        agent = ot_shift.agent
+        log_action(request.user, 'Deleted OT shift',
+                   f'{agent} on {ot_shift.date.isoformat()}: '
+                   f'{ot_shift.start_time.strftime("%H:%M")}–{ot_shift.end_time.strftime("%H:%M")}',
+                   agent=agent)
         ot_shift.delete()
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return JsonResponse({'deleted': True, 'pk': pk})
         messages.success(request, "OT shift deleted.")
         return redirect(f"{reverse('overtime_list')}?week_start={week_start.isoformat()}")
     return render(request, 'scheduling/confirm_delete.html', {
         'object': ot_shift,
         'cancel_url': reverse('overtime_list'),
     })
+
+
+@login_required
+def shift_quick_edit(request):
+    """AJAX: create/update a one-time Shift override (or permanent ShiftTemplate) for a specific agent+date."""
+    from django.http import JsonResponse
+    import json as _json
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    try:
+        data = _json.loads(request.body)
+    except Exception:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    agent_pk = data.get('agent_pk')
+    date_str = data.get('date', '')
+    start = (data.get('start') or '').strip()
+    end = (data.get('end') or '').strip()
+    is_off = bool(data.get('is_off'))
+    permanent = bool(data.get('permanent'))
+    extra_blocks = data.get('extra_blocks') or []
+
+    agent = get_object_or_404(Agent, pk=agent_pk)
+    try:
+        day_date = date.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'Invalid date'}, status=400)
+
+    if not is_off and not (start and end):
+        return JsonResponse({'error': 'Start and end time required'}, status=400)
+
+    if permanent:
+        day_of_week = day_date.weekday()
+        defaults = {'is_off': is_off}
+        if not is_off:
+            defaults['start_time'] = start
+            defaults['end_time'] = end
+        tmpl, _ = ShiftTemplate.objects.update_or_create(
+            agent=agent, day_of_week=day_of_week, defaults=defaults
+        )
+        ShiftTemplateBlock.objects.filter(shift_template=tmpl).delete()
+        for n, block in enumerate(extra_blocks[:2], start=2):
+            bs = (block.get('start') or '').strip()
+            be = (block.get('end') or '').strip()
+            if bs and be:
+                ShiftTemplateBlock.objects.create(
+                    shift_template=tmpl, block_number=n, start_time=bs, end_time=be
+                )
+        log_action(request.user, 'Quick-edit shift (permanent)',
+                   f'{agent} {day_date.strftime("%A")}: {"OFF" if is_off else f"{start}–{end}"}',
+                   agent=agent)
+    else:
+        defaults = {
+            'is_off': is_off,
+            'start_time': start if start else '00:00',
+            'end_time': end if end else '00:00',
+        }
+        shift_obj, _ = Shift.objects.update_or_create(agent=agent, date=day_date, defaults=defaults)
+        ShiftBlock.objects.filter(shift=shift_obj).delete()
+        for n, block in enumerate(extra_blocks[:2], start=2):
+            bs = (block.get('start') or '').strip()
+            be = (block.get('end') or '').strip()
+            if bs and be:
+                ShiftBlock.objects.create(
+                    shift=shift_obj, block_number=n, start_time=bs, end_time=be
+                )
+        log_action(request.user, 'Quick-edit shift (one-time)',
+                   f'{agent} on {day_date.isoformat()}: {"OFF" if is_off else f"{start}–{end}"}',
+                   agent=agent)
+
+    return JsonResponse({'ok': True, 'scheduled': '' if is_off else f'{start}–{end}'})
 
 
 @login_required

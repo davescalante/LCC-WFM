@@ -445,6 +445,9 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                     else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift and not is_off
                     else ''
                 ),
+                'shift_start': shift.start_time.strftime('%H:%M') if (shift and not is_off and shift.start_time) else '',
+                'shift_end': shift.end_time.strftime('%H:%M') if (shift and not is_off and shift.end_time) else '',
+                'is_shift_override': isinstance(shift, Shift),
                 'ot_times': [f"{s.start_time.strftime('%H:%M')}–{s.end_time.strftime('%H:%M')}" for s in ot_shifts],
                 'split_block_labels': (split_labels_map or {}).get((agent.pk, day_date), []),
                 'sched_hrs': cell_sched_hrs,

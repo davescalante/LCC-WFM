@@ -19,6 +19,7 @@ urlpatterns = [
     path('overtime/export/', views.overtime_export, name='overtime_export'),
     path('overtime/<int:pk>/delete/', views.overtime_delete, name='overtime_delete'),
     path('overtime/<int:pk>/toggle-complete/', views.overtime_toggle_complete, name='overtime_toggle_complete'),
+    path('shifts/quick-edit/', views.shift_quick_edit, name='shift_quick_edit'),
     path('activity/', views.activity_log, name='activity_log'),
     path('poll/', views.live_poll, name='live_poll'),
 ]

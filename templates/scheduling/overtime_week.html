@@ -193,10 +193,20 @@ const otCount = {};
 otCount[{{ day.index }}] = {{ day.ot_count }};
 {% endfor %}
 
+function visibleOTCount(i) {
+    const total = otCount[i] || 0;
+    let n = 0;
+    for (let j = 0; j < total; j++) {
+        const el = document.getElementById('ot-entry-' + i + '-' + j);
+        const removeEl = document.getElementById('remove-' + i + '-' + j);
+        if (el && el.style.display !== 'none' && (!removeEl || removeEl.value !== 'true')) n++;
+    }
+    return n;
+}
+
 function addOTShift(i) {
-    const current = otCount[i] || 0;
-    if (current >= 3) return;
-    const j = current;
+    if (visibleOTCount(i) >= 3) return;
+    const j = otCount[i] || 0;
     otCount[i] = j + 1;
 
     const container = document.getElementById('ot-entries-' + i);
@@ -262,7 +272,7 @@ function addOTShift(i) {
     const header = document.querySelector('#day-block-' + i + ' > div');
     if (header) header.style.background = '#f0fdf4';
 
-    if (otCount[i] >= 3) {
+    if (visibleOTCount(i) >= 3) {
         document.getElementById('add-ot-btn-' + i).style.display = 'none';
     }
 
@@ -280,9 +290,10 @@ function removeOTShift(i, j) {
     const removeEl = document.getElementById('remove-' + i + '-' + j);
     if (removeEl) removeEl.value = 'true';
     if (el) el.style.display = 'none';
-    otCount[i] = Math.max(0, (otCount[i] || 1) - 1);
-    document.getElementById('ot-count-' + i).value = otCount[i];
-    document.getElementById('add-ot-btn-' + i).style.display = '';
+    // Do NOT decrement otCount — server must iterate all j's to find the remove=true flag.
+    // (Decrementing caused the server to skip the removed entry, leaving it in the DB.)
+    const addBtn = document.getElementById('add-ot-btn-' + i);
+    if (addBtn) addBtn.style.display = '';
 }
 
 function setIncentive(i, j, type) {

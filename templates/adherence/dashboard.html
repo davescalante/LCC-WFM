@@ -69,10 +69,23 @@
                 data-actual-hrs="{{ cell.display_hrs|default:'0' }}"
                 style="padding:4px 3px;vertical-align:top;text-align:center;background:{{ cell.color }};">
                 {% if cell.scheduled %}
-                <div style="font-size:10px;color:#777;margin-bottom:2px;white-space:nowrap;">
-                    {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
-                    {% else %}{{ cell.scheduled }}
-                    {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
+                <div class="sched-cell-wrap">
+                    <div style="font-size:10px;color:#777;margin-bottom:2px;white-space:nowrap;">
+                        {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
+                        {% else %}{{ cell.scheduled }}
+                        {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
+                        {% endif %}
+                    </div>
+                    {% if not cell.is_off and cell.shift_start %}
+                    <button class="quick-edit-btn"
+                        data-agent="{{ row.agent.pk }}"
+                        data-agent-name="{{ row.agent }}"
+                        data-date="{{ cell.date|date:'Y-m-d' }}"
+                        data-start="{{ cell.shift_start }}"
+                        data-end="{{ cell.shift_end }}"
+                        data-blocks="{{ cell.split_block_labels|join:'|' }}"
+                        onclick="openQuickEdit(this)"
+                        title="Quick-edit this day's schedule">✏</button>
                     {% endif %}
                 </div>
                 {% endif %}
@@ -204,6 +217,45 @@
 <!-- Cost of Schedule tooltip -->
 <div id="cos-tooltip" style="display:none;position:fixed;z-index:9500;background:#1a3a5c;color:white;padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;max-width:240px;"></div>
 
+<!-- Quick-edit shift modal -->
+<div id="qe-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:24px 28px;max-width:440px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div>
+                <h3 id="qe-title" style="margin:0;font-size:16px;color:#1a3a5c;"></h3>
+                <p id="qe-subtitle" style="margin:4px 0 0;font-size:12px;color:#888;"></p>
+            </div>
+            <button onclick="closeQuickEdit()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#aaa;line-height:1;">&times;</button>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:14px;align-items:flex-end;">
+            <div style="flex:1;">
+                <label style="display:block;font-size:11px;color:#888;font-weight:600;margin-bottom:4px;">Start Time</label>
+                <input type="time" id="qe-start" style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:14px;box-sizing:border-box;">
+            </div>
+            <div style="flex:1;">
+                <label style="display:block;font-size:11px;color:#888;font-weight:600;margin-bottom:4px;">End Time</label>
+                <input type="time" id="qe-end" style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:14px;box-sizing:border-box;">
+            </div>
+        </div>
+        <div id="qe-blocks" style="margin-bottom:14px;display:flex;flex-direction:column;gap:8px;"></div>
+        <button type="button" id="qe-add-block" onclick="qeAddBlock()"
+            style="font-size:11px;color:#0369a1;background:none;border:1px dashed #7dd3fc;border-radius:4px;padding:4px 10px;cursor:pointer;margin-bottom:16px;">
+            + Add split block
+        </button>
+        <div style="border-top:1px solid #eee;padding-top:14px;margin-bottom:16px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#555;">
+                <input type="checkbox" id="qe-permanent" style="width:15px;height:15px;">
+                Apply to agent profile permanently (changes every future week)
+            </label>
+        </div>
+        <div id="qe-error" style="display:none;color:#dc2626;font-size:12px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button onclick="closeQuickEdit()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Cancel</button>
+            <button id="qe-save" onclick="saveQuickEdit()" style="padding:8px 20px;border:none;border-radius:6px;background:#1a3a5c;color:white;font-size:14px;font-weight:600;cursor:pointer;">Save Changes</button>
+        </div>
+    </div>
+</div>
+
 <!-- Note popover (single shared, repositioned by JS) -->
 <div id="note-popover" style="display:none;position:fixed;z-index:10000;width:340px;max-width:calc(100vw - 20px);background:white;border:1px solid #ddd;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);flex-direction:column;overflow:hidden;">
     <div style="padding:10px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:flex-start;background:#f8f9fa;">
@@ -226,6 +278,19 @@
 </div>
 
 <style>
+.sched-cell-wrap { position: relative; display: inline-block; }
+.quick-edit-btn {
+    display: none;
+    position: absolute;
+    top: -3px; right: -18px;
+    background: none; border: none;
+    cursor: pointer; color: #94a3b8;
+    font-size: 11px; padding: 1px 2px;
+    line-height: 1;
+    transition: color .15s;
+}
+.quick-edit-btn:hover { color: #1d4ed8 !important; }
+.sched-cell-wrap:hover .quick-edit-btn { display: inline-block !important; }
 .note-btn {
     position: relative;
     background: none;
@@ -612,6 +677,146 @@ async function saveCommission(agentId, weekStart, inp) {
         setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
     }
 }
+
+// ── Quick-edit shift ──────────────────────────────────────────────────────────
+let qeAgentPk = null, qeDate = null, qeBlockCount = 0;
+
+function openQuickEdit(btn) {
+    qeAgentPk = btn.dataset.agent;
+    qeDate = btn.dataset.date;
+    const agentName = btn.dataset.agentName;
+    const start = btn.dataset.start;
+    const end = btn.dataset.end;
+    const blocks = btn.dataset.blocks ? btn.dataset.blocks.split('|').filter(Boolean) : [];
+
+    document.getElementById('qe-title').textContent = agentName;
+    document.getElementById('qe-subtitle').textContent = new Date(qeDate + 'T12:00').toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'});
+    document.getElementById('qe-start').value = start;
+    document.getElementById('qe-end').value = end;
+    document.getElementById('qe-permanent').checked = false;
+    document.getElementById('qe-error').style.display = 'none';
+    document.getElementById('qe-save').textContent = 'Save Changes';
+    document.getElementById('qe-save').disabled = false;
+
+    // Pre-fill existing extra blocks
+    const blocksDiv = document.getElementById('qe-blocks');
+    blocksDiv.innerHTML = '';
+    qeBlockCount = 0;
+    blocks.forEach(lbl => {
+        const parts = lbl.split('–');  // en-dash
+        const bs = parts[0] ? parts[0].trim() : '';
+        const be = parts[1] ? parts[1].trim() : '';
+        qeAddBlock(bs, be);
+    });
+
+    document.getElementById('qe-add-block').style.display = (qeBlockCount >= 2) ? 'none' : '';
+    document.getElementById('qe-modal').style.display = 'flex';
+}
+
+function closeQuickEdit() {
+    document.getElementById('qe-modal').style.display = 'none';
+    qeAgentPk = null; qeDate = null;
+}
+
+function qeAddBlock(startVal, endVal) {
+    if (qeBlockCount >= 2) return;
+    const n = qeBlockCount;
+    qeBlockCount++;
+    const row = document.createElement('div');
+    row.id = 'qe-block-' + n;
+    row.style.cssText = 'display:flex;gap:10px;align-items:flex-end;';
+    row.innerHTML = `
+        <div style="flex:1;">
+            <label style="display:block;font-size:11px;color:#888;font-weight:600;margin-bottom:4px;">Block ${n+2} Start</label>
+            <input type="time" id="qe-bs-${n}" value="${startVal || ''}"
+                style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:14px;box-sizing:border-box;">
+        </div>
+        <div style="flex:1;">
+            <label style="display:block;font-size:11px;color:#888;font-weight:600;margin-bottom:4px;">Block ${n+2} End</label>
+            <input type="time" id="qe-be-${n}" value="${endVal || ''}"
+                style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:14px;box-sizing:border-box;">
+        </div>
+        <button type="button" onclick="qeRemoveBlock(${n})"
+            style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:6px 10px;cursor:pointer;font-size:12px;flex-shrink:0;margin-bottom:1px;">
+            ✕
+        </button>`;
+    document.getElementById('qe-blocks').appendChild(row);
+    if (qeBlockCount >= 2) document.getElementById('qe-add-block').style.display = 'none';
+}
+
+function qeRemoveBlock(n) {
+    const row = document.getElementById('qe-block-' + n);
+    if (row) row.remove();
+    qeBlockCount--;
+    document.getElementById('qe-add-block').style.display = '';
+}
+
+async function saveQuickEdit() {
+    const start = document.getElementById('qe-start').value;
+    const end = document.getElementById('qe-end').value;
+    const permanent = document.getElementById('qe-permanent').checked;
+    const errEl = document.getElementById('qe-error');
+    const saveBtn = document.getElementById('qe-save');
+
+    if (!start || !end) {
+        errEl.textContent = 'Start and end time are required.';
+        errEl.style.display = 'block';
+        return;
+    }
+    errEl.style.display = 'none';
+    saveBtn.textContent = 'Saving…';
+    saveBtn.disabled = true;
+
+    const extra_blocks = [];
+    for (let n = 0; n < 2; n++) {
+        const bs = document.getElementById('qe-bs-' + n);
+        const be = document.getElementById('qe-be-' + n);
+        if (bs && be && bs.value && be.value) extra_blocks.push({start: bs.value, end: be.value});
+    }
+
+    try {
+        const resp = await fetch('{% url "shift_quick_edit" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({
+                agent_pk: qeAgentPk,
+                date: qeDate,
+                start, end,
+                is_off: false,
+                permanent,
+                extra_blocks,
+            }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            // Update the cell display
+            const cell = document.getElementById('cell-' + qeAgentPk + '-' + qeDate);
+            if (cell) {
+                const schedDiv = cell.querySelector('.sched-cell-wrap div');
+                if (schedDiv) schedDiv.firstChild.textContent = data.scheduled;
+            }
+            closeQuickEdit();
+            // Show brief success toast
+            showStatus('✓ Schedule updated', '#166534', '#dcfce7');
+            setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
+        } else {
+            errEl.textContent = data.error || 'Save failed.';
+            errEl.style.display = 'block';
+        }
+    } catch {
+        errEl.textContent = 'Network error — please try again.';
+        errEl.style.display = 'block';
+    }
+    saveBtn.textContent = 'Save Changes';
+    saveBtn.disabled = false;
+}
+
+document.getElementById('qe-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeQuickEdit();
+});
 </script>
 
 <script>

@@ -98,12 +98,12 @@
             {% endfor %}
             <th style="min-width:90px;padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:12px;">Offered</th>
             <th style="min-width:90px;padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;font-size:12px;">Earned</th>
-            <th style="min-width:100px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Actions</th>
+            <th style="min-width:80px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Edit Week</th>
         </tr>
     </thead>
     <tbody>
         {% for row in rows %}
-        <tr style="border-bottom:1px solid #e8e8e8;">
+        <tr data-agent="{{ row.agent.pk }}" style="border-bottom:1px solid #e8e8e8;">
             <td style="padding:10px 12px;font-weight:600;font-size:13px;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
                 <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
             </td>
@@ -111,7 +111,11 @@
             <td style="padding:6px 4px;text-align:center;vertical-align:middle;{% if cell.ot_shifts %}background:#f0fdf4;{% endif %}">
                 {% if cell.ot_shifts %}
                     {% for ot in cell.ot_shifts %}
-                    <div style="{% if not forloop.first %}border-top:1px solid #d1fae5;padding-top:6px;margin-top:6px;{% endif %}">
+                    <div class="ot-entry"
+                         data-pk="{{ ot.pk }}"
+                         data-offered="{% if ot.incentive_offered %}{{ ot.incentive_offered }}{% else %}0{% endif %}"
+                         data-earned="{% if ot.incentive_earned %}{{ ot.incentive_earned }}{% else %}0{% endif %}"
+                         style="position:relative;{% if not forloop.first %}border-top:1px solid #d1fae5;padding-top:6px;margin-top:6px;{% endif %}">
                         <div style="font-size:12px;font-weight:600;color:#16a34a;white-space:nowrap;">
                             {{ ot.start_time|time:"H:i" }}&ndash;{{ ot.end_time|time:"H:i" }}
                         </div>
@@ -131,6 +135,20 @@
                                 {% if ot.is_completed %}background:#dcfce7;color:#15803d;border-color:#86efac;{% else %}background:#f3f4f6;color:#6b7280;border-color:#d1d5db;{% endif %}">
                             {% if ot.is_completed %}Done{% else %}Mark Done{% endif %}
                         </button>
+                        <!-- Hover-reveal action buttons -->
+                        <div class="ot-row-actions" style="display:none;margin-top:4px;gap:4px;justify-content:center;">
+                            <a href="{% url 'overtime_week' %}?week_start={{ week_start|date:'Y-m-d' }}&agent={{ row.agent.pk }}"
+                               title="Edit this agent's OT week"
+                               style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;text-decoration:none;font-size:12px;">
+                               ✏
+                            </a>
+                            <button type="button"
+                                onclick="confirmDeleteOT({{ ot.pk }}, '{{ ot.start_time|time:"H:i" }}–{{ ot.end_time|time:"H:i" }}', '{{ row.agent }}')"
+                                title="Delete this OT shift"
+                                style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;cursor:pointer;font-size:12px;">
+                                🗑
+                            </button>
+                        </div>
                     </div>
                     {% endfor %}
                 {% else %}
@@ -139,11 +157,11 @@
             </td>
             {% endfor %}
             <!-- Offered total -->
-            <td style="padding:8px 10px;text-align:center;border-left:2px solid #eee;font-size:13px;font-weight:600;color:#1a5c2a;">
+            <td id="offered-{{ row.agent.pk }}" style="padding:8px 10px;text-align:center;border-left:2px solid #eee;font-size:13px;font-weight:600;color:#1a5c2a;">
                 {% if row.week_offered is not None %}${{ row.week_offered|floatformat:2 }}{% else %}&mdash;{% endif %}
             </td>
             <!-- Earned total -->
-            <td style="padding:8px 10px;text-align:center;font-size:13px;font-weight:600;color:#15803d;">
+            <td id="earned-{{ row.agent.pk }}" style="padding:8px 10px;text-align:center;font-size:13px;font-weight:600;color:#15803d;">
                 {% if row.week_earned is not None %}${{ row.week_earned|floatformat:2 }}{% else %}&mdash;{% endif %}
             </td>
             <td style="padding:8px 10px;text-align:center;border-left:2px solid #eee;">
@@ -158,7 +176,99 @@
 </table>
 </div>
 
+<!-- Delete confirmation modal -->
+<div id="delete-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 style="margin:0 0 8px;font-size:17px;color:#1a3a5c;">Delete OT Shift?</h3>
+        <p id="delete-modal-desc" style="margin:0 0 20px;font-size:14px;color:#555;line-height:1.5;"></p>
+        <p style="margin:0 0 24px;font-size:12px;color:#888;">This cannot be undone.</p>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button onclick="closeDeleteModal()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Cancel</button>
+            <button id="delete-modal-confirm" onclick="executeDelete()" style="padding:8px 20px;border:none;border-radius:6px;background:#dc2626;color:white;font-size:14px;font-weight:600;cursor:pointer;">Delete Shift</button>
+        </div>
+    </div>
+</div>
+
+<style>
+.ot-entry:hover .ot-row-actions { display: flex !important; }
+</style>
+
 <script>
+let pendingDeletePk = null;
+
+function confirmDeleteOT(pk, label, agentName) {
+    pendingDeletePk = pk;
+    document.getElementById('delete-modal-desc').textContent =
+        `Are you sure you want to delete the OT shift ${label} for ${agentName}?`;
+    const modal = document.getElementById('delete-modal');
+    modal.style.display = 'flex';
+}
+
+function closeDeleteModal() {
+    pendingDeletePk = null;
+    document.getElementById('delete-modal').style.display = 'none';
+}
+
+function executeDelete() {
+    if (!pendingDeletePk) return;
+    const pk = pendingDeletePk;
+    const csrfToken = getCookie('csrftoken');
+    document.getElementById('delete-modal-confirm').textContent = 'Deleting…';
+    document.getElementById('delete-modal-confirm').disabled = true;
+
+    fetch(`/overtime/${pk}/delete/`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrfToken, 'X-Requested-With': 'XMLHttpRequest'},
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.deleted) {
+            closeDeleteModal();
+            removeOTEntryFromDOM(pk);
+        }
+    })
+    .catch(() => {
+        closeDeleteModal();
+    })
+    .finally(() => {
+        const btn = document.getElementById('delete-modal-confirm');
+        if (btn) { btn.textContent = 'Delete Shift'; btn.disabled = false; }
+    });
+}
+
+function removeOTEntryFromDOM(pk) {
+    const entry = document.querySelector(`.ot-entry[data-pk="${pk}"]`);
+    if (!entry) return;
+
+    // Find the agent row to recalculate totals
+    const row = entry.closest('tr[data-agent]');
+    const agentPk = row ? row.dataset.agent : null;
+
+    // Remove entry from DOM
+    entry.remove();
+
+    // Recalculate offered/earned for this agent row
+    if (agentPk) {
+        const allEntries = document.querySelectorAll(`tr[data-agent="${agentPk}"] .ot-entry`);
+        let offered = 0, earned = 0, hasOffered = false, hasEarned = false;
+        allEntries.forEach(e => {
+            const o = parseFloat(e.dataset.offered) || 0;
+            const ea = parseFloat(e.dataset.earned) || 0;
+            if (o > 0) { offered += o; hasOffered = true; }
+            if (ea > 0) { earned += ea; hasEarned = true; }
+        });
+        const offeredCell = document.getElementById('offered-' + agentPk);
+        const earnedCell = document.getElementById('earned-' + agentPk);
+        if (offeredCell) offeredCell.textContent = hasOffered ? '$' + offered.toFixed(2) : '—';
+        if (earnedCell) earnedCell.textContent = hasEarned ? '$' + earned.toFixed(2) : '—';
+    }
+}
+
+// Close modal on backdrop click
+document.getElementById('delete-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeDeleteModal();
+});
+
 function toggleExportPanel() {
     const p = document.getElementById('export-panel');
     p.style.display = p.style.display === 'none' ? 'block' : 'none';
@@ -166,9 +276,7 @@ function toggleExportPanel() {
 
 function toggleComplete(btn) {
     const pk = btn.dataset.pk;
-    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]') ?
-        document.querySelector('[name=csrfmiddlewaretoken]').value :
-        getCookie('csrftoken');
+    const csrfToken = getCookie('csrftoken');
     fetch(`/overtime/${pk}/toggle-complete/`, {
         method: 'POST',
         headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json'},
@@ -176,15 +284,12 @@ function toggleComplete(btn) {
     .then(r => r.json())
     .then(data => {
         if (data.is_completed) {
-            btn.textContent = 'Completed';
+            btn.textContent = 'Done';
             btn.style.cssText = btn.style.cssText.replace(
                 /background:[^;]+;color:[^;]+;border-color:[^;]+/,
                 'background:#dcfce7;color:#15803d;border-color:#86efac'
             );
             btn.dataset.completed = 'true';
-            // show done badge
-            const doneSpan = btn.closest('td').querySelector('.done-badge');
-            if (doneSpan) doneSpan.style.display = 'block';
         } else {
             btn.textContent = 'Mark Done';
             btn.style.cssText = btn.style.cssText.replace(
