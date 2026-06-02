@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% load adherence_filters %}
+{% now "Y-m-d" as today_str %}
 {% block title %} - Codings{% endblock %}
 {% block content %}
 
@@ -26,33 +27,127 @@
     </div>
 </div>
 
+<style>
+/* ── Table base ─────────────────────────────────────────────────────────────── */
+#cod-table {
+    table-layout: fixed;
+    border-collapse: collapse;
+    min-width: 1050px;
+}
+
+/* ── Frozen columns ─────────────────────────────────────────────────────────── */
+.fc { position: sticky; z-index: 2; }
+.fc-1 { left: 0;     width: 100px; min-width: 100px; }
+.fc-2 { left: 100px; width: 118px; min-width: 118px; }
+.fc-3 { left: 218px; width: 126px; min-width: 126px; }
+.fc-4 { left: 344px; width: 64px;  min-width: 64px;  box-shadow: 2px 0 0 #c8d4e0; }
+
+/* ── Sticky header ──────────────────────────────────────────────────────────── */
+#cod-table thead th {
+    position: sticky; top: 0; z-index: 5;
+    background: #f0f4f8;
+    padding: 6px 4px;
+    border-bottom: 2px solid #c8d4e0;
+    border-right: 1px solid #dde3ea;
+    font-size: 11px; font-weight: 700; color: #555;
+    text-align: center; white-space: nowrap;
+}
+#cod-table thead th.th-left { text-align: left; padding-left: 8px; }
+#cod-table thead .fc { z-index: 8; }
+
+/* ── Day headers ────────────────────────────────────────────────────────────── */
+.th-day  { width: 140px; min-width: 140px; }
+.day-name { font-size: 12px; font-weight: 700; }
+.day-date { font-size: 10px; font-weight: 400; color: #888; margin-top: 1px; }
+
+/* ── Alternating rows ───────────────────────────────────────────────────────── */
+tbody tr.row-a { background: #fff; }
+tbody tr.row-b { background: #f9fafb; }
+tbody tr.row-a .fc { background: #fff; }
+tbody tr.row-b .fc { background: #f9fafb; }
+
+/* ── Agent info cells ───────────────────────────────────────────────────────── */
+.ai-cell {
+    padding: 4px 7px;
+    vertical-align: top;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border-right: 1px solid #eee;
+    border-bottom: 1px solid #eee;
+}
+.ai-cell.sup-col  { font-size: 10px; color: #888; }
+.ai-cell.name-col { font-size: 12px; font-weight: 600; color: #1a3a5c; padding-top: 6px; }
+.ai-cell.five9-col { font-size: 10px; color: #777; }
+.ai-cell.id-col   { font-size: 10px; color: #999; text-align: center; }
+
+/* ── Day cells ──────────────────────────────────────────────────────────────── */
+.day-cell {
+    padding: 4px 4px;
+    vertical-align: top;
+    border-right: 1px solid #eee;
+    border-bottom: 1px solid #eee;
+}
+
+/* ── Today column ───────────────────────────────────────────────────────────── */
+.today-col         { background-color: #eff6ff !important; }
+thead .today-col   { background-color: #dbeafe !important; color: #1d4ed8 !important; }
+
+/* ── Supervisor divider rows ────────────────────────────────────────────────── */
+.sup-divider-row { background: #e8ecf0 !important; }
+.sup-divider-cell {
+    padding: 3px 12px;
+    font-size: 10px; font-weight: 700;
+    color: #5a6474; text-transform: uppercase; letter-spacing: 0.7px;
+    border-bottom: 1px solid #d0d7e0;
+}
+
+/* ── Total cell ─────────────────────────────────────────────────────────────── */
+.total-cell {
+    padding: 4px 4px;
+    text-align: center; vertical-align: middle;
+    border-left: 2px solid #c8d4e0;
+    border-bottom: 1px solid #eee;
+    width: 70px; min-width: 70px;
+}
+</style>
+
 <div class="card" style="overflow-x:auto;padding:0;">
-<table style="table-layout:auto;min-width:1000px;border-collapse:collapse;">
+<table id="cod-table">
     <thead>
-        <tr style="background:#f0f4f8;">
-            <th style="width:180px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+        <tr>
+            <th class="fc fc-1 th-left">Supervisor</th>
+            <th class="fc fc-2 th-left">Agent</th>
+            <th class="fc fc-3 th-left">Five9</th>
+            <th class="fc fc-4 th-left" style="text-align:center;">ID</th>
             {% for d in week_dates %}
-            <th style="min-width:140px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
-                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
-                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+            <th class="th-day {% if d|date:'Y-m-d' == today_str %}today-col{% endif %}">
+                <div class="day-name">{{ d|date:"D" }}</div>
+                <div class="day-date">{{ d|date:"M d" }}</div>
             </th>
             {% endfor %}
-            <th style="width:70px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:11px;color:#555;">Total<br>Coded</th>
+            <th style="width:70px;min-width:70px;font-size:10px;color:#555;border-left:2px solid #c8d4e0;">Total<br>Coded</th>
         </tr>
     </thead>
     <tbody>
         {% for row in rows %}
-        <tr style="border-bottom:1px solid #e8e8e8;">
-            <td style="padding:8px 10px;font-size:13px;font-weight:600;vertical-align:top;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
-                {{ row.agent }}
-                {% for p in row.agent.five9_profiles.all %}<div style="font-size:10px;color:#888;font-weight:400;margin-top:1px;">{{ p.five9_username }}{% if p.label %} ({{ p.label }}){% endif %}</div>{% endfor %}
-                {% if row.agent.employee_id %}<div style="font-size:10px;color:#aaa;font-weight:400;">ID: {{ row.agent.employee_id }}</div>{% endif %}
-                {% if row.agent.supervisor %}<div style="font-size:10px;color:#aaa;font-weight:400;">{{ row.agent.supervisor }}</div>{% endif %}
-            </td>
+
+        {% if not selected_supervisor %}
+        {% ifchanged row.agent.supervisor.pk %}
+        <tr class="sup-divider-row">
+            <td colspan="12" class="sup-divider-cell">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
+        </tr>
+        {% endifchanged %}
+        {% endif %}
+
+        <tr class="{% cycle 'row-a' 'row-b' %}">
+            <td class="ai-cell sup-col  fc fc-1">{{ row.agent.supervisor|default:"—" }}</td>
+            <td class="ai-cell name-col fc fc-2">{{ row.agent }}</td>
+            <td class="ai-cell five9-col fc fc-3">{% with p=row.agent.five9_profiles.all.0 %}{% if p %}{{ p.five9_username }}{% else %}—{% endif %}{% endwith %}</td>
+            <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
 
             {% for cell in row.cells %}
-            <td style="padding:4px 4px;vertical-align:top;{% if cell.entries %}background:#fffde7;{% endif %}"
-                data-agent="{{ row.agent.pk }}" data-date="{{ cell.date|date:'Y-m-d' }}">
+            <td class="day-cell {% if cell.date|date:'Y-m-d' == today_str %}today-col{% endif %}{% if cell.entries %} has-entries{% endif %}"
+                data-agent="{{ row.agent.pk }}" data-date="{{ cell.date|date:'Y-m-d' }}"
+                {% if cell.entries %}style="background:#fffde7;"{% endif %}>
 
                 <!-- Existing entries -->
                 <div id="cell-entries-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}">
@@ -106,15 +201,16 @@
             {% endfor %}
 
             <!-- Row total -->
-            <td style="padding:8px 6px;text-align:center;vertical-align:middle;border-left:2px solid #eee;">
+            <td class="total-cell">
                 <span id="row-total-{{ row.agent.pk }}"
                     style="font-size:11px;font-family:monospace;font-weight:{% if row.total_seconds %}600{% else %}400{% endif %};color:{% if row.total_seconds %}#5d6d7e{% else %}#ccc{% endif %};">
                     {{ row.total_seconds|seconds_to_hhmmss|default:"—" }}
                 </span>
             </td>
         </tr>
+
         {% empty %}
-        <tr><td colspan="10" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+        <tr><td colspan="12" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
         {% endfor %}
     </tbody>
 </table>
@@ -221,7 +317,6 @@ async function submitCoding(agentId, dateStr) {
         return;
     }
 
-    // Disable button immediately to prevent double-submit
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     showStatus('Saving…', '#b45309', '#fef3c7');
 
@@ -234,7 +329,6 @@ async function submitCoding(agentId, dateStr) {
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || 'error');
 
-        // Add entry card to DOM
         const entriesDiv = document.getElementById(`cell-entries-${agentId}-${dateStr}`);
         const card = document.createElement('div');
         card.id = `coding-entry-${data.id}`;
@@ -250,7 +344,6 @@ async function submitCoding(agentId, dateStr) {
         `;
         entriesDiv.appendChild(card);
 
-        // Reset form fields
         document.getElementById(`start-${agentId}-${dateStr}`).value = '';
         document.getElementById(`end-${agentId}-${dateStr}`).value   = '';
         document.getElementById(`notes-${agentId}-${dateStr}`).value = '';

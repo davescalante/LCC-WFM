@@ -743,6 +743,7 @@ def codings_week(request):
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
     agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
+        'supervisor__user__last_name', 'supervisor__user__first_name',
         'user__last_name', 'user__first_name'
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
