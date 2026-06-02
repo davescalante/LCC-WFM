@@ -133,6 +133,20 @@ class ShiftTemplate(models.Model):
         return f"{self.agent} {day} {self.start_time}–{self.end_time}"
 
 
+class ShiftTemplateBlock(models.Model):
+    shift_template = models.ForeignKey(ShiftTemplate, on_delete=models.CASCADE, related_name='extra_blocks')
+    block_number = models.IntegerField()  # 2 or 3
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        unique_together = ('shift_template', 'block_number')
+        ordering = ['block_number']
+
+    def __str__(self):
+        return f"Block {self.block_number}: {self.start_time}–{self.end_time}"
+
+
 class Shift(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='shifts')
     date = models.DateField()
@@ -146,6 +160,20 @@ class Shift(models.Model):
 
     def __str__(self):
         return f"{self.agent} - {self.date} {self.start_time}-{self.end_time}"
+
+
+class ShiftBlock(models.Model):
+    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name='extra_blocks')
+    block_number = models.IntegerField()  # 2 or 3
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        unique_together = ('shift', 'block_number')
+        ordering = ['block_number']
+
+    def __str__(self):
+        return f"Block {self.block_number}: {self.start_time}–{self.end_time}"
 
 
 class OvertimeShift(models.Model):
@@ -165,7 +193,6 @@ class OvertimeShift(models.Model):
     notes = models.TextField(blank=True)
 
     class Meta:
-        unique_together = ('agent', 'date')
         ordering = ['date']
 
     def __str__(self):

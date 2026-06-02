@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, OvertimeShift, log_action
+from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -423,7 +423,7 @@ def shift_week(request):
             partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
-                    ShiftTemplate.objects.update_or_create(
+                    tmpl, _ = ShiftTemplate.objects.update_or_create(
                         agent=agent, day_of_week=i,
                         defaults={
                             'start_time': start or '09:00',
@@ -432,6 +432,15 @@ def shift_week(request):
                             'notes': notes,
                         }
                     )
+                    ShiftTemplateBlock.objects.filter(shift_template=tmpl).delete()
+                    for n in (2, 3):
+                        b_start = request.POST.get(f'day_{i}_block{n}_start', '').strip()
+                        b_end = request.POST.get(f'day_{i}_block{n}_end', '').strip()
+                        if b_start and b_end:
+                            ShiftTemplateBlock.objects.create(
+                                shift_template=tmpl, block_number=n,
+                                start_time=b_start, end_time=b_end
+                            )
                 elif (start and not end) or (end and not start):
                     partial_days.append(DAYS[i])
             if partial_days:
@@ -443,7 +452,7 @@ def shift_week(request):
             partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
-                    Shift.objects.update_or_create(
+                    shift_obj, _ = Shift.objects.update_or_create(
                         agent=agent, date=day_date,
                         defaults={
                             'start_time': start or '09:00',
@@ -452,6 +461,15 @@ def shift_week(request):
                             'notes': notes,
                         }
                     )
+                    ShiftBlock.objects.filter(shift=shift_obj).delete()
+                    for n in (2, 3):
+                        b_start = request.POST.get(f'day_{i}_block{n}_start', '').strip()
+                        b_end = request.POST.get(f'day_{i}_block{n}_end', '').strip()
+                        if b_start and b_end:
+                            ShiftBlock.objects.create(
+                                shift=shift_obj, block_number=n,
+                                start_time=b_start, end_time=b_end
+                            )
                 elif (start and not end) or (end and not start):
                     partial_days.append(DAYS[i])
             if partial_days:
@@ -478,7 +496,7 @@ def shift_week(request):
                 for i, day_date, is_off, start, end, notes in configs:
                     target = current_week + timedelta(days=i)
                     if is_off or (start and end):
-                        Shift.objects.update_or_create(
+                        shift_obj, _ = Shift.objects.update_or_create(
                             agent=agent, date=target,
                             defaults={
                                 'start_time': start or '09:00',
@@ -487,6 +505,15 @@ def shift_week(request):
                                 'notes': notes,
                             }
                         )
+                        ShiftBlock.objects.filter(shift=shift_obj).delete()
+                        for n in (2, 3):
+                            b_start = request.POST.get(f'day_{i}_block{n}_start', '').strip()
+                            b_end = request.POST.get(f'day_{i}_block{n}_end', '').strip()
+                            if b_start and b_end:
+                                ShiftBlock.objects.create(
+                                    shift=shift_obj, block_number=n,
+                                    start_time=b_start, end_time=b_end
+                                )
                 current_week += timedelta(days=7)
                 week_count += 1
             log_action(request.user, 'Saved date-range schedule',
@@ -508,11 +535,35 @@ def shift_week(request):
         for t in ShiftTemplate.objects.filter(agent_id=selected_agent_id):
             templates[t.day_of_week] = t
 
+    # Fetch extra blocks for pre-filling
+    tmpl_extra_map = {}  # day_of_week -> list of ShiftTemplateBlock
+    for tmpl in templates.values():
+        blocks = list(tmpl.extra_blocks.all())
+        if blocks:
+            tmpl_extra_map[tmpl.day_of_week] = blocks
+
+    shift_extra_map = {}  # date -> list of ShiftBlock
+    for shift_obj in overrides.values():
+        blocks = list(shift_obj.extra_blocks.all())
+        if blocks:
+            shift_extra_map[shift_obj.date] = blocks
+
     days = []
     for i, day_date in enumerate(week_dates):
         override = overrides.get(day_date)
         tmpl = templates.get(i)
         src = override or tmpl
+        # Extra blocks for this day
+        if override:
+            raw_extra = shift_extra_map.get(day_date, [])
+        elif tmpl:
+            raw_extra = tmpl_extra_map.get(i, [])
+        else:
+            raw_extra = []
+        extra_blocks = [
+            {'n': b.block_number, 'start': b.start_time.strftime('%H:%M'), 'end': b.end_time.strftime('%H:%M')}
+            for b in raw_extra
+        ]
         days.append({
             'index': i,
             'name': DAYS[i],
@@ -523,6 +574,7 @@ def shift_week(request):
             'notes': src.notes if src else '',
             'from_template': bool(tmpl and not override),
             'has_override': bool(override),
+            'extra_blocks': extra_blocks,
         })
 
     has_any_template = bool(templates)
@@ -615,8 +667,10 @@ def overtime_list(request):
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
 
-    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
-    ot_map = {(s.agent_id, s.date): s for s in ot_qs}
+    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents).order_by('start_time')
+    ot_map = {}
+    for s in ot_qs:
+        ot_map.setdefault((s.agent_id, s.date), []).append(s)
 
     rows = []
     for agent in agents:
@@ -624,14 +678,16 @@ def overtime_list(request):
         week_offered = None
         week_earned = None
         for day_date in week_dates:
-            ot_shift = ot_map.get((agent.pk, day_date))
-            offered = ot_shift.incentive_offered() if ot_shift else None
-            earned = ot_shift.incentive_earned() if ot_shift else None
-            if offered is not None:
-                week_offered = (week_offered or 0) + float(offered)
-            if earned is not None:
-                week_earned = (week_earned or 0) + float(earned)
-            cells.append({'date': day_date, 'ot_shift': ot_shift, 'offered': offered, 'earned': earned})
+            ot_shifts = ot_map.get((agent.pk, day_date), [])
+            offered_vals = [s.incentive_offered() for s in ot_shifts if s.incentive_offered() is not None]
+            earned_vals = [s.incentive_earned() for s in ot_shifts if s.incentive_earned() is not None]
+            cell_offered = sum(offered_vals) if offered_vals else None
+            cell_earned = sum(earned_vals) if earned_vals else None
+            if cell_offered is not None:
+                week_offered = (week_offered or 0) + float(cell_offered)
+            if cell_earned is not None:
+                week_earned = (week_earned or 0) + float(cell_earned)
+            cells.append({'date': day_date, 'ot_shifts': ot_shifts, 'offered': cell_offered, 'earned': cell_earned})
         rows.append({'agent': agent, 'cells': cells, 'week_offered': week_offered, 'week_earned': week_earned})
 
     return render(request, 'scheduling/overtime_list.html', {
@@ -669,47 +725,68 @@ def overtime_week(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
     if request.method == 'POST' and selected_agent_id:
+        from decimal import Decimal, InvalidOperation
         agent = get_object_or_404(Agent, pk=selected_agent_id)
-        for i, day_date in enumerate(week_dates):
-            ot_start = request.POST.get(f'day_{i}_start', '').strip()
-            ot_end = request.POST.get(f'day_{i}_end', '').strip()
-            ot_notes = request.POST.get(f'day_{i}_notes', '').strip()
-            ot_incentive_type = request.POST.get(f'day_{i}_incentive_type', 'none').strip()
-            ot_incentivized_hours = request.POST.get(f'day_{i}_incentivized_hours', '').strip()
-            ot_base_rate = request.POST.get(f'day_{i}_base_hourly_rate', '').strip()
-            date_iso = day_date.isoformat()
 
-            if ot_start and ot_end:
-                from decimal import Decimal, InvalidOperation
+        for i, day_date in enumerate(week_dates):
+            count = int(request.POST.get(f'day_{i}_ot_count', 0) or 0)
+            submitted_pks = set()
+
+            for j in range(count):
+                pk_str = request.POST.get(f'day_{i}_ot_{j}_pk', '').strip()
+                remove = request.POST.get(f'day_{i}_ot_{j}_remove', '').strip()
+                start = request.POST.get(f'day_{i}_ot_{j}_start', '').strip()
+                end = request.POST.get(f'day_{i}_ot_{j}_end', '').strip()
+                notes = request.POST.get(f'day_{i}_ot_{j}_notes', '').strip()
+                incentive_type = request.POST.get(f'day_{i}_ot_{j}_incentive_type', 'none').strip()
+                if incentive_type not in ('none', 'time_and_a_half', 'power_hour'):
+                    incentive_type = 'none'
+                inc_hrs_str = request.POST.get(f'day_{i}_ot_{j}_incentivized_hours', '').strip()
+                base_rate_str = request.POST.get(f'day_{i}_ot_{j}_base_hourly_rate', '').strip()
                 try:
-                    inc_hrs = Decimal(ot_incentivized_hours) if ot_incentivized_hours else None
+                    inc_hrs = Decimal(inc_hrs_str) if inc_hrs_str else None
                 except InvalidOperation:
                     inc_hrs = None
                 try:
-                    base_rate = Decimal(ot_base_rate) if ot_base_rate else None
+                    base_rate = Decimal(base_rate_str) if base_rate_str else None
                 except InvalidOperation:
                     base_rate = None
 
-                _, created = OvertimeShift.objects.update_or_create(
-                    agent=agent,
-                    date=day_date,
-                    defaults={
-                        'start_time': ot_start,
-                        'end_time': ot_end,
-                        'notes': ot_notes,
-                        'incentive_type': ot_incentive_type if ot_incentive_type in ('none', 'time_and_a_half', 'power_hour') else 'none',
-                        'incentivized_hours': inc_hrs,
-                        'base_hourly_rate': base_rate,
-                    }
-                )
-                verb = 'Added' if created else 'Updated'
-                log_action(request.user, f'{verb} OT shift',
-                           f'{agent} on {date_iso}: {ot_start}–{ot_end}', agent=agent)
-            else:
-                deleted, _ = OvertimeShift.objects.filter(agent=agent, date=day_date).delete()
-                if deleted:
-                    log_action(request.user, 'Removed OT shift',
-                               f'{agent} on {date_iso}', agent=agent)
+                if remove == 'true':
+                    if pk_str:
+                        OvertimeShift.objects.filter(pk=pk_str, agent=agent).delete()
+                    continue
+
+                if not (start and end):
+                    if pk_str:
+                        OvertimeShift.objects.filter(pk=pk_str, agent=agent).delete()
+                    continue
+
+                defaults = {
+                    'start_time': start,
+                    'end_time': end,
+                    'notes': notes,
+                    'incentive_type': incentive_type,
+                    'incentivized_hours': inc_hrs,
+                    'base_hourly_rate': base_rate,
+                }
+
+                if pk_str:
+                    try:
+                        ot_obj = OvertimeShift.objects.get(pk=pk_str, agent=agent)
+                        for k, v in defaults.items():
+                            setattr(ot_obj, k, v)
+                        ot_obj.save()
+                        submitted_pks.add(ot_obj.pk)
+                        log_action(request.user, 'Updated OT shift',
+                                   f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
+                    except OvertimeShift.DoesNotExist:
+                        pass
+                else:
+                    ot_obj = OvertimeShift.objects.create(agent=agent, date=day_date, **defaults)
+                    submitted_pks.add(ot_obj.pk)
+                    log_action(request.user, 'Added OT shift',
+                               f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
 
         messages.success(request, f"OT shifts saved for {agent} — week of {week_start.strftime('%B %d, %Y')}.")
         return redirect(f"{reverse('overtime_list')}?week_start={week_start.isoformat()}")
@@ -717,6 +794,8 @@ def overtime_week(request):
     # GET: pre-fill from existing OT records for selected agent
     days = []
     agent_hourly_rate = ''
+    agent_schedule = {}  # day_index -> list of {start, end} for overlap check
+
     if selected_agent_id:
         try:
             selected_agent = Agent.objects.get(pk=selected_agent_id)
@@ -725,26 +804,43 @@ def overtime_week(request):
         except Agent.DoesNotExist:
             selected_agent = None
 
-        ot_map = {
-            s.date: s
-            for s in OvertimeShift.objects.filter(agent_id=selected_agent_id, date__in=week_dates)
-        }
+        # Build scheduled blocks for overlap check
+        for tmpl in ShiftTemplate.objects.filter(agent_id=selected_agent_id):
+            if not tmpl.is_off and tmpl.start_time and tmpl.end_time:
+                blocks = [{'start': tmpl.start_time.strftime('%H:%M'), 'end': tmpl.end_time.strftime('%H:%M')}]
+                for eb in tmpl.extra_blocks.all():
+                    blocks.append({'start': eb.start_time.strftime('%H:%M'), 'end': eb.end_time.strftime('%H:%M')})
+                agent_schedule[tmpl.day_of_week] = blocks
+
+        # All OT shifts for this agent this week, grouped by date
+        ot_by_date = {}
+        for s in OvertimeShift.objects.filter(agent_id=selected_agent_id, date__in=week_dates).order_by('start_time'):
+            ot_by_date.setdefault(s.date, []).append(s)
+
         for i, day_date in enumerate(week_dates):
-            ot_shift = ot_map.get(day_date)
+            day_ot_shifts = ot_by_date.get(day_date, [])
+            ot_entries = []
+            for j, s in enumerate(day_ot_shifts):
+                ot_entries.append({
+                    'j': j,
+                    'pk': s.pk,
+                    'start': s.start_time.strftime('%H:%M'),
+                    'end': s.end_time.strftime('%H:%M'),
+                    'notes': s.notes,
+                    'incentive_type': s.incentive_type,
+                    'incentivized_hours': str(s.incentivized_hours) if s.incentivized_hours is not None else '',
+                    'base_hourly_rate': str(s.base_hourly_rate) if s.base_hourly_rate is not None else agent_hourly_rate,
+                })
             days.append({
                 'index': i,
                 'name': DAYS[i],
                 'date': day_date,
-                'start': ot_shift.start_time.strftime('%H:%M') if ot_shift else '',
-                'end': ot_shift.end_time.strftime('%H:%M') if ot_shift else '',
-                'notes': ot_shift.notes if ot_shift else '',
-                'has_ot': bool(ot_shift),
-                'incentive_type': ot_shift.incentive_type if ot_shift else 'none',
-                'incentivized_hours': str(ot_shift.incentivized_hours) if ot_shift and ot_shift.incentivized_hours is not None else '',
-                'base_hourly_rate': str(ot_shift.base_hourly_rate) if ot_shift and ot_shift.base_hourly_rate is not None else agent_hourly_rate,
-                'ot_pk': ot_shift.pk if ot_shift else None,
+                'ot_entries': ot_entries,
+                'has_ot': bool(day_ot_shifts),
+                'ot_count': len(day_ot_shifts),
             })
 
+    import json
     return render(request, 'scheduling/overtime_week.html', {
         'agents': agents,
         'selected_agent_id': int(selected_agent_id) if selected_agent_id else None,
@@ -755,6 +851,7 @@ def overtime_week(request):
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'week_start_iso': week_start.isoformat(),
         'agent_hourly_rate': agent_hourly_rate,
+        'agent_schedule_json': json.dumps(agent_schedule),
     })
 
 

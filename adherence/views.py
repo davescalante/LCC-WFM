@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 
-from scheduling.models import Shift, ShiftTemplate, Agent, Five9Profile, OvertimeShift, log_action
+from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
@@ -114,6 +114,16 @@ def _hours_morning(shift):
         secs = e.hour * 3600 + e.minute * 60 + e.second
         return Decimal(str(round(secs / 3600, 6)))
     return Decimal('0')
+
+
+def _block_hours(start_time, end_time):
+    """Total hours for a time block; handles overnight."""
+    s = start_time.hour * 3600 + start_time.minute * 60 + start_time.second
+    e = end_time.hour * 3600 + end_time.minute * 60 + end_time.second
+    secs = e - s
+    if secs < 0:
+        secs += 86400
+    return Decimal(str(round(max(0, secs) / 3600, 6)))
 
 
 # ── Cost of Schedule ──────────────────────────────────────────────────────────
@@ -253,13 +263,53 @@ def _build_maps(agents, week_dates):
         key = (c.agent_id, c.date)
         coded_map[key] = coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
 
+    # Multiple OT per day — list-valued map
     ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
-    ot_map = {(s.agent_id, s.date): s for s in ot_qs}
+    ot_map = {}
+    for s in ot_qs:
+        ot_map.setdefault((s.agent_id, s.date), []).append(s)
 
-    return shift_map, record_map, coded_map, ot_map
+    # Extra schedule blocks — ShiftTemplate level
+    tmpl_ids = [t.pk for t in template_map.values()]
+    tmpl_extra_hrs = {}
+    tmpl_extra_labels = {}
+    for block in ShiftTemplateBlock.objects.filter(shift_template_id__in=tmpl_ids):
+        tid = block.shift_template_id
+        tmpl_extra_hrs[tid] = tmpl_extra_hrs.get(tid, Decimal('0')) + _block_hours(block.start_time, block.end_time)
+        tmpl_extra_labels.setdefault(tid, []).append(
+            f"{block.start_time.strftime('%H:%M')}–{block.end_time.strftime('%H:%M')}"
+        )
+
+    # Extra schedule blocks — specific Shift level
+    shift_ids_list = [s.pk for s in shifts_qs]
+    shift_extra_hrs = {}
+    shift_extra_labels = {}
+    for block in ShiftBlock.objects.filter(shift_id__in=shift_ids_list):
+        sid = block.shift_id
+        shift_extra_hrs[sid] = shift_extra_hrs.get(sid, Decimal('0')) + _block_hours(block.start_time, block.end_time)
+        shift_extra_labels.setdefault(sid, []).append(
+            f"{block.start_time.strftime('%H:%M')}–{block.end_time.strftime('%H:%M')}"
+        )
+
+    # Combine into (agent_id, date) keyed maps
+    extra_hrs_map = {}
+    split_labels_map = {}
+    for (agent_id, day_date), src in shift_map.items():
+        if isinstance(src, ShiftTemplate):
+            extra = tmpl_extra_hrs.get(src.pk, Decimal('0'))
+            labels = tmpl_extra_labels.get(src.pk, [])
+        else:
+            extra = shift_extra_hrs.get(src.pk, Decimal('0'))
+            labels = shift_extra_labels.get(src.pk, [])
+        if extra:
+            extra_hrs_map[(agent_id, day_date)] = extra
+        if labels:
+            split_labels_map[(agent_id, day_date)] = labels
+
+    return shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map
 
 
-def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None):
+def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None):
     rows = []
     week_dates_set = set(week_dates)
     # Template map for cross-week prev-day lookups (keyed by (agent_id, weekday))
@@ -279,26 +329,27 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         for day_date in week_dates:
             shift = shift_map.get((agent.pk, day_date))
             record = record_map.get((agent.pk, day_date))
-            ot_shift = (ot_map or {}).get((agent.pk, day_date))
 
             is_off = shift.is_off if shift else False
             has_shift = shift is not None
 
             # Split overnight shifts at midnight — attribute each portion to its calendar day
-            sched_hrs = _hours_evening(shift)    # this day's evening portion
-            ot_hrs = _hours_evening(ot_shift)    # this day's OT evening portion
+            extra_block_hrs = (extra_hrs_map or {}).get((agent.pk, day_date), Decimal('0'))
+            sched_hrs = _hours_evening(shift) + extra_block_hrs
+            ot_shifts = (ot_map or {}).get((agent.pk, day_date)) or []
+            ot_hrs = sum(_hours_evening(s) for s in ot_shifts)
 
             # Previous calendar day: spillover from overnight shifts starting yesterday
             prev_date = day_date - timedelta(days=1)
             if prev_date in week_dates_set:
                 prev_shift = shift_map.get((agent.pk, prev_date))
-                prev_ot = (ot_map or {}).get((agent.pk, prev_date))
+                prev_ot_shifts = (ot_map or {}).get((agent.pk, prev_date)) or []
             else:
                 prev_shift = template_map.get((agent.pk, prev_date.weekday()))
-                prev_ot = None
+                prev_ot_shifts = []
             prev_not_off = prev_shift is not None and not getattr(prev_shift, 'is_off', False)
             spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
-            spill_hrs += _hours_morning(prev_ot) if prev_ot else Decimal('0')
+            spill_hrs += sum(_hours_morning(s) for s in prev_ot_shifts)
             has_spillover = spill_hrs > 0
 
             # Calendar-day scheduled hours = this evening + yesterday's post-midnight continuation
@@ -309,11 +360,13 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             if has_spillover and is_off:
                 if prev_not_off and prev_shift and _hours_morning(prev_shift) > 0:
                     spill_label = f"00:00–{prev_shift.end_time.strftime('%H:%M')}"
-                elif prev_ot and _hours_morning(prev_ot) > 0:
-                    spill_label = f"00:00–{prev_ot.end_time.strftime('%H:%M')}"
+                else:
+                    overnight_ots = [s for s in prev_ot_shifts if _hours_morning(s) > 0]
+                    if overnight_ots:
+                        spill_label = f"00:00–{max(s.end_time for s in overnight_ots).strftime('%H:%M')}"
 
             # A day is scheduled if there's a non-off shift, OT shift, or overnight spillover
-            is_scheduled_day = (has_shift and not is_off) or bool(ot_shift) or has_spillover
+            is_scheduled_day = (has_shift and not is_off) or bool(ot_shifts) or has_spillover
 
             effective_sched = Decimal('0')
 
@@ -360,8 +413,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             # Cell color — use total (login + codings) vs effective scheduled for color logic
             cell_total = (actual_hrs or Decimal('0')) + cell_coded_hrs
             # Off day with spillover is treated as a partial working day (not grey)
-            effective_is_off = is_off and not ot_shift and not has_spillover
-            if not has_shift and not ot_shift and not has_spillover:
+            effective_is_off = is_off and not ot_shifts and not has_spillover
+            if not has_shift and not ot_shifts and not has_spillover:
                 cell_color = '#fafafa'
             elif effective_is_off:
                 cell_color = STATUS_COLORS.get(status, '#f0f0f0') if status else '#f0f0f0'
@@ -392,7 +445,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                     else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift and not is_off
                     else ''
                 ),
-                'ot_time': f"{ot_shift.start_time.strftime('%H:%M')}–{ot_shift.end_time.strftime('%H:%M')}" if ot_shift else None,
+                'ot_times': [f"{s.start_time.strftime('%H:%M')}–{s.end_time.strftime('%H:%M')}" for s in ot_shifts],
+                'split_block_labels': (split_labels_map or {}).get((agent.pk, day_date), []),
                 'sched_hrs': cell_sched_hrs,
                 'missing_hrs': missing_hrs,
                 'is_off': effective_is_off,
@@ -615,7 +669,7 @@ def adherence_week(request):
     ).distinct()
 
     if request.method == 'POST':
-        shift_map, record_map, _, _ot = _build_maps(agents, week_dates)
+        shift_map, record_map, *_ = _build_maps(agents, week_dates)
         for agent in agents:
             for day_date in week_dates:
                 status_val = request.POST.get(f'status_{agent.pk}_{day_date.isoformat()}', '')
@@ -636,8 +690,8 @@ def adherence_week(request):
 
         return redirect(reverse('adherence_dashboard') + f'?week_start={week_start.isoformat()}')
 
-    shift_map, record_map, coded_map, ot_map = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map)
+    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map = _build_maps(agents, week_dates)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction
@@ -815,7 +869,7 @@ def payroll_export(request):
             return response
 
         # Default: export payroll summary
-        shift_map, record_map, coded_map, ot_map = _build_maps(agents, week_dates)
+        shift_map, record_map, coded_map, ot_map, *_ = _build_maps(agents, week_dates)
         adj_map = {
             pa.agent_id: pa.commission_deduction
             for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
@@ -842,13 +896,13 @@ def payroll_export(request):
             for day_date in week_dates:
                 shift = shift_map.get((agent.pk, day_date))
                 record = record_map.get((agent.pk, day_date))
-                ot_shift = ot_map.get((agent.pk, day_date))
+                ot_shifts_day = ot_map.get((agent.pk, day_date), [])
                 is_off = shift.is_off if shift else False
-                is_scheduled_day = (shift and not is_off) or bool(ot_shift)
+                is_scheduled_day = (shift and not is_off) or bool(ot_shifts_day)
 
                 if is_scheduled_day:
                     base_sched = _scheduled_hours(shift)
-                    ot_hrs = _ot_hours(ot_shift)
+                    ot_hrs = sum(_ot_hours(s) for s in ot_shifts_day)
                     raw_sched = base_sched + ot_hrs
                     status = record.status if record else ''
                     actual_hrs = record.actual_hours if record else None
@@ -896,8 +950,8 @@ def payroll_export(request):
         return response
 
     # GET — show preview with editable deductions
-    shift_map, record_map, coded_map, ot_map = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map)
+    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map = _build_maps(agents, week_dates)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction

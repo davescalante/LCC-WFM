@@ -71,17 +71,22 @@
                 {% if cell.scheduled %}
                 <div style="font-size:10px;color:#777;margin-bottom:2px;white-space:nowrap;">
                     {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
-                    {% else %}{{ cell.scheduled }}{% endif %}
+                    {% else %}{{ cell.scheduled }}
+                    {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
+                    {% endif %}
                 </div>
                 {% endif %}
-                {% if cell.ot_time %}
-                <div style="font-size:10px;color:#7c3aed;font-weight:600;margin-bottom:2px;white-space:nowrap;">OT {{ cell.ot_time }}</div>
-                {% endif %}
+                {% for ot_t in cell.ot_times %}
+                <div style="font-size:10px;color:#7c3aed;font-weight:600;margin-bottom:2px;white-space:nowrap;">OT {{ ot_t }}</div>
+                {% endfor %}
                 {% if cell.spill_label %}
                 <div style="font-size:10px;color:#7c3aed;font-weight:600;margin-bottom:2px;white-space:nowrap;">↳ {{ cell.spill_label }}</div>
                 {% endif %}
                 {% if cell.sched_hrs %}
-                <div style="font-size:10px;color:#aaa;margin-bottom:3px;">{{ cell.sched_hrs|to_hhmm }}h sched</div>
+                <div style="font-size:10px;color:#aaa;margin-bottom:3px;{% if cell.split_block_labels %}cursor:help;{% endif %}"
+                    {% if cell.split_block_labels %}title="Split: {{ cell.scheduled }} + {{ cell.split_block_labels|join:', ' }}"{% endif %}>
+                    {{ cell.sched_hrs|to_hhmm }}h sched{% if cell.split_block_labels %} ⊕{% endif %}
+                </div>
                 {% endif %}
                 <select onchange="onStatusChange(this)"
                     style="width:100%;font-size:11px;padding:2px 2px;border:1px solid #ccc;border-radius:3px;background:transparent;">

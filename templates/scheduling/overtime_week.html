@@ -48,73 +48,114 @@
         <h2 style="margin-bottom:16px;">Week of {{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</h2>
 
         {% for day in days %}
-        <div class="ot-day-block" id="day-block-{{ day.index }}" style="border:1px solid #e8e8e8;border-radius:8px;margin-bottom:12px;overflow:hidden;">
-            <!-- Main row -->
-            <div style="display:grid;grid-template-columns:120px 100px 130px 130px 1fr;gap:10px;align-items:end;padding:12px 14px;{% if day.has_ot %}background:#f0fdf4;{% else %}background:#fafafa;{% endif %}">
+        <div class="ot-day-block" id="day-block-{{ day.index }}"
+            style="border:1px solid #e8e8e8;border-radius:8px;margin-bottom:12px;overflow:hidden;">
+
+            <!-- Day header -->
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;
+                background:{% if day.has_ot %}#f0fdf4{% else %}#fafafa{% endif %};">
                 <div>
-                    <div style="font-weight:700;font-size:14px;color:#1a3a5c;">{{ day.name }}</div>
-                    <div style="font-size:12px;color:#888;">{{ day.date|date:"M d" }}</div>
+                    <span style="font-weight:700;font-size:14px;color:#1a3a5c;">{{ day.name }}</span>
+                    <span style="font-size:12px;color:#888;margin-left:8px;">{{ day.date|date:"M d" }}</span>
                     {% if day.has_ot %}
-                    <div style="font-size:10px;color:#16a34a;font-weight:600;margin-top:2px;">OT scheduled</div>
+                    <span style="font-size:10px;color:#16a34a;font-weight:600;margin-left:8px;">OT scheduled</span>
                     {% endif %}
                 </div>
-                <div></div>
-                <div>
-                    <label style="font-size:11px;color:#888;margin-bottom:3px;">Start Time</label>
-                    <input type="time" name="day_{{ day.index }}_start" id="d{{ day.index }}_start"
-                        value="{{ day.start }}" onchange="onTimeChange({{ day.index }})">
-                </div>
-                <div>
-                    <label style="font-size:11px;color:#888;margin-bottom:3px;">End Time</label>
-                    <input type="time" name="day_{{ day.index }}_end" id="d{{ day.index }}_end"
-                        value="{{ day.end }}" onchange="onTimeChange({{ day.index }})">
-                </div>
-                <div>
-                    <label style="font-size:11px;color:#888;margin-bottom:3px;">Notes</label>
-                    <input type="text" name="day_{{ day.index }}_notes"
-                        value="{{ day.notes }}" placeholder="Optional">
-                </div>
+                <button type="button" onclick="addOTShift({{ day.index }})"
+                    id="add-ot-btn-{{ day.index }}"
+                    style="background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;border-radius:4px;
+                        padding:4px 12px;font-size:12px;cursor:pointer;
+                        {% if day.ot_count >= 3 %}display:none;{% endif %}">
+                    + Add OT Shift
+                </button>
             </div>
 
-            <!-- Incentive section (shown only when times are filled) -->
-            <div id="incentive-{{ day.index }}" style="display:{% if day.has_ot %}block{% else %}none{% endif %};border-top:1px solid #e0f0e0;background:#f8fffe;padding:12px 14px;">
-                <input type="hidden" name="day_{{ day.index }}_incentive_type" id="inc_type_{{ day.index }}" value="{{ day.incentive_type }}">
+            <!-- OT shift entries for this day -->
+            <div id="ot-entries-{{ day.index }}" style="padding:{% if day.has_ot %}10px 14px{% else %}0 14px{% endif %};">
+                <!-- Hidden count field (updated by JS) -->
+                <input type="hidden" name="day_{{ day.index }}_ot_count" id="ot-count-{{ day.index }}"
+                    value="{{ day.ot_count }}">
 
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
-                    <span style="font-size:12px;font-weight:600;color:#555;margin-right:4px;">Incentive:</span>
-                    <button type="button" class="inc-btn" id="btn_none_{{ day.index }}"
-                        onclick="setIncentive({{ day.index }}, 'none')"
-                        style="padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #ddd;">
-                        No Incentive
-                    </button>
-                    <button type="button" class="inc-btn" id="btn_half_{{ day.index }}"
-                        onclick="setIncentive({{ day.index }}, 'time_and_a_half')"
-                        style="padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #ddd;">
-                        1.5x Time &amp; a Half
-                    </button>
-                    <button type="button" class="inc-btn" id="btn_power_{{ day.index }}"
-                        onclick="setIncentive({{ day.index }}, 'power_hour')"
-                        style="padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;border:1px solid #ddd;">
-                        2x Power Hour
-                    </button>
-                </div>
+                {% for entry in day.ot_entries %}
+                <div class="ot-entry" id="ot-entry-{{ day.index }}-{{ entry.j }}"
+                    style="border:1px solid #d1fae5;border-radius:6px;margin-bottom:8px;overflow:hidden;background:#f0fdf4;">
+                    <input type="hidden" name="day_{{ day.index }}_ot_{{ entry.j }}_pk" value="{{ entry.pk }}">
+                    <input type="hidden" name="day_{{ day.index }}_ot_{{ entry.j }}_remove" id="remove-{{ day.index }}-{{ entry.j }}" value="">
+                    <input type="hidden" name="day_{{ day.index }}_ot_{{ entry.j }}_incentive_type"
+                        id="inc_type_{{ day.index }}_{{ entry.j }}" value="{{ entry.incentive_type }}">
 
-                <!-- Details shown only when incentive is active -->
-                <div id="inc-details-{{ day.index }}" style="display:{% if day.incentive_type != 'none' %}flex{% else %}none{% endif %};gap:16px;align-items:end;flex-wrap:wrap;">
-                    <div>
-                        <label style="font-size:11px;color:#888;margin-bottom:3px;">Incentivized Hours</label>
-                        <input type="number" name="day_{{ day.index }}_incentivized_hours" id="inc_hrs_{{ day.index }}"
-                            value="{{ day.incentivized_hours }}" min="0" max="24" step="0.25" style="width:110px;"
-                            oninput="calcPay({{ day.index }})">
+                    <!-- Times row -->
+                    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;flex-wrap:wrap;">
+                        <span style="font-size:11px;color:#555;font-weight:600;white-space:nowrap;">OT Shift</span>
+                        <input type="time" name="day_{{ day.index }}_ot_{{ entry.j }}_start"
+                            id="ot_start_{{ day.index }}_{{ entry.j }}"
+                            value="{{ entry.start }}"
+                            onchange="onOTTimeChange({{ day.index }}, {{ entry.j }})"
+                            style="width:120px;margin:0;">
+                        <span style="color:#aaa;font-size:12px;">to</span>
+                        <input type="time" name="day_{{ day.index }}_ot_{{ entry.j }}_end"
+                            id="ot_end_{{ day.index }}_{{ entry.j }}"
+                            value="{{ entry.end }}"
+                            onchange="onOTTimeChange({{ day.index }}, {{ entry.j }})"
+                            style="width:120px;margin:0;">
+                        <input type="text" name="day_{{ day.index }}_ot_{{ entry.j }}_notes"
+                            value="{{ entry.notes }}" placeholder="Notes"
+                            style="flex:1;min-width:120px;margin:0;font-size:13px;">
+                        <button type="button" onclick="removeOTShift({{ day.index }}, {{ entry.j }})"
+                            style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;
+                                padding:3px 10px;font-size:11px;cursor:pointer;flex-shrink:0;">
+                            Remove
+                        </button>
                     </div>
-                    <div>
-                        <label style="font-size:11px;color:#888;margin-bottom:3px;">Base Hourly Rate ($)</label>
-                        <input type="number" name="day_{{ day.index }}_base_hourly_rate" id="inc_rate_{{ day.index }}"
-                            value="{{ day.base_hourly_rate|default:agent_hourly_rate }}" min="0" step="0.01" style="width:110px;"
-                            oninput="calcPay({{ day.index }})">
+
+                    <!-- Incentive section -->
+                    <div id="incentive-{{ day.index }}-{{ entry.j }}"
+                        style="border-top:1px solid #d1fae5;background:#f8fffe;padding:10px 12px;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                            <span style="font-size:11px;font-weight:600;color:#555;">Incentive:</span>
+                            <button type="button" class="inc-btn" id="btn_none_{{ day.index }}_{{ entry.j }}"
+                                onclick="setIncentive({{ day.index }}, {{ entry.j }}, 'none')"
+                                style="padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #ddd;">
+                                No Incentive
+                            </button>
+                            <button type="button" class="inc-btn" id="btn_half_{{ day.index }}_{{ entry.j }}"
+                                onclick="setIncentive({{ day.index }}, {{ entry.j }}, 'time_and_a_half')"
+                                style="padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #ddd;">
+                                1.5x Time &amp; a Half
+                            </button>
+                            <button type="button" class="inc-btn" id="btn_power_{{ day.index }}_{{ entry.j }}"
+                                onclick="setIncentive({{ day.index }}, {{ entry.j }}, 'power_hour')"
+                                style="padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #ddd;">
+                                2x Power Hour
+                            </button>
+                        </div>
+                        <div id="inc-details-{{ day.index }}-{{ entry.j }}"
+                            style="display:{% if entry.incentive_type != 'none' %}flex{% else %}none{% endif %};gap:12px;align-items:end;flex-wrap:wrap;">
+                            <div>
+                                <label style="font-size:10px;color:#888;margin-bottom:2px;">Incentivized Hrs</label>
+                                <input type="number" name="day_{{ day.index }}_ot_{{ entry.j }}_incentivized_hours"
+                                    id="inc_hrs_{{ day.index }}_{{ entry.j }}"
+                                    value="{{ entry.incentivized_hours }}" min="0" max="24" step="0.25"
+                                    style="width:100px;margin:0;" oninput="calcPay({{ day.index }}, {{ entry.j }})">
+                            </div>
+                            <div>
+                                <label style="font-size:10px;color:#888;margin-bottom:2px;">Base Rate ($/hr)</label>
+                                <input type="number" name="day_{{ day.index }}_ot_{{ entry.j }}_base_hourly_rate"
+                                    id="inc_rate_{{ day.index }}_{{ entry.j }}"
+                                    value="{{ entry.base_hourly_rate }}" min="0" step="0.01"
+                                    style="width:100px;margin:0;" oninput="calcPay({{ day.index }}, {{ entry.j }})">
+                            </div>
+                            <div id="pay-preview-{{ day.index }}-{{ entry.j }}"
+                                style="font-size:12px;color:#1a5c2a;font-weight:600;padding-bottom:2px;"></div>
+                        </div>
                     </div>
-                    <div id="pay-preview-{{ day.index }}" style="font-size:13px;color:#1a5c2a;font-weight:600;padding-bottom:2px;"></div>
+
+                    <!-- Overlap warning -->
+                    <div id="overlap-warn-{{ day.index }}-{{ entry.j }}"
+                        style="display:none;background:#fef3c7;border-top:1px solid #fde68a;padding:6px 12px;font-size:11px;color:#92400e;">
+                    </div>
                 </div>
+                {% endfor %}
             </div>
         </div>
         {% endfor %}
@@ -135,91 +176,229 @@
 <style>
     label { display:block; font-size:13px; font-weight:600; margin-bottom:4px; color:#555; }
     select, input[type="date"], input[type="time"], input[type="text"], input[type="number"] {
-        width:100%; padding:7px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;
+        padding:7px 10px; border:1px solid #ddd; border-radius:4px; font-size:14px;
     }
-    .inc-btn.active-none  { background:#e2e8f0; color:#334155; border-color:#94a3b8; font-weight:600; }
-    .inc-btn.active-half  { background:#fef9c3; color:#854d0e; border-color:#fbbf24; font-weight:600; }
-    .inc-btn.active-power { background:#ffedd5; color:#9a3412; border-color:#f97316; font-weight:600; }
+    .inc-btn.active-none  { background:#e2e8f0;color:#334155;border-color:#94a3b8;font-weight:600; }
+    .inc-btn.active-half  { background:#fef9c3;color:#854d0e;border-color:#fbbf24;font-weight:600; }
+    .inc-btn.active-power { background:#ffedd5;color:#9a3412;border-color:#f97316;font-weight:600; }
 </style>
 
 <script>
 const AGENT_RATE = "{{ agent_hourly_rate }}";
+const AGENT_SCHEDULE = {{ agent_schedule_json|safe }};
 
-function onTimeChange(i) {
-    const s = document.getElementById('d'+i+'_start').value;
-    const e = document.getElementById('d'+i+'_end').value;
-    const section = document.getElementById('incentive-'+i);
-    if (s && e) {
-        section.style.display = 'block';
-        const dayBlock = document.getElementById('day-block-'+i);
-        dayBlock.querySelector('div').style.background = '#f0fdf4';
-        calcPay(i);
-    } else {
-        section.style.display = 'none';
-        const dayBlock = document.getElementById('day-block-'+i);
-        dayBlock.querySelector('div').style.background = '#fafafa';
+// Per-day OT count tracking
+const otCount = {};
+{% for day in days %}
+otCount[{{ day.index }}] = {{ day.ot_count }};
+{% endfor %}
+
+function addOTShift(i) {
+    const current = otCount[i] || 0;
+    if (current >= 3) return;
+    const j = current;
+    otCount[i] = j + 1;
+
+    const container = document.getElementById('ot-entries-' + i);
+    const countEl = document.getElementById('ot-count-' + i);
+    countEl.value = otCount[i];
+
+    const div = document.createElement('div');
+    div.className = 'ot-entry';
+    div.id = 'ot-entry-' + i + '-' + j;
+    div.style.cssText = 'border:1px solid #d1fae5;border-radius:6px;margin-bottom:8px;overflow:hidden;background:#f0fdf4;';
+    div.innerHTML = `
+        <input type="hidden" name="day_${i}_ot_${j}_pk" value="">
+        <input type="hidden" name="day_${i}_ot_${j}_remove" id="remove-${i}-${j}" value="">
+        <input type="hidden" name="day_${i}_ot_${j}_incentive_type" id="inc_type_${i}_${j}" value="none">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:#555;font-weight:600;white-space:nowrap;">OT Shift</span>
+            <input type="time" name="day_${i}_ot_${j}_start" id="ot_start_${i}_${j}"
+                onchange="onOTTimeChange(${i}, ${j})" style="width:120px;margin:0;">
+            <span style="color:#aaa;font-size:12px;">to</span>
+            <input type="time" name="day_${i}_ot_${j}_end" id="ot_end_${i}_${j}"
+                onchange="onOTTimeChange(${i}, ${j})" style="width:120px;margin:0;">
+            <input type="text" name="day_${i}_ot_${j}_notes" placeholder="Notes"
+                style="flex:1;min-width:120px;margin:0;font-size:13px;">
+            <button type="button" onclick="removeOTShift(${i}, ${j})"
+                style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;flex-shrink:0;">
+                Remove
+            </button>
+        </div>
+        <div id="incentive-${i}-${j}" style="border-top:1px solid #d1fae5;background:#f8fffe;padding:10px 12px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                <span style="font-size:11px;font-weight:600;color:#555;">Incentive:</span>
+                <button type="button" class="inc-btn active-none" id="btn_none_${i}_${j}"
+                    onclick="setIncentive(${i},${j},'none')"
+                    style="padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #ddd;">No Incentive</button>
+                <button type="button" class="inc-btn" id="btn_half_${i}_${j}"
+                    onclick="setIncentive(${i},${j},'time_and_a_half')"
+                    style="padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #ddd;">1.5x Time &amp; a Half</button>
+                <button type="button" class="inc-btn" id="btn_power_${i}_${j}"
+                    onclick="setIncentive(${i},${j},'power_hour')"
+                    style="padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #ddd;">2x Power Hour</button>
+            </div>
+            <div id="inc-details-${i}-${j}" style="display:none;gap:12px;align-items:end;flex-wrap:wrap;">
+                <div>
+                    <label style="font-size:10px;color:#888;margin-bottom:2px;">Incentivized Hrs</label>
+                    <input type="number" name="day_${i}_ot_${j}_incentivized_hours" id="inc_hrs_${i}_${j}"
+                        min="0" max="24" step="0.25" style="width:100px;margin:0;"
+                        oninput="calcPay(${i},${j})">
+                </div>
+                <div>
+                    <label style="font-size:10px;color:#888;margin-bottom:2px;">Base Rate ($/hr)</label>
+                    <input type="number" name="day_${i}_ot_${j}_base_hourly_rate" id="inc_rate_${i}_${j}"
+                        min="0" step="0.01" style="width:100px;margin:0;"
+                        oninput="calcPay(${i},${j})">
+                </div>
+                <div id="pay-preview-${i}-${j}" style="font-size:12px;color:#1a5c2a;font-weight:600;padding-bottom:2px;"></div>
+            </div>
+        </div>
+        <div id="overlap-warn-${i}-${j}" style="display:none;background:#fef3c7;border-top:1px solid #fde68a;padding:6px 12px;font-size:11px;color:#92400e;"></div>
+    `;
+    container.appendChild(div);
+
+    // Update day header
+    const header = document.querySelector('#day-block-' + i + ' > div');
+    if (header) header.style.background = '#f0fdf4';
+
+    if (otCount[i] >= 3) {
+        document.getElementById('add-ot-btn-' + i).style.display = 'none';
     }
+
+    if (AGENT_RATE) {
+        const rateEl = document.getElementById('inc_rate_' + i + '_' + j);
+        if (rateEl && !rateEl.value) rateEl.value = AGENT_RATE;
+    }
+
+    // Initialize incentive button state
+    setIncentive(i, j, 'none');
 }
 
-function setIncentive(i, type) {
-    document.getElementById('inc_type_'+i).value = type;
-    const details = document.getElementById('inc-details-'+i);
-    details.style.display = (type !== 'none') ? 'flex' : 'none';
+function removeOTShift(i, j) {
+    const el = document.getElementById('ot-entry-' + i + '-' + j);
+    const removeEl = document.getElementById('remove-' + i + '-' + j);
+    if (removeEl) removeEl.value = 'true';
+    if (el) el.style.display = 'none';
+    otCount[i] = Math.max(0, (otCount[i] || 1) - 1);
+    document.getElementById('ot-count-' + i).value = otCount[i];
+    document.getElementById('add-ot-btn-' + i).style.display = '';
+}
+
+function setIncentive(i, j, type) {
+    const typeEl = document.getElementById('inc_type_' + i + '_' + j);
+    if (typeEl) typeEl.value = type;
+    const details = document.getElementById('inc-details-' + i + '-' + j);
+    if (details) details.style.display = (type !== 'none') ? 'flex' : 'none';
 
     ['none','half','power'].forEach(k => {
-        const btn = document.getElementById('btn_'+k+'_'+i);
-        btn.className = 'inc-btn';
+        const btn = document.getElementById('btn_' + k + '_' + i + '_' + j);
+        if (btn) btn.className = 'inc-btn';
     });
-    if (type === 'none') {
-        document.getElementById('btn_none_'+i).className = 'inc-btn active-none';
-    } else if (type === 'time_and_a_half') {
-        document.getElementById('btn_half_'+i).className = 'inc-btn active-half';
-    } else if (type === 'power_hour') {
-        document.getElementById('btn_power_'+i).className = 'inc-btn active-power';
+    const map = {none:'btn_none',time_and_a_half:'btn_half',power_hour:'btn_power'};
+    const activeId = (map[type] || 'btn_none') + '_' + i + '_' + j;
+    const activeBtn = document.getElementById(activeId);
+    if (activeBtn) {
+        const cls = {none:'active-none',time_and_a_half:'active-half',power_hour:'active-power'}[type];
+        activeBtn.className = 'inc-btn ' + cls;
     }
 
     if (type !== 'none') {
-        const rateEl = document.getElementById('inc_rate_'+i);
-        if (!rateEl.value && AGENT_RATE) rateEl.value = AGENT_RATE;
-        calcPay(i);
+        const rateEl = document.getElementById('inc_rate_' + i + '_' + j);
+        if (rateEl && !rateEl.value && AGENT_RATE) rateEl.value = AGENT_RATE;
+        calcPay(i, j);
     } else {
-        document.getElementById('pay-preview-'+i).textContent = '';
+        const prev = document.getElementById('pay-preview-' + i + '-' + j);
+        if (prev) prev.textContent = '';
     }
 }
 
-function calcPay(i) {
-    const type = document.getElementById('inc_type_'+i).value;
-    if (type === 'none') { document.getElementById('pay-preview-'+i).textContent = ''; return; }
-
-    const sEl = document.getElementById('d'+i+'_start');
-    const eEl = document.getElementById('d'+i+'_end');
-    const rateVal = parseFloat(document.getElementById('inc_rate_'+i).value) || 0;
-    const incHrs = parseFloat(document.getElementById('inc_hrs_'+i).value) || 0;
-
-    if (!sEl.value || !eEl.value || !rateVal) {
-        document.getElementById('pay-preview-'+i).textContent = '';
-        return;
-    }
-
-    // Total hours
+function calcPay(i, j) {
+    const type = document.getElementById('inc_type_' + i + '_' + j);
+    if (!type || type.value === 'none') return;
+    const sEl = document.getElementById('ot_start_' + i + '_' + j);
+    const eEl = document.getElementById('ot_end_' + i + '_' + j);
+    const rateEl = document.getElementById('inc_rate_' + i + '_' + j);
+    const hrsEl = document.getElementById('inc_hrs_' + i + '_' + j);
+    const prev = document.getElementById('pay-preview-' + i + '-' + j);
+    if (!sEl || !eEl || !prev) return;
+    const rate = parseFloat(rateEl ? rateEl.value : 0) || 0;
+    const incHrs = parseFloat(hrsEl ? hrsEl.value : 0) || 0;
+    if (!sEl.value || !eEl.value || !rate) { prev.textContent = ''; return; }
     const [sh, sm] = sEl.value.split(':').map(Number);
     const [eh, em] = eEl.value.split(':').map(Number);
-    let totalSecs = (eh * 3600 + em * 60) - (sh * 3600 + sm * 60);
-    if (totalSecs < 0) totalSecs += 86400;
-    const totalHrs = totalSecs / 3600;
-
-    const premium = type === 'time_and_a_half' ? 0.5 : 1.0;
-    const offered = totalHrs * rateVal + incHrs * rateVal * premium;
-
-    document.getElementById('pay-preview-'+i).textContent =
-        `Est. offered: $${offered.toFixed(2)} (${totalHrs.toFixed(2)} hrs total)`;
+    let secs = (eh * 3600 + em * 60) - (sh * 3600 + sm * 60);
+    if (secs < 0) secs += 86400;
+    const totalHrs = secs / 3600;
+    const premium = type.value === 'time_and_a_half' ? 0.5 : 1.0;
+    const offered = totalHrs * rate + incHrs * rate * premium;
+    prev.textContent = `Est: $${offered.toFixed(2)} (${totalHrs.toFixed(2)}h)`;
 }
 
-// Initialize button states on page load
+function toMinutes(t) {
+    if (!t) return -1;
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+}
+
+function timesOverlap(s1, e1, s2, e2) {
+    const a = toMinutes(s1), b = toMinutes(e1), c = toMinutes(s2), d = toMinutes(e2);
+    if (a < 0 || b < 0 || c < 0 || d < 0) return false;
+    // Handle overnight: if end < start, add 24*60
+    const B = b < a ? b + 1440 : b;
+    const D = d < c ? d + 1440 : d;
+    return a < D && c < B;
+}
+
+function onOTTimeChange(i, j) {
+    const sEl = document.getElementById('ot_start_' + i + '_' + j);
+    const eEl = document.getElementById('ot_end_' + i + '_' + j);
+    if (!sEl || !eEl || !sEl.value || !eEl.value) return;
+    const s = sEl.value, e = eEl.value;
+    const warnings = [];
+
+    // Check against agent's scheduled blocks for this day
+    const scheduled = AGENT_SCHEDULE[i];
+    if (scheduled) {
+        for (const block of scheduled) {
+            if (timesOverlap(s, e, block.start, block.end)) {
+                warnings.push(`scheduled block ${block.start}–${block.end}`);
+            }
+        }
+    }
+
+    // Check against other OT entries on the same day
+    const countEl = document.getElementById('ot-count-' + i);
+    const count = parseInt(countEl ? countEl.value : 0);
+    for (let k = 0; k < count; k++) {
+        if (k === j) continue;
+        const removeEl = document.getElementById('remove-' + i + '-' + k);
+        if (removeEl && removeEl.value === 'true') continue;
+        const os = document.getElementById('ot_start_' + i + '_' + k);
+        const oe = document.getElementById('ot_end_' + i + '_' + k);
+        if (os && oe && os.value && oe.value && timesOverlap(s, e, os.value, oe.value)) {
+            warnings.push(`another OT shift ${os.value}–${oe.value}`);
+        }
+    }
+
+    const warnEl = document.getElementById('overlap-warn-' + i + '-' + j);
+    if (warnEl) {
+        if (warnings.length > 0) {
+            warnEl.style.display = 'block';
+            warnEl.textContent = '⚠ This shift overlaps with: ' + warnings.join(', ') + '. You may still save if intentional.';
+        } else {
+            warnEl.style.display = 'none';
+        }
+    }
+
+    calcPay(i, j);
+}
+
+// Initialize button states for existing entries on page load
 document.addEventListener('DOMContentLoaded', function() {
-    {% for day in days %}
-    setIncentive({{ day.index }}, '{{ day.incentive_type }}');
-    {% endfor %}
+    {% for day in days %}{% for entry in day.ot_entries %}
+    setIncentive({{ day.index }}, {{ entry.j }}, '{{ entry.incentive_type }}');
+    {% endfor %}{% endfor %}
 });
 </script>
 {% endblock %}
