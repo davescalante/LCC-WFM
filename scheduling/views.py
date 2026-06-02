@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from django.db.models import Q, F
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
@@ -228,13 +229,9 @@ def _save_shift_template(agent, day_of_week, week_start, is_off, start, end, not
     active = (
         ShiftTemplate.objects
         .filter(agent=agent, day_of_week=day_of_week)
-        .filter(
-            models.Q(effective_from__isnull=True) | models.Q(effective_from__lte=week_start)
-        )
-        .filter(
-            models.Q(effective_until__isnull=True) | models.Q(effective_until__gte=week_start)
-        )
-        .order_by(models.F('effective_from').desc(nulls_last=True))
+        .filter(Q(effective_from__isnull=True) | Q(effective_from__lte=week_start))
+        .filter(Q(effective_until__isnull=True) | Q(effective_until__gte=week_start))
+        .order_by(F('effective_from').desc(nulls_last=True))
         .first()
     )
     if active and active.effective_from == week_start:
