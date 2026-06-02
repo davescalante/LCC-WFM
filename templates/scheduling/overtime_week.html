@@ -65,7 +65,7 @@
                     id="add-ot-btn-{{ day.index }}"
                     style="background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;border-radius:4px;
                         padding:4px 12px;font-size:12px;cursor:pointer;
-                        {% if day.ot_count >= 3 %}display:none;{% endif %}">
+                        {% if day.ot_count >= 6 %}display:none;{% endif %}">
                     + Add OT Shift
                 </button>
             </div>
@@ -272,7 +272,7 @@ function addOTShift(i) {
     const header = document.querySelector('#day-block-' + i + ' > div');
     if (header) header.style.background = '#f0fdf4';
 
-    if (visibleOTCount(i) >= 3) {
+    if (visibleOTCount(i) >= 6) {
         document.getElementById('add-ot-btn-' + i).style.display = 'none';
     }
 
