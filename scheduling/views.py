@@ -276,9 +276,11 @@ def shift_list(request):
         for day_date in week_dates:
             override = shift_map.get((agent.pk, day_date))
             t = template_map.get((agent.pk, day_date.weekday()))
-            # Only show the template for this week if it was effective on or before this week.
-            # NULL effective_from = legacy template, always visible.
+            # Only show the template if it covers this week.
+            # NULL effective_from = legacy/always. NULL effective_until = no end.
             if t and t.effective_from and t.effective_from > week_start:
+                t = None
+            if t and t.effective_until is not None and t.effective_until < week_start:
                 t = None
             cells.append({
                 'date': day_date,
@@ -290,8 +292,12 @@ def shift_list(request):
             'cells': cells,
             'has_prev_week_shifts': agent.pk in prev_week_agent_ids,
             'has_this_week_shifts': agent.pk in this_week_override_ids,
-            'has_template': template_map.get((agent.pk, 0)) is not None
-                or any((agent.pk, d) in template_map for d in range(7)),
+            'has_template': any(
+                (t2 := template_map.get((agent.pk, d))) is not None
+                and (not t2.effective_from or t2.effective_from <= week_start)
+                and (t2.effective_until is None or t2.effective_until >= week_start)
+                for d in range(7)
+            ),
         })
 
     return render(request, 'scheduling/shift_list.html', {
@@ -425,7 +431,6 @@ def shift_week(request):
                 yield i, day_date, is_off, start, end, notes
 
         if edit_type == 'permanent':
-            current_week_start = today - timedelta(days=today.weekday())
             partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
@@ -436,7 +441,8 @@ def shift_week(request):
                             'end_time': end or '17:00',
                             'is_off': is_off,
                             'notes': notes,
-                            'effective_from': current_week_start,
+                            'effective_from': week_start,
+                            'effective_until': None,  # reset any previous end date
                         }
                     )
                     ShiftTemplateBlock.objects.filter(shift_template=tmpl).delete()
@@ -642,15 +648,36 @@ def shift_delete(request, pk):
 
 @login_required
 def shift_clear_recurring(request):
-    """AJAX: delete all ShiftTemplates for an agent (clears their recurring weekly schedule)."""
+    """AJAX: clear recurring schedule for an agent from a given week forward."""
     from django.http import JsonResponse
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
     agent_pk = request.POST.get('agent_pk')
+    week_start_str = request.POST.get('week_start', '')
     agent = get_object_or_404(Agent, pk=agent_pk)
-    count, _ = ShiftTemplate.objects.filter(agent=agent).delete()
+
+    try:
+        ws = date.fromisoformat(week_start_str)
+        ws = ws - timedelta(days=ws.weekday())  # ensure Monday
+    except (ValueError, TypeError):
+        ws = date.today()
+        ws = ws - timedelta(days=ws.weekday())
+
+    end_date = ws - timedelta(days=1)  # last day before the clearing week
+
+    count = 0
+    for tmpl in ShiftTemplate.objects.filter(agent=agent):
+        if tmpl.effective_from is None or tmpl.effective_from < ws:
+            # Template was active before this week — cap it so past weeks keep their display
+            tmpl.effective_until = end_date
+            tmpl.save(update_fields=['effective_until'])
+        else:
+            # Template started this week or later — remove it entirely
+            tmpl.delete()
+        count += 1
+
     log_action(request.user, 'Cleared recurring schedule',
-               f'{agent}: {count} template day(s) removed', agent=agent)
+               f'{agent}: {count} template day(s) cleared from {ws}', agent=agent)
     return JsonResponse({'deleted': count})
 
 
@@ -942,9 +969,8 @@ def shift_quick_edit(request):
 
     if permanent:
         day_of_week = day_date.weekday()
-        today_local = date.today()
-        current_week_start = today_local - timedelta(days=today_local.weekday())
-        defaults = {'is_off': is_off, 'effective_from': current_week_start}
+        edit_week_start = day_date - timedelta(days=day_date.weekday())
+        defaults = {'is_off': is_off, 'effective_from': edit_week_start, 'effective_until': None}
         if not is_off:
             defaults['start_time'] = start
             defaults['end_time'] = end

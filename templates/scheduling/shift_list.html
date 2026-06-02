@@ -271,6 +271,7 @@ function executeClearRecurring(agentPk, agentName) {
     btn.textContent = 'Clearing…'; btn.disabled = true;
     const fd = new FormData();
     fd.append('agent_pk', agentPk);
+    fd.append('week_start', '{{ week_start|date:"Y-m-d" }}');
     fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
     fetch('{% url "shift_clear_recurring" %}', {
         method: 'POST',

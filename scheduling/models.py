@@ -123,6 +123,8 @@ class ShiftTemplate(models.Model):
     notes = models.TextField(blank=True)
     # Week (Monday) from which this template takes effect. NULL = legacy/always.
     effective_from = models.DateField(null=True, blank=True)
+    # Week (Monday) after which this template no longer applies. NULL = no end.
+    effective_until = models.DateField(null=True, blank=True)
 
     class Meta:
         unique_together = ('agent', 'day_of_week')
