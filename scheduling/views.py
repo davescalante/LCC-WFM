@@ -270,20 +270,20 @@ def shift_list(request):
     )
     this_week_override_ids = {s.agent_id for s in shifts_qs}
 
-    # Templates only apply to the current week and future — never back-fill past weeks.
-    current_week_start = today - timedelta(days=today.weekday())
-    show_templates = week_start >= current_week_start
-
     rows = []
     for agent in agents:
         cells = []
         for day_date in week_dates:
             override = shift_map.get((agent.pk, day_date))
-            template = template_map.get((agent.pk, day_date.weekday())) if show_templates else None
+            t = template_map.get((agent.pk, day_date.weekday()))
+            # Only show the template for this week if it was effective on or before this week.
+            # NULL effective_from = legacy template, always visible.
+            if t and t.effective_from and t.effective_from > week_start:
+                t = None
             cells.append({
                 'date': day_date,
                 'shift': override,
-                'template': template if not override else None,
+                'template': t if not override else None,
             })
         rows.append({
             'agent': agent,
@@ -425,6 +425,7 @@ def shift_week(request):
                 yield i, day_date, is_off, start, end, notes
 
         if edit_type == 'permanent':
+            current_week_start = today - timedelta(days=today.weekday())
             partial_days = []
             for i, day_date, is_off, start, end, notes in _day_configs():
                 if is_off or (start and end):
@@ -435,6 +436,7 @@ def shift_week(request):
                             'end_time': end or '17:00',
                             'is_off': is_off,
                             'notes': notes,
+                            'effective_from': current_week_start,
                         }
                     )
                     ShiftTemplateBlock.objects.filter(shift_template=tmpl).delete()
@@ -940,7 +942,9 @@ def shift_quick_edit(request):
 
     if permanent:
         day_of_week = day_date.weekday()
-        defaults = {'is_off': is_off}
+        today_local = date.today()
+        current_week_start = today_local - timedelta(days=today_local.weekday())
+        defaults = {'is_off': is_off, 'effective_from': current_week_start}
         if not is_off:
             defaults['start_time'] = start
             defaults['end_time'] = end
