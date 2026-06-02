@@ -273,7 +273,7 @@ def shift_list(request):
     else:
         supervisor_id = request.session.get('shift_supervisor_filter', '')
 
-    agents = Agent.objects.filter(status='active').select_related('user').order_by('user__last_name', 'user__first_name')
+    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by('user__last_name', 'user__first_name')
     if supervisor_id:
         try:
             agents = agents.filter(supervisor_id=int(supervisor_id))
@@ -334,6 +334,46 @@ def shift_list(request):
                 for d in range(7)
             ),
         })
+
+    # Classify each agent as morning / afternoon / admin and sort into groups
+    _GROUP_ORDER = {'morning': 0, 'afternoon': 1, 'admin': 2}
+
+    def _shift_group(agent, tmpl_map, cells):
+        if agent.role == 'admin':
+            return 'admin'
+        for d in range(7):
+            t = tmpl_map.get((agent.pk, d))
+            if t and not t.is_off and t.start_time:
+                return 'morning' if t.start_time.hour < 10 else 'afternoon'
+        for cell in cells:
+            s = cell['shift']
+            if s and not s.is_off and s.start_time:
+                return 'morning' if s.start_time.hour < 10 else 'afternoon'
+        return 'afternoon'
+
+    for row in rows:
+        row['group'] = _shift_group(row['agent'], template_map, row['cells'])
+
+    def _sort_key(r):
+        g = _GROUP_ORDER[r['group']]
+        a = r['agent']
+        if r['group'] == 'admin':
+            sup_ln = a.supervisor.user.last_name if a.supervisor else '\xff'
+            sup_fn = a.supervisor.user.first_name if a.supervisor else '\xff'
+        else:
+            sup_ln = sup_fn = ''
+        return (g, sup_ln, sup_fn, a.user.last_name, a.user.first_name)
+
+    rows.sort(key=_sort_key)
+
+    # Flag first admin row per supervisor so template can draw sub-dividers
+    prev_admin_sup_id = None
+    for row in rows:
+        if row['group'] == 'admin':
+            row['show_supervisor_header'] = (row['agent'].supervisor_id != prev_admin_sup_id)
+            prev_admin_sup_id = row['agent'].supervisor_id
+        else:
+            row['show_supervisor_header'] = False
 
     return render(request, 'scheduling/shift_list.html', {
         'rows': rows,

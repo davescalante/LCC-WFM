@@ -2,6 +2,60 @@
 {% block title %} - Shifts{% endblock %}
 {% block content %}
 
+<style>
+/* Z-index layers:
+   frozen body cell  = 2
+   non-frozen header = 5
+   frozen header     = 8  */
+.shifts-table { table-layout:fixed; border-collapse:collapse; min-width:1200px; width:100%; }
+
+.shifts-table thead th {
+    position:sticky; top:0; z-index:5;
+    background:#f0f4f8;
+    padding:8px 6px;
+    border-bottom:2px solid #d1d5db;
+    font-size:12px; font-weight:700; text-align:center;
+    white-space:nowrap;
+}
+.shifts-table thead th.fc { z-index:8; text-align:left; padding-left:12px; }
+.shifts-table thead th.act-hdr { border-left:2px solid #d1d5db; }
+.shifts-table thead th.col-today { background:#dbeafe; color:#1e40af; }
+
+.fc { position:sticky; left:0; z-index:2; background:inherit; }
+
+.shifts-table tbody td {
+    padding:6px 6px; vertical-align:middle; font-size:12px;
+    border-bottom:1px solid #e5e7eb; text-align:center;
+}
+.shifts-table td.agent-col {
+    padding:6px 12px; font-size:13px; text-align:left;
+    border-right:1px solid #eee;
+}
+.shifts-table td.act-col {
+    padding:6px 8px; border-left:2px solid #e5e7eb; text-align:center; vertical-align:middle;
+}
+.shifts-table td.col-today { box-shadow:inset 0 0 0 1px #93c5fd; }
+
+tbody tr.row-a td.fc { background:#fff; }
+tbody tr.row-b td.fc { background:#f9fafb; }
+
+/* Group section headers */
+.grp-hdr td {
+    padding:3px 12px; font-size:10px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.7px;
+    color:#9ca3af; background:#f3f4f6;
+    border-top:2px solid #e5e7eb;
+}
+/* Admin supervisor sub-headers */
+.sup-hdr td {
+    padding:3px 12px 3px 28px; font-size:10px; font-weight:600;
+    color:#6b7280; background:#fafafa;
+    border-top:1px solid #e8e8e8; letter-spacing:.3px;
+}
+
+.shift-override-wrap:hover .shift-del-btn { display:inline-flex !important; align-items:center; justify-content:center; }
+</style>
+
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>Shifts</h1>
     <a href="{% url 'shift_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">+ Add / Edit Weekly Schedule</a>
@@ -13,7 +67,7 @@
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <form method="get" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Filter by Supervisor:</label>
+        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Supervisor:</label>
         <select name="supervisor" onchange="this.form.submit()"
             style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
             <option value="">All</option>
@@ -24,7 +78,7 @@
             {% endfor %}
         </select>
         {% if selected_supervisor %}
-        <a href="?week_start={{ week_start|date:'Y-m-d' }}&supervisor=" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear</a>
+        <a href="?week_start={{ week_start|date:'Y-m-d' }}" style="font-size:12px;color:#888;text-decoration:none;">✕ Clear</a>
         {% endif %}
     </form>
 </div>
@@ -58,121 +112,136 @@
 </div>
 
 <div class="card" style="overflow-x:auto;padding:0;">
-<table style="table-layout:auto;min-width:900px;border-collapse:collapse;">
+<table class="shifts-table">
+    <colgroup>
+        <col style="width:180px">
+        {% for d in week_dates %}<col style="width:120px">{% endfor %}
+        <col style="width:185px">
+    </colgroup>
     <thead>
-        <tr style="background:#f0f4f8;">
-            <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+        <tr>
+            <th class="fc">Agent</th>
             {% for d in week_dates %}
-            <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
-                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
+            <th {% if d == today %}class="col-today"{% endif %}>
+                <div>{{ d|date:"D" }}</div>
                 <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
             </th>
             {% endfor %}
-            <th style="min-width:160px;padding:8px 12px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;">Actions</th>
+            <th class="act-hdr">Actions</th>
         </tr>
     </thead>
     <tbody>
-        {% for row in rows %}
-        <tr data-agent-row="{{ row.agent.pk }}" style="border-bottom:1px solid #e8e8e8;">
-            <td style="padding:10px 12px;font-weight:600;font-size:13px;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
-                <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
-                {% if row.agent.status == 'inactive' %}
-                <span class="badge badge-red" style="font-size:10px;margin-left:4px;">Inactive</span>
-                {% endif %}
-            </td>
-            {% for cell in row.cells %}
-            <td id="shift-cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                class="shift-cell"
-                data-agent="{{ row.agent.pk }}"
-                data-date="{{ cell.date|date:'Y-m-d' }}"
-                {% if cell.template and not cell.template.is_off %}
-                data-tmpl-start="{{ cell.template.start_time|time:'H:i' }}"
-                data-tmpl-end="{{ cell.template.end_time|time:'H:i' }}"
-                {% endif %}
-                {% if cell.template and cell.template.is_off %}data-tmpl-off="1"{% endif %}
-                style="padding:6px 4px;text-align:center;vertical-align:middle;
-                {% if cell.shift %}
-                    {% if cell.shift.is_off %}background:#fafafa;{% else %}background:#f0fdf4;{% endif %}
-                {% elif cell.template %}
-                    {% if cell.template.is_off %}background:#f0f4ff;{% else %}background:#eff6ff;{% endif %}
-                {% endif %}">
-                {% if cell.shift %}
-                <div class="shift-override-wrap" style="position:relative;display:inline-block;">
-                    {% if cell.shift.is_off %}
-                        <span style="font-size:12px;color:#aaa;font-weight:600;">OFF</span>
-                    {% else %}
-                        <div style="font-size:12px;font-weight:600;color:#1a7a40;white-space:nowrap;">
-                            {{ cell.shift.start_time|time:"H:i" }}–{{ cell.shift.end_time|time:"H:i" }}
-                        </div>
-                        {% if cell.shift.notes %}
-                        <div style="font-size:10px;color:#888;margin-top:2px;">{{ cell.shift.notes|truncatechars:20 }}</div>
-                        {% endif %}
-                    {% endif %}
-                    <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
-                       style="font-size:10px;color:#d97706;display:block;margin-top:2px;">override</a>
-                    {% if cell.date >= today %}
-                    <button class="shift-del-btn"
-                        onclick="confirmDeleteShift({{ cell.shift.pk }}, '{{ row.agent|escapejs }}', '{{ cell.date|date:'D M d' }}')"
-                        title="Delete this day's override"
-                        style="display:none;position:absolute;top:-6px;right:-20px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;width:20px;height:20px;cursor:pointer;font-size:11px;line-height:1;padding:0;">🗑</button>
-                    {% endif %}
-                </div>
-                {% elif cell.template %}
-                    {% if cell.template.is_off %}
-                        <span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span>
-                    {% else %}
-                        <div style="font-size:12px;font-weight:600;color:#2563eb;white-space:nowrap;">
-                            {{ cell.template.start_time|time:"H:i" }}–{{ cell.template.end_time|time:"H:i" }}
-                        </div>
-                        {% if cell.template.notes %}
-                        <div style="font-size:10px;color:#93c5fd;margin-top:2px;">{{ cell.template.notes|truncatechars:20 }}</div>
-                        {% endif %}
-                    {% endif %}
-                    <span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:0.03em;">RECURRING</span>
+    {% for row in rows %}
+
+    {% ifchanged row.group %}
+    <tr class="grp-hdr">
+        <td colspan="9">
+            {% if row.group == 'morning' %}Morning &mdash; 12:00 AM – 9:00 AM
+            {% elif row.group == 'afternoon' %}Afternoon &mdash; 10:00 AM – 11:59 PM
+            {% else %}Admins{% endif %}
+        </td>
+    </tr>
+    {% endifchanged %}
+
+    {% if row.group == 'admin' %}{% if not selected_supervisor %}{% if row.show_supervisor_header %}
+    <tr class="sup-hdr">
+        <td colspan="9">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
+    </tr>
+    {% endif %}{% endif %}{% endif %}
+
+    <tr data-agent-row="{{ row.agent.pk }}" class="{% if forloop.counter|divisibleby:2 %}row-b{% else %}row-a{% endif %}">
+        <td class="fc agent-col">
+            <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;font-weight:600;">{{ row.agent }}</a>
+            {% if row.agent.status == 'inactive' %}
+            <span class="badge badge-red" style="font-size:10px;margin-left:4px;">Inactive</span>
+            {% endif %}
+        </td>
+
+        {% for cell in row.cells %}
+        <td id="shift-cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+            class="shift-cell{% if cell.date == today %} col-today{% endif %}"
+            data-agent="{{ row.agent.pk }}"
+            data-date="{{ cell.date|date:'Y-m-d' }}"
+            {% if cell.template and not cell.template.is_off %}
+            data-tmpl-start="{{ cell.template.start_time|time:'H:i' }}"
+            data-tmpl-end="{{ cell.template.end_time|time:'H:i' }}"
+            {% endif %}
+            {% if cell.template and cell.template.is_off %}data-tmpl-off="1"{% endif %}
+            style="{% if cell.shift %}{% if cell.shift.is_off %}background:#fafafa;{% else %}background:#f0fdf4;{% endif %}{% elif cell.template %}{% if cell.template.is_off %}background:#f0f4ff;{% else %}background:#eff6ff;{% endif %}{% endif %}">
+            {% if cell.shift %}
+            <div class="shift-override-wrap" style="position:relative;display:inline-block;">
+                {% if cell.shift.is_off %}
+                    <span style="font-size:12px;color:#aaa;font-weight:600;">OFF</span>
                 {% else %}
-                    <span style="color:#ddd;font-size:12px;">—</span>
+                    <div style="font-size:12px;font-weight:600;color:#1a7a40;white-space:nowrap;">
+                        {{ cell.shift.start_time|time:"H:i" }}–{{ cell.shift.end_time|time:"H:i" }}
+                    </div>
+                    {% if cell.shift.notes %}
+                    <div style="font-size:10px;color:#888;margin-top:1px;">{{ cell.shift.notes|truncatechars:20 }}</div>
+                    {% endif %}
                 {% endif %}
-            </td>
-            {% endfor %}
-            <td style="padding:8px 10px;text-align:center;border-left:2px solid #eee;">
-                <div style="display:flex;flex-direction:column;gap:6px;align-items:center;">
-                    <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
-                       class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;width:100%;">Edit Week</a>
-                    {% if row.has_template %}
-                    <button type="button"
-                        onclick="confirmClearRecurring('{{ row.agent|escapejs }}', {{ row.agent.pk }})"
-                        style="width:100%;padding:4px 10px;font-size:11px;white-space:nowrap;
-                               background:#fff0f0;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;cursor:pointer;">
-                        ✕ Clear Recurring
-                    </button>
+                <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
+                   style="font-size:10px;color:#d97706;display:block;margin-top:2px;">override</a>
+                {% if cell.date >= today %}
+                <button class="shift-del-btn"
+                    onclick="confirmDeleteShift({{ cell.shift.pk }}, '{{ row.agent|escapejs }}', '{{ cell.date|date:'D M d' }}')"
+                    title="Delete this day's override"
+                    style="display:none;position:absolute;top:-6px;right:-20px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;width:20px;height:20px;cursor:pointer;font-size:11px;line-height:1;padding:0;">🗑</button>
+                {% endif %}
+            </div>
+            {% elif cell.template %}
+                {% if cell.template.is_off %}
+                    <span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span>
+                {% else %}
+                    <div style="font-size:12px;font-weight:600;color:#2563eb;white-space:nowrap;">
+                        {{ cell.template.start_time|time:"H:i" }}–{{ cell.template.end_time|time:"H:i" }}
+                    </div>
+                    {% if cell.template.notes %}
+                    <div style="font-size:10px;color:#93c5fd;margin-top:1px;">{{ cell.template.notes|truncatechars:20 }}</div>
                     {% endif %}
-                    {% if row.has_prev_week_shifts %}
-                    <form method="post" action="{% url 'shift_copy_agent_from_prev' %}"
-                          id="agent-copy-form-{{ row.agent.pk }}" style="margin:0;width:100%;">
-                        {% csrf_token %}
-                        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-                        <input type="hidden" name="agent_id" value="{{ row.agent.pk }}">
-                        <button type="button"
-                            onclick="confirmAgentCopy('{{ row.agent|escapejs }}', {{ row.has_this_week_shifts|yesno:'true,false' }}, {{ row.agent.pk }})"
-                            style="width:100%;padding:4px 10px;font-size:11px;white-space:nowrap;
-                                   background:#f59e0b;color:white;border:none;border-radius:4px;cursor:pointer;">
-                            &#x2398; Copy prev week{% if row.has_this_week_shifts %} (overwrite){% endif %}
-                        </button>
-                    </form>
-                    {% endif %}
-                </div>
-            </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="10" style="padding:30px;color:#888;text-align:center;">
-            No agents found.
-        </td></tr>
+                {% endif %}
+                <span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:.03em;">RECURRING</span>
+            {% else %}
+                <span style="color:#ddd;font-size:12px;">—</span>
+            {% endif %}
+        </td>
         {% endfor %}
+
+        <td class="act-col">
+            <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
+                <a href="{% url 'shift_week' %}?agent={{ row.agent.pk }}&week_start={{ week_start|date:'Y-m-d' }}"
+                   class="btn btn-primary" style="padding:4px 10px;font-size:12px;white-space:nowrap;width:100%;">Edit Week</a>
+                {% if row.has_template %}
+                <button type="button"
+                    onclick="confirmClearRecurring('{{ row.agent|escapejs }}', {{ row.agent.pk }})"
+                    style="width:100%;padding:4px 10px;font-size:11px;white-space:nowrap;background:#fff0f0;color:#dc2626;border:1px solid #fca5a5;border-radius:4px;cursor:pointer;">
+                    ✕ Clear Recurring
+                </button>
+                {% endif %}
+                {% if row.has_prev_week_shifts %}
+                <form method="post" action="{% url 'shift_copy_agent_from_prev' %}"
+                      id="agent-copy-form-{{ row.agent.pk }}" style="margin:0;width:100%;">
+                    {% csrf_token %}
+                    <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+                    <input type="hidden" name="agent_id" value="{{ row.agent.pk }}">
+                    <button type="button"
+                        onclick="confirmAgentCopy('{{ row.agent|escapejs }}', {{ row.has_this_week_shifts|yesno:'true,false' }}, {{ row.agent.pk }})"
+                        style="width:100%;padding:4px 10px;font-size:11px;white-space:nowrap;background:#f59e0b;color:white;border:none;border-radius:4px;cursor:pointer;">
+                        &#x2398; Copy prev week{% if row.has_this_week_shifts %} (overwrite){% endif %}
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="9" style="padding:30px;color:#888;text-align:center;">No agents found.</td></tr>
+    {% endfor %}
     </tbody>
 </table>
 </div>
 
-<!-- Shared delete confirmation modal -->
+<!-- Delete / confirm modal -->
 <div id="shift-delete-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
     <div style="background:white;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
         <h3 id="sdm-title" style="margin:0 0 8px;font-size:17px;color:#1a3a5c;"></h3>
@@ -184,10 +253,6 @@
         </div>
     </div>
 </div>
-
-<style>
-.shift-override-wrap:hover .shift-del-btn { display: inline-flex !important; align-items: center; justify-content: center; }
-</style>
 
 <script>
 function getCookie(name) {
@@ -227,7 +292,6 @@ function executeDeleteShift(pk) {
     .then(data => {
         if (data.deleted) {
             closeShiftModal();
-            // Find the td containing this shift's delete button and restore it
             const delBtn = document.querySelector(`.shift-del-btn[onclick*="(${pk},"]`);
             if (delBtn) {
                 const td = delBtn.closest('td.shift-cell');
@@ -243,13 +307,12 @@ function restoreCellAfterDelete(td) {
     const tmplStart = td.dataset.tmplStart;
     const tmplEnd   = td.dataset.tmplEnd;
     const tmplOff   = td.dataset.tmplOff;
-    // Reset background
     if (tmplStart || tmplOff) {
         td.style.background = tmplOff ? '#f0f4ff' : '#eff6ff';
         if (tmplOff) {
-            td.innerHTML = '<span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span><span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:0.03em;">RECURRING</span>';
+            td.innerHTML = '<span style="font-size:12px;color:#93c5fd;font-weight:600;">OFF</span><span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:.03em;">RECURRING</span>';
         } else {
-            td.innerHTML = `<div style="font-size:12px;font-weight:600;color:#2563eb;white-space:nowrap;">${tmplStart}–${tmplEnd}</div><span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:0.03em;">RECURRING</span>`;
+            td.innerHTML = `<div style="font-size:12px;font-weight:600;color:#2563eb;white-space:nowrap;">${tmplStart}–${tmplEnd}</div><span style="font-size:9px;color:#93c5fd;display:block;margin-top:2px;letter-spacing:.03em;">RECURRING</span>`;
         }
     } else {
         td.style.background = '';
@@ -281,9 +344,8 @@ function executeClearRecurring(agentPk, agentName) {
     .then(r => r.json())
     .then(data => {
         closeShiftModal();
-        // Wipe all RECURRING cells for this agent
         document.querySelectorAll(`td.shift-cell[data-agent="${agentPk}"]`).forEach(td => {
-            if (td.querySelector('.shift-override-wrap')) return;  // has override, leave it
+            if (td.querySelector('.shift-override-wrap')) return;
             const hasTmpl = td.dataset.tmplStart || td.dataset.tmplOff;
             if (hasTmpl) {
                 td.style.background = '';
@@ -293,7 +355,6 @@ function executeClearRecurring(agentPk, agentName) {
                 delete td.dataset.tmplOff;
             }
         });
-        // Hide the "Clear Recurring" button for this agent
         const row = document.querySelector(`tr[data-agent-row="${agentPk}"]`);
         if (row) {
             const clearBtn = [...row.querySelectorAll('button')].find(b => b.textContent.includes('Clear Recurring'));
