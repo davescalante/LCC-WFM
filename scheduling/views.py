@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, log_action
+from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -100,6 +100,17 @@ def agent_create(request):
         agent = agent_form.save(commit=False)
         agent.user = user
         agent.save()
+        from django.utils import timezone as _tz
+        RoleHistory.objects.create(
+            agent=agent,
+            role=agent.role,
+            role_type=agent.role_type or '',
+            supervisor=agent.supervisor,
+            employer=agent.employer,
+            billing_status=agent.billing_status,
+            effective_from=agent.start_date or _tz.localdate(),
+            changed_by=request.user,
+        )
         _save_five9_profiles(request, agent)
         if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
             user.set_unusable_password()
@@ -143,7 +154,42 @@ def agent_edit(request, pk):
             if password:
                 user.set_password(password)
             user.save()
+            # Capture before save
+            _old = {
+                'role': agent.role, 'role_type': agent.role_type,
+                'supervisor_id': agent.supervisor_id,
+                'employer': agent.employer, 'billing_status': agent.billing_status,
+            }
             agent = agent_form.save()
+            # Record role history if tracked fields changed
+            _new = {
+                'role': agent.role, 'role_type': agent.role_type,
+                'supervisor_id': agent.supervisor_id,
+                'employer': agent.employer, 'billing_status': agent.billing_status,
+            }
+            if _old != _new:
+                from django.utils import timezone as _tz
+                today = _tz.localdate()
+                if not agent.role_history.exists():
+                    # Seed initial entry from old values
+                    RoleHistory.objects.create(
+                        agent=agent, role=_old['role'], role_type=_old['role_type'] or '',
+                        supervisor_id=_old['supervisor_id'], employer=_old['employer'],
+                        billing_status=_old['billing_status'],
+                        effective_from=agent.start_date or today,
+                        effective_to=today, changed_by=request.user,
+                    )
+                else:
+                    open_entry = agent.role_history.filter(effective_to__isnull=True).first()
+                    if open_entry:
+                        open_entry.effective_to = today
+                        open_entry.save(update_fields=['effective_to'])
+                RoleHistory.objects.create(
+                    agent=agent, role=agent.role, role_type=agent.role_type or '',
+                    supervisor=agent.supervisor, employer=agent.employer,
+                    billing_status=agent.billing_status,
+                    effective_from=today, changed_by=request.user,
+                )
             if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
                 user.set_unusable_password()
                 user.save()
@@ -1256,3 +1302,436 @@ def activity_log(request):
         'selected_user': user_filter,
         'selected_date': date_filter,
     })
+
+
+@login_required
+def agent_history(request, pk):
+    from datetime import date as date_cls, timedelta
+    from decimal import Decimal
+    from adherence.models import AdherenceRecord, Coding
+
+    agent = get_object_or_404(Agent, pk=pk)
+    today = date_cls.today()
+    five_years_ago = today.replace(year=today.year - 5)
+
+    date_from_str = request.GET.get('from', '')
+    date_to_str = request.GET.get('to', '')
+    try:
+        date_from = date_cls.fromisoformat(date_from_str)
+    except (ValueError, TypeError):
+        date_from = today - timedelta(days=30)
+    try:
+        date_to = date_cls.fromisoformat(date_to_str)
+    except (ValueError, TypeError):
+        date_to = today
+    date_from = max(date_from, five_years_ago)
+    date_to = min(date_to, today)
+
+    # Role history
+    role_history = list(agent.role_history.select_related('supervisor__user', 'changed_by').all())
+
+    # Seed initial entry if none exists (for legacy agents)
+    if not role_history:
+        RoleHistory.objects.create(
+            agent=agent, role=agent.role, role_type=agent.role_type or '',
+            supervisor=agent.supervisor, employer=agent.employer,
+            billing_status=agent.billing_status,
+            effective_from=agent.start_date or today,
+            changed_by=None,
+        )
+        role_history = list(agent.role_history.select_related('supervisor__user', 'changed_by').all())
+
+    # Schedule history: ShiftTemplates grouped by effective_from
+    from collections import defaultdict, OrderedDict
+    templates = list(ShiftTemplate.objects.filter(agent=agent).order_by('-effective_from', 'day_of_week'))
+    sched_groups = OrderedDict()
+    DAYS_ABBR = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    for t in templates:
+        key = t.effective_from or date_cls(2000, 1, 1)
+        if key not in sched_groups:
+            sched_groups[key] = []
+        sched_groups[key].append(t)
+    schedule_history = list(sched_groups.items())
+
+    # Attendance & hours by week
+    records = list(AdherenceRecord.objects.filter(
+        agent=agent, date__gte=date_from, date__lte=date_to
+    ).order_by('date'))
+    codings_qs = list(Coding.objects.filter(
+        agent=agent, date__gte=date_from, date__lte=date_to
+    ).order_by('-date', 'start_time'))
+
+    record_map = {r.date: r for r in records}
+    coding_map = defaultdict(Decimal)
+    for c in codings_qs:
+        coding_map[c.date] += Decimal(str(c.total_hours()))
+
+    # Build week rows (most recent first)
+    ws = date_from - timedelta(days=date_from.weekday())
+    attendance_weeks = []
+    while ws <= date_to:
+        week_dates = [ws + timedelta(days=i) for i in range(7)]
+        days = []
+        login_total = Decimal('0')
+        coded_total = Decimal('0')
+        has_data = False
+        bonus = True
+        bonus_det = False
+        BONUS_Q = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
+        BONUS_DQ = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA', 'S'}
+        for d in week_dates:
+            r = record_map.get(d)
+            c_hrs = coding_map.get(d, Decimal('0'))
+            status = r.status if r else ''
+            hrs = r.actual_hours if r else None
+            if r or c_hrs:
+                has_data = True
+            if hrs:
+                login_total += hrs
+            coded_total += c_hrs
+            if status in BONUS_Q:
+                bonus_det = True
+            elif status in BONUS_DQ:
+                bonus = False
+                bonus_det = True
+            elif status:
+                bonus = False
+                bonus_det = True
+            days.append({'date': d, 'status': status, 'hours': hrs, 'coded': c_hrs})
+        if has_data:
+            total = login_total + coded_total
+            attendance_weeks.append({
+                'week_start': ws,
+                'days': days,
+                'login_hrs': login_total,
+                'coded_hrs': coded_total,
+                'total_hrs': total,
+                'bonus': 'Yes' if (bonus and bonus_det) else ('No' if not bonus else '—'),
+            })
+        ws += timedelta(days=7)
+    attendance_weeks.reverse()
+
+    # OT history
+    ot_shifts = list(OvertimeShift.objects.filter(agent=agent).order_by('-date')[:500])
+
+    # Export CSV
+    if request.GET.get('export') == 'attendance':
+        import csv
+        from django.http import HttpResponse
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="attendance_{agent.pk}_{date_from}_{date_to}.csv"'
+        w = csv.writer(resp)
+        w.writerow(['Week Start', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Login Hrs', 'Coded Hrs', 'Total Hrs', 'Bonus'])
+        for wk in attendance_weeks:
+            w.writerow([
+                wk['week_start'],
+                *[d['status'] for d in wk['days']],
+                str(wk['login_hrs']), str(wk['coded_hrs']), str(wk['total_hrs']),
+                wk['bonus'],
+            ])
+        return resp
+
+    if request.GET.get('export') == 'codings':
+        import csv
+        from django.http import HttpResponse
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="codings_{agent.pk}_{date_from}_{date_to}.csv"'
+        w = csv.writer(resp)
+        w.writerow(['Date', 'Start', 'End', 'Duration', 'Notes'])
+        for c in codings_qs:
+            w.writerow([c.date, c.start_time.strftime('%H:%M'), c.end_time.strftime('%H:%M'), c.total_hhmmss(), c.notes])
+        return resp
+
+    if request.GET.get('export') == 'ot':
+        import csv
+        from django.http import HttpResponse
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="ot_{agent.pk}.csv"'
+        w = csv.writer(resp)
+        w.writerow(['Date', 'Start', 'End', 'Hours', 'Incentive', 'Completed'])
+        for s in ot_shifts:
+            w.writerow([s.date, s.start_time.strftime('%H:%M'), s.end_time.strftime('%H:%M'), str(s.total_shift_hours()), s.get_incentive_type_display(), 'Yes' if s.is_completed else 'No'])
+        return resp
+
+    return render(request, 'scheduling/agent_history.html', {
+        'agent': agent,
+        'role_history': role_history,
+        'schedule_history': schedule_history,
+        'attendance_weeks': attendance_weeks,
+        'codings': codings_qs,
+        'ot_shifts': ot_shifts,
+        'date_from': date_from,
+        'date_to': date_to,
+        'five_years_ago': five_years_ago,
+        'today': today,
+        'days_abbr': DAYS_ABBR,
+    })
+
+
+# ── Floor-wide Records ────────────────────────────────────────────────────────
+
+@login_required
+def records_attendance(request):
+    from datetime import date as date_cls, timedelta
+    from adherence.models import AdherenceRecord
+
+    today = date_cls.today()
+    five_years_ago = today.replace(year=today.year - 5)
+
+    date_from = _parse_date(request.GET.get('from'), today - timedelta(days=30))
+    date_to   = _parse_date(request.GET.get('to'), today)
+    date_from = max(date_from, five_years_ago)
+    date_to   = min(date_to, today)
+
+    supervisor_id = request.GET.get('supervisor', '')
+    role_type_f   = request.GET.get('role_type', '')
+    employer_f    = request.GET.get('employer', '')
+    status_f      = request.GET.get('status', '')
+
+    supervisors = Agent.objects.filter(
+        role_type__in=('supervisor', 'coordinator'), status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    qs = AdherenceRecord.objects.filter(
+        date__gte=date_from, date__lte=date_to,
+        agent__track_attendance=True,
+    ).select_related('agent__user', 'agent__supervisor__user').order_by('-date', 'agent__user__last_name')
+
+    if supervisor_id:
+        try:
+            qs = qs.filter(agent__supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+    if role_type_f:
+        qs = qs.filter(agent__role_type=role_type_f)
+    if employer_f:
+        qs = qs.filter(agent__employer=employer_f)
+    if status_f:
+        qs = qs.filter(status=status_f)
+
+    records = list(qs[:2000])  # cap for performance
+
+    if request.GET.get('export') == '1':
+        import csv as _csv
+        from django.http import HttpResponse
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="attendance_records_{date_from}_{date_to}.csv"'
+        w = _csv.writer(resp)
+        w.writerow(['Date', 'Day', 'Agent', 'Supervisor', 'Role Type', 'Employer', 'Status', 'Hours'])
+        for r in records:
+            w.writerow([
+                r.date, r.date.strftime('%A'),
+                str(r.agent), str(r.agent.supervisor or ''),
+                r.agent.get_role_type_display(), r.agent.employer,
+                r.status, str(r.actual_hours or ''),
+            ])
+        return resp
+
+    from adherence.models import AdherenceRecord as AR
+    status_choices = AR.STATUS_CHOICES
+    role_type_choices = Agent.ROLE_TYPE_CHOICES
+    employer_choices = Agent.EMPLOYER_CHOICES
+
+    return render(request, 'records/attendance.html', {
+        'records': records,
+        'date_from': date_from,
+        'date_to': date_to,
+        'five_years_ago': five_years_ago,
+        'today': today,
+        'supervisors': supervisors,
+        'selected_supervisor': supervisor_id,
+        'selected_role_type': role_type_f,
+        'selected_employer': employer_f,
+        'selected_status': status_f,
+        'status_choices': status_choices,
+        'role_type_choices': role_type_choices,
+        'employer_choices': employer_choices,
+        'count': len(records),
+    })
+
+
+@login_required
+def records_hours(request):
+    from datetime import date as date_cls, timedelta
+    from decimal import Decimal
+    from collections import defaultdict
+    from adherence.models import AdherenceRecord, Coding, DailyAgentHours
+
+    today = date_cls.today()
+    five_years_ago = today.replace(year=today.year - 5)
+
+    date_from = _parse_date(request.GET.get('from'), today - timedelta(days=30))
+    date_to   = _parse_date(request.GET.get('to'), today)
+    date_from = max(date_from, five_years_ago)
+    date_to   = min(date_to, today)
+
+    supervisor_id = request.GET.get('supervisor', '')
+    role_type_f   = request.GET.get('role_type', '')
+    employer_f    = request.GET.get('employer', '')
+    billing_f     = request.GET.get('billing', '')
+
+    supervisors = Agent.objects.filter(
+        role_type__in=('supervisor', 'coordinator'), status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    agents_qs = Agent.objects.filter(track_attendance=True).select_related('user', 'supervisor__user')
+    if supervisor_id:
+        try:
+            agents_qs = agents_qs.filter(supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+    if role_type_f:
+        agents_qs = agents_qs.filter(role_type=role_type_f)
+    if employer_f:
+        agents_qs = agents_qs.filter(employer=employer_f)
+    if billing_f:
+        agents_qs = agents_qs.filter(billing_status=billing_f)
+
+    agents = list(agents_qs.order_by('user__last_name', 'user__first_name'))
+    agent_ids = [a.pk for a in agents]
+
+    # Get all dates in range
+    all_dates = []
+    d = date_from
+    while d <= date_to:
+        all_dates.append(d)
+        d += timedelta(days=1)
+
+    adh_qs = AdherenceRecord.objects.filter(agent_id__in=agent_ids, date__gte=date_from, date__lte=date_to)
+    cod_qs = Coding.objects.filter(agent_id__in=agent_ids, date__gte=date_from, date__lte=date_to)
+
+    # Map (agent_id, date) -> hours
+    adh_map = {}
+    for r in adh_qs:
+        adh_map[(r.agent_id, r.date)] = r.actual_hours or Decimal('0')
+
+    cod_map = defaultdict(Decimal)
+    for c in cod_qs:
+        cod_map[(c.agent_id, c.date)] += Decimal(str(c.total_hours()))
+
+    # Group by agent + week
+    def week_start(d):
+        return d - timedelta(days=d.weekday())
+
+    rows = []
+    for agent in agents:
+        # Get all weeks
+        weeks_seen = set()
+        for d in all_dates:
+            ws = week_start(d)
+            if (agent.pk, ws) not in weeks_seen:
+                weeks_seen.add((agent.pk, ws))
+                week_dates = [ws + timedelta(days=i) for i in range(7)]
+                login_hrs = sum((adh_map.get((agent.pk, wd), Decimal('0')) for wd in week_dates), Decimal('0'))
+                coded_hrs = sum((cod_map.get((agent.pk, wd), Decimal('0')) for wd in week_dates), Decimal('0'))
+                total_hrs = login_hrs + coded_hrs
+                if login_hrs > 0 or coded_hrs > 0:
+                    rows.append({
+                        'agent': agent,
+                        'week_start': ws,
+                        'login_hrs': login_hrs,
+                        'coded_hrs': coded_hrs,
+                        'total_hrs': total_hrs,
+                    })
+
+    rows.sort(key=lambda r: (-r['week_start'].toordinal(), r['agent'].user.last_name))
+
+    if request.GET.get('export') == '1':
+        import csv as _csv
+        from django.http import HttpResponse
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="hours_records_{date_from}_{date_to}.csv"'
+        w = _csv.writer(resp)
+        w.writerow(['Week Start', 'Agent', 'Supervisor', 'Role Type', 'Employer', 'Login Hrs', 'Coded Hrs', 'Total Hrs'])
+        for r in rows:
+            w.writerow([
+                r['week_start'], str(r['agent']),
+                str(r['agent'].supervisor or ''),
+                r['agent'].get_role_type_display(), r['agent'].employer,
+                str(r['login_hrs']), str(r['coded_hrs']), str(r['total_hrs']),
+            ])
+        return resp
+
+    return render(request, 'records/hours.html', {
+        'rows': rows,
+        'date_from': date_from,
+        'date_to': date_to,
+        'five_years_ago': five_years_ago,
+        'today': today,
+        'supervisors': supervisors,
+        'selected_supervisor': supervisor_id,
+        'selected_role_type': role_type_f,
+        'selected_employer': employer_f,
+        'selected_billing': billing_f,
+        'role_type_choices': Agent.ROLE_TYPE_CHOICES,
+        'employer_choices': Agent.EMPLOYER_CHOICES,
+        'billing_choices': Agent.BILLING_STATUS_CHOICES,
+        'count': len(rows),
+    })
+
+
+@login_required
+def records_role_log(request):
+    from datetime import date as date_cls, timedelta
+
+    today = date_cls.today()
+    five_years_ago = today.replace(year=today.year - 5)
+
+    date_from = _parse_date(request.GET.get('from'), today - timedelta(days=30))
+    date_to   = _parse_date(request.GET.get('to'), today)
+    date_from = max(date_from, five_years_ago)
+    date_to   = min(date_to, today)
+
+    supervisor_id = request.GET.get('supervisor', '')
+
+    supervisors = Agent.objects.filter(
+        role_type__in=('supervisor', 'coordinator'), status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    qs = RoleHistory.objects.filter(
+        effective_from__gte=date_from, effective_from__lte=date_to,
+    ).select_related('agent__user', 'agent__supervisor__user', 'supervisor__user', 'changed_by').order_by('-changed_at')
+
+    if supervisor_id:
+        try:
+            qs = qs.filter(agent__supervisor_id=int(supervisor_id))
+        except (ValueError, TypeError):
+            pass
+
+    entries = list(qs[:1000])
+
+    if request.GET.get('export') == '1':
+        import csv as _csv
+        from django.http import HttpResponse
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="role_log_{date_from}_{date_to}.csv"'
+        w = _csv.writer(resp)
+        w.writerow(['Date', 'Agent', 'Supervisor', 'Role', 'Role Type', 'Employer', 'Effective From', 'Effective To', 'Changed By'])
+        for e in entries:
+            w.writerow([
+                e.changed_at.strftime('%Y-%m-%d'),
+                str(e.agent), str(e.agent.supervisor or ''),
+                e.role, e.role_type, e.employer,
+                str(e.effective_from), str(e.effective_to or ''),
+                e.changed_by.get_full_name() if e.changed_by else '',
+            ])
+        return resp
+
+    return render(request, 'records/role_log.html', {
+        'entries': entries,
+        'date_from': date_from,
+        'date_to': date_to,
+        'five_years_ago': five_years_ago,
+        'today': today,
+        'supervisors': supervisors,
+        'selected_supervisor': supervisor_id,
+        'count': len(entries),
+    })
+
+
+def _parse_date(val, default):
+    from datetime import date as date_cls
+    try:
+        return date_cls.fromisoformat(val) if val else default
+    except (ValueError, TypeError):
+        return default

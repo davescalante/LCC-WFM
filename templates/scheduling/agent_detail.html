@@ -1,6 +1,13 @@
 {% extends 'base.html' %}
 {% block title %} - {{ agent }}{% endblock %}
 {% block content %}
+<!-- Tab bar -->
+<div style="display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid #e5e7eb;">
+    <a href="{% url 'agent_detail' agent.pk %}"
+       style="padding:8px 20px;font-size:13px;font-weight:600;color:#1a3a5c;text-decoration:none;border-bottom:2px solid #1a3a5c;margin-bottom:-2px;background:white;">Profile</a>
+    <a href="{% url 'agent_history' agent.pk %}"
+       style="padding:8px 20px;font-size:13px;font-weight:600;color:#888;text-decoration:none;">History</a>
+</div>
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>{{ agent.user.get_full_name }}</h1>
     <div>

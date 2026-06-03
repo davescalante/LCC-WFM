@@ -1,0 +1,264 @@
+{% extends 'base.html' %}
+{% block title %} - {{ agent }} History{% endblock %}
+{% block content %}
+
+<!-- Tab bar -->
+<div style="display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid #e5e7eb;">
+    <a href="{% url 'agent_detail' agent.pk %}"
+       style="padding:8px 20px;font-size:13px;font-weight:600;color:#888;text-decoration:none;">Profile</a>
+    <a href="{% url 'agent_history' agent.pk %}"
+       style="padding:8px 20px;font-size:13px;font-weight:600;color:#1a3a5c;text-decoration:none;border-bottom:2px solid #1a3a5c;margin-bottom:-2px;background:white;">History</a>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>{{ agent }} — History</h1>
+    <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-primary">Edit Profile</a>
+</div>
+
+<!-- Date range filter -->
+<div class="card" style="margin-bottom:20px;">
+    <form method="get" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+        <div>
+            <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:4px;">From</label>
+            <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}"
+                   min="{{ five_years_ago|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <div>
+            <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:4px;">To</label>
+            <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}"
+                   min="{{ five_years_ago|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:6px 16px;font-size:13px;">Apply</button>
+        <a href="{% url 'agent_history' agent.pk %}" class="btn" style="padding:6px 14px;font-size:13px;background:#e5e7eb;color:#333;">Reset</a>
+    </form>
+</div>
+
+<!-- ── Role History ── -->
+<details open style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#1a3a5c;padding:12px 16px;background:white;border-radius:8px;border:1px solid #e5e7eb;list-style:none;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;">&#9660;</span> Role History
+        <span style="font-size:12px;color:#888;font-weight:400;margin-left:4px;">({{ role_history|length }} entries)</span>
+    </summary>
+    <div class="card" style="border-radius:0 0 8px 8px;margin-top:0;border-top:none;">
+        {% if role_history %}
+        <table>
+            <thead>
+                <tr>
+                    <th style="font-size:12px;">Effective From</th>
+                    <th style="font-size:12px;">Effective To</th>
+                    <th style="font-size:12px;">Role</th>
+                    <th style="font-size:12px;">Role Type</th>
+                    <th style="font-size:12px;">Supervisor</th>
+                    <th style="font-size:12px;">Employer</th>
+                    <th style="font-size:12px;">Billing</th>
+                    <th style="font-size:12px;">Changed By</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rh in role_history %}
+                <tr>
+                    <td style="font-size:12px;">{{ rh.effective_from|date:"M d, Y" }}</td>
+                    <td style="font-size:12px;">{% if rh.effective_to %}{{ rh.effective_to|date:"M d, Y" }}{% else %}<span style="color:#15803d;font-weight:600;">Present</span>{% endif %}</td>
+                    <td style="font-size:12px;">{{ rh.role }}</td>
+                    <td style="font-size:12px;">{{ rh.role_type|default:"—" }}</td>
+                    <td style="font-size:12px;">{{ rh.supervisor|default:"—" }}</td>
+                    <td style="font-size:12px;">{{ rh.employer|default:"—" }}</td>
+                    <td style="font-size:12px;">{{ rh.billing_status|default:"—" }}</td>
+                    <td style="font-size:12px;">{% if rh.changed_by %}{{ rh.changed_by.get_full_name }}{% else %}<span style="color:#aaa;">—</span>{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="font-size:13px;color:#888;">No role history on file.</p>
+        {% endif %}
+    </div>
+</details>
+
+<!-- ── Schedule History ── -->
+<details style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#1a3a5c;padding:12px 16px;background:white;border-radius:8px;border:1px solid #e5e7eb;list-style:none;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;">&#9658;</span> Schedule History
+        <span style="font-size:12px;color:#888;font-weight:400;margin-left:4px;">({{ schedule_history|length }} version{% if schedule_history|length != 1 %}s{% endif %})</span>
+    </summary>
+    <div class="card" style="border-radius:0 0 8px 8px;margin-top:0;border-top:none;">
+        {% if schedule_history %}
+        {% for eff_from, tmpl_list in schedule_history %}
+        <div style="margin-bottom:16px;">
+            <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #eee;">
+                Effective from: {% if eff_from.year == 2000 and eff_from.month == 1 and eff_from.day == 1 %}(legacy){% else %}{{ eff_from|date:"M d, Y" }}{% endif %}
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                {% for t in tmpl_list %}
+                <div style="padding:6px 10px;background:#f0f4f8;border-radius:4px;font-size:11px;color:#333;">
+                    <span style="font-weight:600;">{{ t.get_day_of_week_display|slice:":3" }}</span>
+                    {% if t.is_off %}
+                    <span style="color:#c0392b;margin-left:4px;">OFF</span>
+                    {% elif t.start_time and t.end_time %}
+                    <span style="margin-left:4px;">{{ t.start_time|time:"H:i" }}–{{ t.end_time|time:"H:i" }}</span>
+                    {% else %}
+                    <span style="margin-left:4px;">—</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p style="font-size:13px;color:#888;">No schedule templates on file.</p>
+        {% endif %}
+    </div>
+</details>
+
+<!-- ── Attendance & Hours ── -->
+<details style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#1a3a5c;padding:12px 16px;background:white;border-radius:8px;border:1px solid #e5e7eb;list-style:none;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;">&#9658;</span> Attendance &amp; Hours
+        <span style="font-size:12px;color:#888;font-weight:400;margin-left:4px;">({{ attendance_weeks|length }} week{% if attendance_weeks|length != 1 %}s{% endif %})</span>
+    </summary>
+    <div class="card" style="border-radius:0 0 8px 8px;margin-top:0;border-top:none;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">
+            <a href="?from={{ date_from|date:'Y-m-d' }}&to={{ date_to|date:'Y-m-d' }}&export=attendance"
+               class="btn btn-primary" style="padding:5px 12px;font-size:12px;">Export CSV</a>
+        </div>
+        {% if attendance_weeks %}
+        <table>
+            <thead>
+                <tr>
+                    <th style="font-size:11px;">Week</th>
+                    {% for d in days_abbr %}<th style="font-size:11px;text-align:center;">{{ d }}</th>{% endfor %}
+                    <th style="font-size:11px;text-align:right;">Login</th>
+                    <th style="font-size:11px;text-align:right;">Coded</th>
+                    <th style="font-size:11px;text-align:right;">Total</th>
+                    <th style="font-size:11px;text-align:center;">Bonus</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for wk in attendance_weeks %}
+                <tr>
+                    <td style="font-size:11px;white-space:nowrap;">{{ wk.week_start|date:"M d" }}</td>
+                    {% for d in wk.days %}
+                    <td style="font-size:11px;text-align:center;">
+                        {% if d.status %}
+                        <span title="{{ d.date }}">{{ d.status }}</span>
+                        {% if d.hours %}<br><span style="color:#888;font-size:10px;">{{ d.hours }}</span>{% endif %}
+                        {% else %}
+                        <span style="color:#ddd;">—</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td style="font-size:11px;text-align:right;color:#1a3a5c;">{{ wk.login_hrs }}</td>
+                    <td style="font-size:11px;text-align:right;color:#555;">{{ wk.coded_hrs }}</td>
+                    <td style="font-size:11px;text-align:right;font-weight:600;">{{ wk.total_hrs }}</td>
+                    <td style="font-size:11px;text-align:center;">
+                        {% if wk.bonus == 'Yes' %}
+                        <span class="badge badge-green">Yes</span>
+                        {% elif wk.bonus == 'No' %}
+                        <span class="badge badge-red">No</span>
+                        {% else %}
+                        <span style="color:#aaa;">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="font-size:13px;color:#888;">No attendance records in this date range.</p>
+        {% endif %}
+    </div>
+</details>
+
+<!-- ── Codings ── -->
+<details style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#1a3a5c;padding:12px 16px;background:white;border-radius:8px;border:1px solid #e5e7eb;list-style:none;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;">&#9658;</span> Codings
+        <span style="font-size:12px;color:#888;font-weight:400;margin-left:4px;">({{ codings|length }} entry{% if codings|length != 1 %}s{% endif %})</span>
+    </summary>
+    <div class="card" style="border-radius:0 0 8px 8px;margin-top:0;border-top:none;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">
+            <a href="?from={{ date_from|date:'Y-m-d' }}&to={{ date_to|date:'Y-m-d' }}&export=codings"
+               class="btn btn-primary" style="padding:5px 12px;font-size:12px;">Export CSV</a>
+        </div>
+        {% if codings %}
+        <table>
+            <thead>
+                <tr>
+                    <th style="font-size:11px;">Date</th>
+                    <th style="font-size:11px;">Start</th>
+                    <th style="font-size:11px;">End</th>
+                    <th style="font-size:11px;">Duration</th>
+                    <th style="font-size:11px;">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in codings %}
+                <tr>
+                    <td style="font-size:11px;">{{ c.date|date:"M d, Y" }}</td>
+                    <td style="font-size:11px;">{{ c.start_time|time:"H:i" }}</td>
+                    <td style="font-size:11px;">{{ c.end_time|time:"H:i" }}</td>
+                    <td style="font-size:11px;">{{ c.total_hhmmss }}</td>
+                    <td style="font-size:11px;color:#555;">{{ c.notes|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="font-size:13px;color:#888;">No codings in this date range.</p>
+        {% endif %}
+    </div>
+</details>
+
+<!-- ── OT Shifts ── -->
+<details style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#1a3a5c;padding:12px 16px;background:white;border-radius:8px;border:1px solid #e5e7eb;list-style:none;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;">&#9658;</span> OT Shifts
+        <span style="font-size:12px;color:#888;font-weight:400;margin-left:4px;">({{ ot_shifts|length }} record{% if ot_shifts|length != 1 %}s{% endif %})</span>
+    </summary>
+    <div class="card" style="border-radius:0 0 8px 8px;margin-top:0;border-top:none;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">
+            <a href="?from={{ date_from|date:'Y-m-d' }}&to={{ date_to|date:'Y-m-d' }}&export=ot"
+               class="btn btn-primary" style="padding:5px 12px;font-size:12px;">Export CSV</a>
+        </div>
+        {% if ot_shifts %}
+        <table>
+            <thead>
+                <tr>
+                    <th style="font-size:11px;">Date</th>
+                    <th style="font-size:11px;">Start</th>
+                    <th style="font-size:11px;">End</th>
+                    <th style="font-size:11px;text-align:right;">Hours</th>
+                    <th style="font-size:11px;">Incentive</th>
+                    <th style="font-size:11px;text-align:center;">Completed</th>
+                    <th style="font-size:11px;">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in ot_shifts %}
+                <tr>
+                    <td style="font-size:11px;">{{ s.date|date:"M d, Y" }}</td>
+                    <td style="font-size:11px;">{{ s.start_time|time:"H:i" }}</td>
+                    <td style="font-size:11px;">{{ s.end_time|time:"H:i" }}</td>
+                    <td style="font-size:11px;text-align:right;">{{ s.total_shift_hours }}</td>
+                    <td style="font-size:11px;">{{ s.get_incentive_type_display }}</td>
+                    <td style="font-size:11px;text-align:center;">
+                        {% if s.is_completed %}
+                        <span class="badge badge-green">Yes</span>
+                        {% else %}
+                        <span class="badge badge-yellow">No</span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size:11px;color:#555;">{{ s.notes|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="font-size:13px;color:#888;">No OT shifts on file.</p>
+        {% endif %}
+    </div>
+</details>
+
+{% endblock %}

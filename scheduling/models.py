@@ -263,3 +263,27 @@ class Break(models.Model):
 
     def __str__(self):
         return f"{self.shift.agent} - {self.break_type} {self.start_time}-{self.end_time}"
+
+
+class RoleHistory(models.Model):
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='role_history')
+    role = models.CharField(max_length=20)
+    role_type = models.CharField(max_length=20, blank=True)
+    supervisor = models.ForeignKey(
+        Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    employer = models.CharField(max_length=20, blank=True)
+    billing_status = models.CharField(max_length=20, blank=True)
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    changed_by = models.ForeignKey(
+        'auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-effective_from', '-changed_at']
+
+    def __str__(self):
+        to = self.effective_to.strftime('%b %d, %Y') if self.effective_to else 'Present'
+        return f"{self.agent} — {self.role} from {self.effective_from.strftime('%b %d, %Y')} to {to}"

@@ -23,4 +23,8 @@ urlpatterns = [
     path('shifts/quick-edit/', views.shift_quick_edit, name='shift_quick_edit'),
     path('activity/', views.activity_log, name='activity_log'),
     path('poll/', views.live_poll, name='live_poll'),
+    path('agents/<int:pk>/history/', views.agent_history, name='agent_history'),
+    path('records/', views.records_attendance, name='records_attendance'),
+    path('records/hours/', views.records_hours, name='records_hours'),
+    path('records/roles/', views.records_role_log, name='records_role_log'),
 ]

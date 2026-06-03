@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% block title %} - Hours Records{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Hours Records</h1>
+    <div style="display:flex;gap:8px;">
+        <a href="{% url 'records_attendance' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Attendance</a>
+        <a href="{% url 'records_role_log' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Role Log</a>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="card" style="margin-bottom:20px;">
+    <form method="get" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">From</label>
+            <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}"
+                   min="{{ five_years_ago|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">To</label>
+            <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}"
+                   min="{{ five_years_ago|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Supervisor</label>
+            <select name="supervisor" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All supervisors</option>
+                {% for sup in supervisors %}
+                <option value="{{ sup.pk }}" {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>{{ sup }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Role Type</label>
+            <select name="role_type" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All types</option>
+                {% for val, label in role_type_choices %}
+                <option value="{{ val }}" {% if selected_role_type == val %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Employer</label>
+            <select name="employer" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All</option>
+                {% for val, label in employer_choices %}
+                <option value="{{ val }}" {% if selected_employer == val %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Billing</label>
+            <select name="billing" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All</option>
+                {% for val, label in billing_choices %}
+                <option value="{{ val }}" {% if selected_billing == val %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:6px 16px;font-size:13px;">Filter</button>
+        <a href="{% url 'records_hours' %}" class="btn" style="padding:6px 14px;font-size:13px;background:#e5e7eb;color:#333;">Reset</a>
+    </form>
+</div>
+
+<!-- Results -->
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <span style="font-size:13px;color:#555;">{{ count }} row{% if count != 1 %}s{% endif %}</span>
+        <a href="?from={{ date_from|date:'Y-m-d' }}&to={{ date_to|date:'Y-m-d' }}&supervisor={{ selected_supervisor }}&role_type={{ selected_role_type }}&employer={{ selected_employer }}&billing={{ selected_billing }}&export=1"
+           class="btn btn-primary" style="padding:5px 14px;font-size:12px;">Export CSV</a>
+    </div>
+
+    {% if rows %}
+    <table>
+        <thead>
+            <tr>
+                <th style="font-size:12px;">Week Start</th>
+                <th style="font-size:12px;">Agent</th>
+                <th style="font-size:12px;">Supervisor</th>
+                <th style="font-size:12px;">Role Type</th>
+                <th style="font-size:12px;">Employer</th>
+                <th style="font-size:12px;text-align:right;">Login Hrs</th>
+                <th style="font-size:12px;text-align:right;">Coded Hrs</th>
+                <th style="font-size:12px;text-align:right;">Total Hrs</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr>
+                <td style="font-size:12px;white-space:nowrap;">{{ r.week_start|date:"M d, Y" }}</td>
+                <td style="font-size:12px;">
+                    <a href="{% url 'agent_history' r.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ r.agent }}</a>
+                </td>
+                <td style="font-size:12px;color:#555;">{{ r.agent.supervisor|default:"—" }}</td>
+                <td style="font-size:12px;color:#555;">{{ r.agent.get_role_type_display|default:"—" }}</td>
+                <td style="font-size:12px;color:#555;">{{ r.agent.employer|default:"—" }}</td>
+                <td style="font-size:12px;text-align:right;color:#1a3a5c;">{{ r.login_hrs }}</td>
+                <td style="font-size:12px;text-align:right;color:#555;">{{ r.coded_hrs }}</td>
+                <td style="font-size:12px;text-align:right;font-weight:600;">{{ r.total_hrs }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="font-size:13px;color:#888;text-align:center;padding:24px 0;">No hours data found for the selected filters.</p>
+    {% endif %}
+</div>
+
+{% endblock %}

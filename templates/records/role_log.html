@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block title %} - Role Change Log{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Role Change Log</h1>
+    <div style="display:flex;gap:8px;">
+        <a href="{% url 'records_attendance' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Attendance</a>
+        <a href="{% url 'records_hours' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Hours</a>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="card" style="margin-bottom:20px;">
+    <form method="get" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">From (effective date)</label>
+            <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}"
+                   min="{{ five_years_ago|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">To</label>
+            <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}"
+                   min="{{ five_years_ago|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Supervisor</label>
+            <select name="supervisor" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All supervisors</option>
+                {% for sup in supervisors %}
+                <option value="{{ sup.pk }}" {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>{{ sup }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:6px 16px;font-size:13px;">Filter</button>
+        <a href="{% url 'records_role_log' %}" class="btn" style="padding:6px 14px;font-size:13px;background:#e5e7eb;color:#333;">Reset</a>
+    </form>
+</div>
+
+<!-- Results -->
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <span style="font-size:13px;color:#555;">{{ count }} entry{% if count != 1 %}s{% endif %}</span>
+        <a href="?from={{ date_from|date:'Y-m-d' }}&to={{ date_to|date:'Y-m-d' }}&supervisor={{ selected_supervisor }}&export=1"
+           class="btn btn-primary" style="padding:5px 14px;font-size:12px;">Export CSV</a>
+    </div>
+
+    {% if entries %}
+    <table>
+        <thead>
+            <tr>
+                <th style="font-size:12px;">Changed</th>
+                <th style="font-size:12px;">Agent</th>
+                <th style="font-size:12px;">Supervisor</th>
+                <th style="font-size:12px;">Role</th>
+                <th style="font-size:12px;">Role Type</th>
+                <th style="font-size:12px;">Employer</th>
+                <th style="font-size:12px;">Billing</th>
+                <th style="font-size:12px;">Effective From</th>
+                <th style="font-size:12px;">Effective To</th>
+                <th style="font-size:12px;">Changed By</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for e in entries %}
+            <tr>
+                <td style="font-size:11px;white-space:nowrap;color:#888;">{{ e.changed_at|date:"M d, Y" }}</td>
+                <td style="font-size:12px;">
+                    <a href="{% url 'agent_history' e.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ e.agent }}</a>
+                </td>
+                <td style="font-size:12px;color:#555;">{{ e.agent.supervisor|default:"—" }}</td>
+                <td style="font-size:12px;">{{ e.role }}</td>
+                <td style="font-size:12px;color:#555;">{{ e.role_type|default:"—" }}</td>
+                <td style="font-size:12px;color:#555;">{{ e.employer|default:"—" }}</td>
+                <td style="font-size:12px;color:#555;">{{ e.billing_status|default:"—" }}</td>
+                <td style="font-size:12px;white-space:nowrap;">{{ e.effective_from|date:"M d, Y" }}</td>
+                <td style="font-size:12px;white-space:nowrap;">
+                    {% if e.effective_to %}
+                    {{ e.effective_to|date:"M d, Y" }}
+                    {% else %}
+                    <span style="color:#15803d;font-weight:600;">Present</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:12px;color:#555;">
+                    {% if e.changed_by %}{{ e.changed_by.get_full_name }}{% else %}<span style="color:#aaa;">—</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="font-size:13px;color:#888;text-align:center;padding:24px 0;">No role changes found in this date range.</p>
+    {% endif %}
+</div>
+
+{% endblock %}
