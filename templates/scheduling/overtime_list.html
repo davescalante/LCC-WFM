@@ -124,26 +124,20 @@
                         {% elif ot.incentive_type == 'power_hour' %}
                         <span style="display:inline-block;background:#ffedd5;color:#9a3412;border:1px solid #f97316;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">2x</span>
                         {% endif %}
-                        <!-- Three-state status selector -->
-                        <div id="ot-status-{{ ot.pk }}" style="display:flex;gap:2px;margin-top:4px;">
-                            <button type="button" onclick="setOTStatus({{ ot.pk }}, 'pending')"
-                                class="ot-status-btn" data-status="pending"
-                                style="font-size:9px;padding:2px 5px;border-radius:3px;cursor:pointer;border:1px solid;
-                                    {% if ot.status == 'pending' %}background:#f3f4f6;color:#374151;border-color:#9ca3af;font-weight:700;{% else %}background:white;color:#9ca3af;border-color:#e5e7eb;{% endif %}">
-                                Pending
+                        <!-- Status pill -->
+                        <div id="ot-status-{{ ot.pk }}" style="position:relative;display:inline-block;margin-top:4px;">
+                            <button type="button" class="ot-pill" onclick="toggleOTDropdown({{ ot.pk }}, event)"
+                                style="font-size:10px;padding:2px 7px;border-radius:10px;cursor:pointer;border:1px solid;line-height:1.5;
+                                    {% if ot.status == 'completed' %}background:#dcfce7;color:#15803d;border-color:#86efac;
+                                    {% elif ot.status == 'no_show' %}background:#fee2e2;color:#dc2626;border-color:#fca5a5;
+                                    {% else %}background:#f3f4f6;color:#6b7280;border-color:#d1d5db;{% endif %}">
+                                {% if ot.status == 'completed' %}&#10003;{% elif ot.status == 'no_show' %}&#10007;{% else %}Pending{% endif %}
                             </button>
-                            <button type="button" onclick="setOTStatus({{ ot.pk }}, 'completed')"
-                                class="ot-status-btn" data-status="completed"
-                                style="font-size:9px;padding:2px 5px;border-radius:3px;cursor:pointer;border:1px solid;
-                                    {% if ot.status == 'completed' %}background:#dcfce7;color:#15803d;border-color:#86efac;font-weight:700;{% else %}background:white;color:#9ca3af;border-color:#e5e7eb;{% endif %}">
-                                ✓ Done
-                            </button>
-                            <button type="button" onclick="setOTStatus({{ ot.pk }}, 'no_show')"
-                                class="ot-status-btn" data-status="no_show"
-                                style="font-size:9px;padding:2px 5px;border-radius:3px;cursor:pointer;border:1px solid;
-                                    {% if ot.status == 'no_show' %}background:#fee2e2;color:#dc2626;border-color:#fca5a5;font-weight:700;{% else %}background:white;color:#9ca3af;border-color:#e5e7eb;{% endif %}">
-                                ✗ No Show
-                            </button>
+                            <div class="ot-dropdown" style="display:none;position:absolute;left:0;top:calc(100% + 3px);z-index:200;background:white;border:1px solid #e5e7eb;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.12);min-width:100px;overflow:hidden;">
+                                <button type="button" onclick="setOTStatus({{ ot.pk }}, 'pending')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#374151;">Pending</button>
+                                <button type="button" onclick="setOTStatus({{ ot.pk }}, 'completed')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#15803d;">&#10003; Done</button>
+                                <button type="button" onclick="setOTStatus({{ ot.pk }}, 'no_show')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#dc2626;">&#10007; No Show</button>
+                            </div>
                         </div>
                         <!-- Hover-reveal action buttons -->
                         <div class="ot-row-actions" style="display:none;margin-top:4px;gap:4px;justify-content:center;">
@@ -284,35 +278,45 @@ function toggleExportPanel() {
     p.style.display = p.style.display === 'none' ? 'block' : 'none';
 }
 
-const OT_STATUS_STYLES = {
-    pending:   'background:#f3f4f6;color:#374151;border-color:#9ca3af;font-weight:700;',
-    completed: 'background:#dcfce7;color:#15803d;border-color:#86efac;font-weight:700;',
-    no_show:   'background:#fee2e2;color:#dc2626;border-color:#fca5a5;font-weight:700;',
+const OT_PILL = {
+    pending:   {bg:'#f3f4f6', color:'#6b7280', border:'#d1d5db', text:'Pending'},
+    completed: {bg:'#dcfce7', color:'#15803d', border:'#86efac', text:'✓'},
+    no_show:   {bg:'#fee2e2', color:'#dc2626', border:'#fca5a5', text:'✗'},
 };
-const OT_STATUS_INACTIVE = 'background:white;color:#9ca3af;border-color:#e5e7eb;font-weight:normal;';
+
+function toggleOTDropdown(pk, e) {
+    e.stopPropagation();
+    const dd = document.querySelector('#ot-status-' + pk + ' .ot-dropdown');
+    const isOpen = dd && dd.style.display !== 'none';
+    document.querySelectorAll('.ot-dropdown').forEach(d => d.style.display = 'none');
+    if (!isOpen && dd) dd.style.display = 'block';
+}
+
+document.addEventListener('click', function() {
+    document.querySelectorAll('.ot-dropdown').forEach(d => d.style.display = 'none');
+});
 
 function setOTStatus(pk, newStatus) {
+    const wrap = document.getElementById('ot-status-' + pk);
+    if (wrap) wrap.querySelector('.ot-dropdown').style.display = 'none';
     const csrfToken = getCookie('csrftoken');
-    fetch(`/overtime/${pk}/set-status/`, {
+    fetch('/overtime/' + pk + '/set-status/', {
         method: 'POST',
         headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json'},
         body: JSON.stringify({status: newStatus}),
     })
     .then(r => r.json())
     .then(data => {
-        if (!data.status) return;
-        const container = document.getElementById(`ot-status-${pk}`);
-        if (!container) return;
-        const BASE = 'font-size:9px;padding:2px 5px;border-radius:3px;cursor:pointer;border:1px solid;';
-        container.querySelectorAll('.ot-status-btn').forEach(btn => {
-            const s = btn.dataset.status;
-            btn.style.cssText = BASE + (s === data.status ? OT_STATUS_STYLES[s] : OT_STATUS_INACTIVE);
-        });
-        // update earned totals
-        const entry = container.closest('.ot-entry');
+        if (!data.status || !wrap) return;
+        const p = OT_PILL[data.status];
+        const pill = wrap.querySelector('.ot-pill');
+        pill.textContent = p.text;
+        pill.style.background = p.bg;
+        pill.style.color = p.color;
+        pill.style.borderColor = p.border;
+        const entry = wrap.closest('.ot-entry');
         if (entry) {
-            const earned = data.status === 'completed' ? parseFloat(entry.dataset.offered || 0) : 0;
-            entry.dataset.earned = earned;
+            entry.dataset.earned = data.status === 'completed' ? parseFloat(entry.dataset.offered || 0) : 0;
             recalcAgentTotals(entry.closest('tr'));
         }
     })
@@ -327,10 +331,10 @@ function recalcAgentTotals(row) {
         totalOffered += parseFloat(e.dataset.offered || 0);
         totalEarned += parseFloat(e.dataset.earned || 0);
     });
-    const offeredEl = document.getElementById(`offered-${agentPk}`);
-    const earnedEl = document.getElementById(`earned-${agentPk}`);
-    if (offeredEl) offeredEl.textContent = totalOffered > 0 ? `$${totalOffered.toFixed(2)}` : '—';
-    if (earnedEl) earnedEl.textContent = totalEarned > 0 ? `$${totalEarned.toFixed(2)}` : '—';
+    const offeredEl = document.getElementById('offered-' + agentPk);
+    const earnedEl = document.getElementById('earned-' + agentPk);
+    if (offeredEl) offeredEl.textContent = totalOffered > 0 ? '$' + totalOffered.toFixed(2) : '—';
+    if (earnedEl) earnedEl.textContent = totalEarned > 0 ? '$' + totalEarned.toFixed(2) : '—';
 }
 
 function getCookie(name) {
