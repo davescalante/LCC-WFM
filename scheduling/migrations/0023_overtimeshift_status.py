@@ -18,8 +18,8 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.RunSQL(
-            "UPDATE scheduling_overtimeshift SET status = 'completed' WHERE is_completed = 1",
-            reverse_sql="UPDATE scheduling_overtimeshift SET is_completed = 1 WHERE status = 'completed'",
+            "UPDATE scheduling_overtimeshift SET status = 'completed' WHERE is_completed = TRUE",
+            reverse_sql="UPDATE scheduling_overtimeshift SET is_completed = TRUE WHERE status = 'completed'",
         ),
         migrations.RemoveField(
             model_name='overtimeshift',
