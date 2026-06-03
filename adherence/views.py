@@ -1122,8 +1122,8 @@ def upload_daily_file(request):
         total_secs = dah.login_seconds + coded_secs
         allowance_secs = int(total_secs * 0.125)
         excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-        final_secs = max(0, total_secs - excess_secs)
-        final_hours = Decimal(str(round(final_secs / 3600, 6)))
+        login_final_secs = max(0, dah.login_seconds - excess_secs)
+        final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
 
         AdherenceRecord.objects.update_or_create(
             agent_id=dah.agent_id,
@@ -1177,8 +1177,8 @@ def rematch_daily_upload(request):
         total_secs = dah.login_seconds + coded_secs
         allowance_secs = int(total_secs * 0.125)
         excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-        final_secs = max(0, total_secs - excess_secs)
-        final_hours = Decimal(str(round(final_secs / 3600, 6)))
+        login_final_secs = max(0, dah.login_seconds - excess_secs)
+        final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
 
         AdherenceRecord.objects.update_or_create(
             agent=agent,
