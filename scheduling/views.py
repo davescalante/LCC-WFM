@@ -1207,23 +1207,32 @@ def overtime_export(request):
             str(base_pay),
             str(incentive_bonus),
             str(total_offered),
-            'Yes' if ot.is_completed else 'No',
+            ot.get_status_display(),
         ])
     return response
 
 
 @login_required
-def overtime_toggle_complete(request, pk):
+def overtime_set_status(request, pk):
     from django.http import JsonResponse
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
+    import json as _json
+    try:
+        body = _json.loads(request.body)
+        new_status = body.get('status', '')
+    except (ValueError, KeyError):
+        new_status = ''
+    valid = {'pending', 'completed', 'no_show'}
+    if new_status not in valid:
+        return JsonResponse({'error': 'Invalid status'}, status=400)
     ot_shift = get_object_or_404(OvertimeShift, pk=pk)
-    ot_shift.is_completed = not ot_shift.is_completed
-    ot_shift.save(update_fields=['is_completed'])
-    log_action(request.user, 'Toggled OT completion',
-               f'{ot_shift.agent} on {ot_shift.date}: completed={ot_shift.is_completed}',
+    ot_shift.status = new_status
+    ot_shift.save(update_fields=['status'])
+    log_action(request.user, 'Updated OT status',
+               f'{ot_shift.agent} on {ot_shift.date}: status={new_status}',
                agent=ot_shift.agent)
-    return JsonResponse({'is_completed': ot_shift.is_completed, 'pk': pk})
+    return JsonResponse({'status': new_status, 'pk': pk})
 
 
 @login_required
@@ -1450,7 +1459,7 @@ def agent_history(request, pk):
         w = csv.writer(resp)
         w.writerow(['Date', 'Start', 'End', 'Hours', 'Incentive', 'Completed'])
         for s in ot_shifts:
-            w.writerow([s.date, s.start_time.strftime('%H:%M'), s.end_time.strftime('%H:%M'), str(s.total_shift_hours()), s.get_incentive_type_display(), 'Yes' if s.is_completed else 'No'])
+            w.writerow([s.date, s.start_time.strftime('%H:%M'), s.end_time.strftime('%H:%M'), str(s.total_shift_hours()), s.get_incentive_type_display(), s.get_status_display()])
         return resp
 
     return render(request, 'scheduling/agent_history.html', {

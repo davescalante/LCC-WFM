@@ -231,7 +231,7 @@
                     <th style="font-size:11px;">End</th>
                     <th style="font-size:11px;text-align:right;">Hours</th>
                     <th style="font-size:11px;">Incentive</th>
-                    <th style="font-size:11px;text-align:center;">Completed</th>
+                    <th style="font-size:11px;text-align:center;">Status</th>
                     <th style="font-size:11px;">Notes</th>
                 </tr>
             </thead>
@@ -244,10 +244,12 @@
                     <td style="font-size:11px;text-align:right;">{{ s.total_shift_hours }}</td>
                     <td style="font-size:11px;">{{ s.get_incentive_type_display }}</td>
                     <td style="font-size:11px;text-align:center;">
-                        {% if s.is_completed %}
-                        <span class="badge badge-green">Yes</span>
+                        {% if s.status == 'completed' %}
+                        <span class="badge badge-green">Completed</span>
+                        {% elif s.status == 'no_show' %}
+                        <span class="badge badge-red">No Show</span>
                         {% else %}
-                        <span class="badge badge-yellow">No</span>
+                        <span class="badge badge-yellow">Pending</span>
                         {% endif %}
                     </td>
                     <td style="font-size:11px;color:#555;">{{ s.notes|default:"—" }}</td>

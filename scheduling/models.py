@@ -192,7 +192,12 @@ class OvertimeShift(models.Model):
     incentive_type = models.CharField(max_length=20, choices=INCENTIVE_CHOICES, default='none')
     incentivized_hours = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     base_hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
-    is_completed = models.BooleanField(default=False)
+    OT_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('no_show', 'No Show'),
+    ]
+    status = models.CharField(max_length=10, choices=OT_STATUS_CHOICES, default='pending')
     notes = models.TextField(blank=True)
 
     class Meta:
@@ -225,7 +230,7 @@ class OvertimeShift(models.Model):
         return (total_hrs * rate + inc_hrs * rate * premium).quantize(Decimal('0.01'))
 
     def incentive_earned(self):
-        if not self.is_completed:
+        if self.status != 'completed':
             return None
         return self.incentive_offered()
 
