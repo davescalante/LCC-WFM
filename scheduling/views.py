@@ -25,7 +25,7 @@ def dashboard(request):
 @login_required
 def agent_list(request):
     supervisors = Agent.objects.filter(
-        role_type='supervisor', status='active'
+        role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
 
     if 'supervisor' in request.GET:
@@ -264,7 +264,7 @@ def shift_list(request):
     week_end = week_dates[-1]
 
     supervisors = Agent.objects.filter(
-        role_type='supervisor', status='active'
+        role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
 
     if 'supervisor' in request.GET:
@@ -782,7 +782,7 @@ def _get_week_start(request):
 def _get_supervisor_filter(request):
     """Returns (supervisor_id_str, supervisors_qs). Reads GET param saving to session."""
     supervisors = Agent.objects.filter(
-        role_type='supervisor', status='active'
+        role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
 
     if 'supervisor' in request.GET:

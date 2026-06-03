@@ -504,7 +504,7 @@ def _get_supervisor_filter(request):
     """Returns (supervisor_id_str, supervisors_qs).
     Reads GET param 'supervisor' (saving to session), or falls back to session."""
     supervisors = Agent.objects.filter(
-        role_type='supervisor', status='active'
+        role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
 
     if 'supervisor' in request.GET:

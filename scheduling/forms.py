@@ -36,7 +36,7 @@ class AgentForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['supervisor'].queryset = Agent.objects.filter(
-            role_type='supervisor'
+            role_type__in=('supervisor', 'coordinator')
         ).select_related('user').order_by('user__last_name', 'user__first_name')
 
     class Meta:
