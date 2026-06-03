@@ -326,6 +326,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         actual_total = Decimal('0')
         bonus = True          # True = eligible, False = disqualified, None = incomplete
         bonus_determined = False
+        bonus_reasons = []
 
         for day_date in week_dates:
             shift = shift_map.get((agent.pk, day_date))
@@ -399,11 +400,23 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 if status in BONUS_DISQUALIFYING:
                     bonus = False
                     bonus_determined = True
+                    bonus_reasons.append(f"{day_date.strftime('%a %b %d')}: {status}")
                 elif status in BONUS_QUALIFYING:
                     bonus_determined = True
                 else:
                     bonus = False
                     bonus_determined = True
+                    bonus_reasons.append(f"{day_date.strftime('%a %b %d')}: {status}")
+
+            # OT No Show disqualifies the bonus
+            for ot in ot_shifts:
+                if ot.status == 'no_show':
+                    bonus = False
+                    bonus_determined = True
+                    bonus_reasons.append(
+                        f"{day_date.strftime('%a %b %d')}: OT No Show "
+                        f"({ot.start_time.strftime('%H:%M')}–{ot.end_time.strftime('%H:%M')})"
+                    )
 
             # Login hours accumulate whenever actual hours exist
             if actual_hrs:
@@ -486,6 +499,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             'coded_hours': coded,
             'adjusted_total': adjusted,
             'bonus': bonus_display,
+            'bonus_reasons': bonus_reasons,
         })
 
     return rows

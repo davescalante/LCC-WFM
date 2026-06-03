@@ -328,7 +328,13 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
             <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#e67e22;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell">
                 {% if row.bonus == 'Yes' %}<span class="badge badge-green" style="font-size:10px;padding:1px 5px;">Yes</span>
-                {% elif row.bonus == 'No' %}<span class="badge badge-red" style="font-size:10px;padding:1px 5px;">No</span>
+                {% elif row.bonus == 'No' %}
+                <span class="badge badge-red" style="font-size:10px;padding:1px 5px;{% if row.bonus_reasons %}cursor:help;{% endif %}"
+                    {% if row.bonus_reasons %}
+                    onmouseenter="showBonusTooltip(event, this)"
+                    onmouseleave="hideBonusTooltip()"
+                    data-reasons="{{ row.bonus_reasons|join:'|' }}"
+                    {% endif %}>No</span>
                 {% else %}<span style="color:#ddd;font-size:11px;">—</span>{% endif %}
             </td>
             <td class="sum-cell">
@@ -413,6 +419,7 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 
 <!-- Cost of Schedule tooltip -->
 <div id="cos-tooltip" style="display:none;position:fixed;z-index:9500;background:#1a3a5c;color:white;padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;max-width:240px;"></div>
+<div id="bonus-tooltip" style="display:none;position:fixed;z-index:9500;background:#7f1d1d;color:white;padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;max-width:260px;"></div>
 
 <!-- Quick-edit shift modal -->
 <div id="qe-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
@@ -804,6 +811,17 @@ function showCosTooltip(e, td) {
 }
 
 function hideCosTooltip() { document.getElementById('cos-tooltip').style.display = 'none'; }
+
+function showBonusTooltip(e, el) {
+    const reasons = el.dataset.reasons.split('|').filter(Boolean);
+    if (!reasons.length) return;
+    const tt = document.getElementById('bonus-tooltip');
+    tt.innerHTML = '<strong style="font-size:11px;opacity:.75;letter-spacing:.5px;">BONUS LOST</strong><br>' + reasons.join('<br>');
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 12, window.innerWidth - 270) + 'px';
+    tt.style.top = Math.min(e.clientY - 10, window.innerHeight - 150) + 'px';
+}
+function hideBonusTooltip() { document.getElementById('bonus-tooltip').style.display = 'none'; }
 
 document.addEventListener('DOMContentLoaded', recomputeCoS);
 // ─────────────────────────────────────────────────────────────────────────────
