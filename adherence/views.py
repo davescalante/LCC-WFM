@@ -1043,6 +1043,42 @@ def daily_hours_week(request):
     })
 
 
+def _zero_missing_scheduled(upload_date, matched_agent_ids):
+    """
+    After a daily upload, agents who are scheduled on upload_date but absent
+    from the file get actual_hours=0 so the grid shows their missing hours.
+    """
+    matched = set(matched_agent_ids)
+
+    # OT shifts on this date
+    scheduled = set(
+        OvertimeShift.objects.filter(date=upload_date, agent__status='active')
+        .values_list('agent_id', flat=True)
+    )
+    # Non-off shift overrides
+    scheduled |= set(
+        Shift.objects.filter(date=upload_date, is_off=False, agent__status='active')
+        .values_list('agent_id', flat=True)
+    )
+    # ShiftTemplate for this weekday, not overridden by any Shift
+    overridden = set(Shift.objects.filter(date=upload_date).values_list('agent_id', flat=True))
+    scheduled |= set(
+        ShiftTemplate.objects.filter(
+            day_of_week=upload_date.weekday(),
+            is_off=False,
+            agent__status='active',
+        ).exclude(agent_id__in=overridden)
+        .values_list('agent_id', flat=True)
+    )
+
+    for agent_id in (scheduled - matched):
+        AdherenceRecord.objects.update_or_create(
+            agent_id=agent_id,
+            date=upload_date,
+            defaults={'actual_hours': Decimal('0')},
+        )
+
+
 @login_required
 @require_POST
 def upload_daily_file(request):
@@ -1131,6 +1167,9 @@ def upload_daily_file(request):
             defaults={'actual_hours': final_hours},
         )
 
+    matched_agent_ids = {dah.agent_id for dah in dah_objects if dah.agent_id}
+    _zero_missing_scheduled(upload_date, matched_agent_ids)
+
     return JsonResponse({
         'ok': True,
         'row_count': len(dah_objects),
@@ -1189,6 +1228,12 @@ def rematch_daily_upload(request):
     still_unmatched = DailyAgentHours.objects.filter(upload=upload, agent__isnull=True).count()
     upload.unmatched_count = still_unmatched
     upload.save(update_fields=['unmatched_count'])
+
+    matched_agent_ids = set(
+        DailyAgentHours.objects.filter(upload=upload, agent__isnull=False)
+        .values_list('agent_id', flat=True)
+    )
+    _zero_missing_scheduled(upload_date, matched_agent_ids)
 
     return JsonResponse({'ok': True, 'newly_matched': newly_matched, 'still_unmatched': still_unmatched})
 
