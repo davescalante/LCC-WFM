@@ -198,20 +198,24 @@
                         {% with v=ot.ot_verif %}
                         {% if v %}
                         <div style="margin-top:3px;font-size:10px;line-height:1.4;">
-                            {% if not v.username_found %}
-                            <span style="color:#9a3412;">Username not found in report</span>
-                            {% elif v.verified_seconds == 0 %}
-                            <span style="color:#dc2626;font-weight:600;">No login detected</span>
-                            {% else %}
+                            {% if v.verified_seconds > 0 %}
                             <span style="color:{% if v.coverage_pct >= 100 %}#15803d{% elif v.coverage_pct >= 80 %}#92400e{% else %}#dc2626{% endif %};">
                                 {{ v.verified_display }} of {{ v.shift_display }}
                                 ({{ v.coverage_pct }}%)
                             </span>
-                            {% if v.coding_seconds > 0 %}
+                            {% if not v.username_found and v.coding_seconds > 0 %}
+                            <div style="font-size:9px;color:#9ca3af;margin-top:1px;">
+                                Not in Five9 report &middot; Covered by codings
+                            </div>
+                            {% elif v.coding_seconds > 0 %}
                             <div style="font-size:9px;color:#9ca3af;margin-top:1px;">
                                 Five9: {{ v.five9_display }} &middot; Coded: {{ v.coding_display }}
                             </div>
                             {% endif %}
+                            {% elif not v.username_found %}
+                            <span style="color:#9a3412;">Username not found in report</span>
+                            {% else %}
+                            <span style="color:#dc2626;font-weight:600;">No login detected</span>
                             {% endif %}
                         </div>
                         {% endif %}
