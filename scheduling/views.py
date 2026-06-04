@@ -1408,7 +1408,7 @@ def overtime_export(request):
 
     ot_qs = OvertimeShift.objects.filter(
         date__range=[date_from, date_to]
-    ).select_related('agent__user', 'agent__supervisor__user').order_by('date', 'agent__user__last_name')
+    ).select_related('agent__user', 'agent__supervisor__user', 'verification').order_by('date', 'agent__user__last_name')
 
     if supervisor_id:
         try:
@@ -1425,7 +1425,7 @@ def overtime_export(request):
         'Start Time', 'End Time', 'Total Hours',
         'Incentive Type', 'Incentivized Hours', 'Base Hourly Rate ($)',
         'Base Pay ($)', 'Incentive Bonus ($)', 'Total Pay Offered ($)',
-        'Status', 'Cancellation Reason',
+        'Status', 'Cancellation Reason', 'Coverage %',
     ])
     for ot in ot_qs:
         from decimal import Decimal
@@ -1465,6 +1465,7 @@ def overtime_export(request):
             str(total_offered),
             ot.get_status_display(),
             ot.cancellation_reason,
+            str(ot.verification.coverage_pct) + '%' if hasattr(ot, 'verification') and ot.verification and ot.verification.coverage_pct is not None else '',
         ])
     return response
 
