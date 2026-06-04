@@ -244,16 +244,28 @@ def _build_maps(agents, week_dates):
     shifts_qs = Shift.objects.filter(date__in=week_dates, agent__in=agents)
     shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
 
-    # Fill gaps with recurring templates where no specific Shift record exists
-    template_qs = ShiftTemplate.objects.filter(agent__in=agents)
-    template_map = {(t.agent_id, t.day_of_week): t for t in template_qs}
+    # Fill gaps with the effective recurring template for each agent on each specific date.
+    # Must compare per-date (not just day-of-week) so mid-week schedule changes apply
+    # correctly without touching prior days in the same week.
+    all_templates = list(ShiftTemplate.objects.filter(agent__in=agents))
     agent_ids = [a.pk for a in agents]
     for day_date in week_dates:
+        dow = day_date.weekday()
         for agent_id in agent_ids:
-            if (agent_id, day_date) not in shift_map:
-                tmpl = template_map.get((agent_id, day_date.weekday()))
-                if tmpl:
-                    shift_map[(agent_id, day_date)] = tmpl
+            if (agent_id, day_date) in shift_map:
+                continue
+            best = None
+            for t in all_templates:
+                if t.agent_id != agent_id or t.day_of_week != dow:
+                    continue
+                if t.effective_from is not None and t.effective_from > day_date:
+                    continue
+                if t.effective_until is not None and t.effective_until < day_date:
+                    continue
+                if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
+                    best = t
+            if best:
+                shift_map[(agent_id, day_date)] = best
 
     records_qs = AdherenceRecord.objects.filter(date__in=week_dates, agent__in=agents)
     record_map = {(r.agent_id, r.date): r for r in records_qs}
@@ -271,7 +283,7 @@ def _build_maps(agents, week_dates):
         ot_map.setdefault((s.agent_id, s.date), []).append(s)
 
     # Extra schedule blocks — ShiftTemplate level
-    tmpl_ids = [t.pk for t in template_map.values()]
+    tmpl_ids = list({s.pk for s in shift_map.values() if isinstance(s, ShiftTemplate)})
     tmpl_extra_hrs = {}
     tmpl_extra_labels = {}
     for block in ShiftTemplateBlock.objects.filter(shift_template_id__in=tmpl_ids):
@@ -313,8 +325,22 @@ def _build_maps(agents, week_dates):
 def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None):
     rows = []
     week_dates_set = set(week_dates)
-    # Template map for cross-week prev-day lookups (keyed by (agent_id, weekday))
-    template_map = {(t.agent_id, t.day_of_week): t for t in ShiftTemplate.objects.filter(agent__in=agents)}
+    # Effective-date-aware template lookup for cross-week spillover (e.g. Monday's Sunday prev-day)
+    _spill_tmpl = list(ShiftTemplate.objects.filter(agent__in=agents))
+
+    def _effective_template(agent_id, d):
+        dow = d.weekday()
+        best = None
+        for t in _spill_tmpl:
+            if t.agent_id != agent_id or t.day_of_week != dow:
+                continue
+            if t.effective_from is not None and t.effective_from > d:
+                continue
+            if t.effective_until is not None and t.effective_until < d:
+                continue
+            if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
+                best = t
+        return best
 
     for agent in agents:
         cells = []
@@ -347,7 +373,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 prev_shift = shift_map.get((agent.pk, prev_date))
                 prev_ot_shifts = (ot_map or {}).get((agent.pk, prev_date)) or []
             else:
-                prev_shift = template_map.get((agent.pk, prev_date.weekday()))
+                prev_shift = _effective_template(agent.pk, prev_date)
                 prev_ot_shifts = []
             prev_not_off = prev_shift is not None and not getattr(prev_shift, 'is_off', False)
             spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
@@ -1074,13 +1100,17 @@ def _zero_missing_scheduled(upload_date, matched_agent_ids):
         Shift.objects.filter(date=upload_date, is_off=False, agent__status='active')
         .values_list('agent_id', flat=True)
     )
-    # ShiftTemplate for this weekday, not overridden by any Shift
+    # ShiftTemplate for this weekday, not overridden by any Shift — use effective date filter
     overridden = set(Shift.objects.filter(date=upload_date).values_list('agent_id', flat=True))
     scheduled |= set(
         ShiftTemplate.objects.filter(
             day_of_week=upload_date.weekday(),
             is_off=False,
             agent__status='active',
+        ).filter(
+            Q(effective_from__isnull=True) | Q(effective_from__lte=upload_date)
+        ).filter(
+            Q(effective_until__isnull=True) | Q(effective_until__gte=upload_date)
         ).exclude(agent_id__in=overridden)
         .values_list('agent_id', flat=True)
     )
