@@ -232,7 +232,8 @@ def erlang_calculator(request):
             except (ValueError, TypeError):
                 weeks_by_day[day] = weeks_default
 
-        request.session['erlang_params'] = {
+        all_params = request.session.get('erlang_params_by_week', {})
+        all_params[week_key] = {
             'target_sl': float(request.POST.get('target_sl', 80)),
             'target_seconds': int(request.POST.get('target_seconds', 20)),
             'shrinkage': float(request.POST.get('shrinkage', 0)),
@@ -240,11 +241,12 @@ def erlang_calculator(request):
             'weeks': weeks_default,
             'weeks_by_day': weeks_by_day,
         }
+        request.session['erlang_params_by_week'] = all_params
 
         if not error:
             return redirect(f"{request.path}?week_start={week_key}")
 
-    _p = request.session.get('erlang_params', {})
+    _p = request.session.get('erlang_params_by_week', {}).get(week_key, {})
     _weeks_by_day = _p.get('weeks_by_day') or {d: 3 for d in DAYS_ORDER}
     _weeks_default = _p.get('weeks', 3)
 
@@ -355,7 +357,7 @@ def erlang_download(request):
         today = date.today()
         week_start = today - timedelta(days=today.weekday())
 
-    _p = request.session.get('erlang_params', {})
+    _p = request.session.get('erlang_params_by_week', {}).get(week_start.isoformat(), {})
     _weeks_by_day = _p.get('weeks_by_day') or {d: 3 for d in DAYS_ORDER}
     _weeks_default = _p.get('weeks', 3)
 
