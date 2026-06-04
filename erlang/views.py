@@ -46,22 +46,26 @@ def _build_scheduled_map(week_start):
 
     scheduled = {}    # {(day_name, hour): int}
     agents_map = {}   # {(day_name, hour): [{'name': str, 'time': str, 'ot': bool}]}
+    seen = set()      # (day_name, hour, agent_id) — prevent double-counting
 
-    def _add(day_name, h, entry):
+    def _add(day_name, h, agent_id, entry):
+        if (day_name, h, agent_id) in seen:
+            return
+        seen.add((day_name, h, agent_id))
         key = (day_name, h)
         scheduled[key] = scheduled.get(key, 0) + 1
         agents_map.setdefault(key, []).append(entry)
 
-    def _add_hours(day_name, start_hour, end_hour, entry, next_day_name=None):
+    def _add_hours(day_name, start_hour, end_hour, agent_id, entry, next_day_name=None):
         if end_hour <= start_hour:  # overnight — split at midnight
             for h in range(start_hour, 24):
-                _add(day_name, h, entry)
+                _add(day_name, h, agent_id, entry)
             nd = next_day_name or day_name
             for h in range(0, end_hour):
-                _add(nd, h, entry)
+                _add(nd, h, agent_id, entry)
         else:
             for h in range(start_hour, end_hour):
-                _add(day_name, h, entry)
+                _add(day_name, h, agent_id, entry)
 
     # Specific shift overrides for this week
     shifts = Shift.objects.filter(
@@ -75,7 +79,7 @@ def _build_scheduled_map(week_start):
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         next_day = (s['date'] + timedelta(days=1)).strftime('%A')
         _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
-                   {'name': name, 'time': label, 'ot': False}, next_day)
+                   s['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
 
     # Recurring templates — only for days not covered by a specific Shift
     templates = ShiftTemplate.objects.filter(
@@ -90,7 +94,7 @@ def _build_scheduled_map(week_start):
                     label = f"{t['start_time'].strftime('%H:%M')}–{t['end_time'].strftime('%H:%M')}"
                     next_day = (day_date + timedelta(days=1)).strftime('%A')
                     _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
-                               {'name': name, 'time': label, 'ot': False}, next_day)
+                               t['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
 
     # OT shifts — all agents regardless of role; cancelled shifts are not counted as coverage
     ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).exclude(status='cancelled').values(
@@ -101,7 +105,7 @@ def _build_scheduled_map(week_start):
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         next_day = (s['date'] + timedelta(days=1)).strftime('%A')
         _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
-                   {'name': name, 'time': label, 'ot': True}, next_day)
+                   s['agent_id'], {'name': name, 'time': label, 'ot': True}, next_day)
 
     return scheduled, agents_map
 
