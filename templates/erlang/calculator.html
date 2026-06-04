@@ -43,6 +43,14 @@
                 {% endif %}
             </div>
 
+            <div style="min-width:110px;">
+                <label style="display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;">Weeks in report</label>
+                <input type="number" name="weeks" id="weeks-input" min="1" max="52" step="1"
+                    value="{{ params.weeks|default:3 }}"
+                    oninput="syncWeekInputs(this.value)"
+                    style="width:80px;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+            </div>
+
             <div style="min-width:150px;">
                 <label style="display:block;font-size:13px;font-weight:600;color:#555;margin-bottom:6px;">Avg Handle Time</label>
                 <div style="display:flex;align-items:center;gap:4px;">
@@ -90,6 +98,64 @@
             </div>
 
         </div>
+
+        <!-- Advanced per-day week counts -->
+        <div style="margin-top:12px;border-top:1px solid #f0f4f8;padding-top:10px;">
+            <button type="button" onclick="toggleAdvancedWeeks()" id="adv-toggle"
+                style="background:none;border:none;color:#9ca3af;font-size:11px;cursor:pointer;padding:0;letter-spacing:.2px;">
+                Advanced: set per-day week counts &#9660;
+            </button>
+            {% with wb=params.weeks_by_day %}
+            <div id="advanced-weeks" style="display:none;margin-top:10px;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Mon</label>
+                    <input type="number" name="weeks_monday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Monday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Tue</label>
+                    <input type="number" name="weeks_tuesday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Tuesday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Wed</label>
+                    <input type="number" name="weeks_wednesday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Wednesday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Thu</label>
+                    <input type="number" name="weeks_thursday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Thursday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Fri</label>
+                    <input type="number" name="weeks_friday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Friday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Sat</label>
+                    <input type="number" name="weeks_saturday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Saturday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:10px;color:#9ca3af;font-weight:600;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px;">Sun</label>
+                    <input type="number" name="weeks_sunday" class="weeks-day-input" min="1" max="52"
+                        value="{{ wb.Sunday|default:params.weeks|default:3 }}"
+                        style="width:52px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;text-align:center;">
+                </div>
+                <div style="font-size:11px;color:#b0b8c8;align-self:flex-end;padding-bottom:8px;max-width:220px;line-height:1.4;">
+                    Override per day if the report has unequal weeks. Leave all matching the main field for uniform reports.
+                </div>
+            </div>
+            {% endwith %}
+        </div>
+
     </form>
 </div>
 
@@ -104,6 +170,7 @@
                display:flex;align-items:center;gap:6px;">
         {{ day.name }}
         {% if day.has_data %}
+        <span style="font-size:10px;color:#b0b8c8;font-weight:400;">{{ day.weeks }}w</span>
         <span id="badge-{{ day.name }}"
             style="display:none;background:#dc2626;color:white;border-radius:10px;
                    padding:1px 7px;font-size:11px;font-weight:700;">0</span>
@@ -199,6 +266,10 @@
             <div style="padding:12px 20px;border-right:1px solid #e5e7eb;flex:2;min-width:200px;">
                 <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Peak Hour</div>
                 <div style="font-size:14px;font-weight:700;color:#1a3a5c;">{{ day.peak_label }} — {{ day.peak_agents }} agents</div>
+            </div>
+            <div style="padding:12px 20px;border-right:1px solid #e5e7eb;flex:1;min-width:110px;">
+                <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Weeks of Data</div>
+                <div style="font-size:20px;font-weight:700;color:#1a3a5c;">{{ day.weeks }}</div>
             </div>
             <div style="padding:12px 20px;flex:2;min-width:220px;" id="summary-{{ day.name }}">
                 <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">vs Current Staffing</div>
@@ -360,6 +431,22 @@ function saveActual(input) {
 
 function submitDownload() {
     document.getElementById('download-form').submit();
+}
+
+function toggleAdvancedWeeks() {
+    const el = document.getElementById('advanced-weeks');
+    const btn = document.getElementById('adv-toggle');
+    const open = el.style.display !== 'none' && el.style.display !== '';
+    el.style.display = open ? 'none' : 'flex';
+    btn.innerHTML = open
+        ? 'Advanced: set per-day week counts &#9660;'
+        : 'Advanced: set per-day week counts &#9650;';
+}
+
+function syncWeekInputs(val) {
+    const n = parseInt(val);
+    if (isNaN(n) || n < 1) return;
+    document.querySelectorAll('.weeks-day-input').forEach(inp => { inp.value = n; });
 }
 
 // On load: show first day with data, compute all variances and badges

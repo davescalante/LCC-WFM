@@ -145,13 +145,12 @@ def _parse_five9_csv(file):
             'day': day,
             'hour': hour,
             'total_calls': calls,
-            'avg_calls': round(calls / 3, 1),
         })
 
     return rows
 
 
-def _build_days(calculated_rows, params, scheduled_map, actual_map):
+def _build_days(calculated_rows, params, scheduled_map, actual_map, weeks_by_day=None):
     """Group calculated rows by day and compute per-day summary stats."""
     by_day = {d: [] for d in DAYS_ORDER}
     for row in calculated_rows:
@@ -162,7 +161,8 @@ def _build_days(calculated_rows, params, scheduled_map, actual_map):
     for day_name in DAYS_ORDER:
         rows = sorted(by_day[day_name], key=lambda r: r['hour'])
         if not rows:
-            days.append({'name': day_name, 'rows': [], 'has_data': False})
+            days.append({'name': day_name, 'rows': [], 'has_data': False,
+                         'weeks': (weeks_by_day or {}).get(day_name, 3)})
             continue
 
         for row in rows:
@@ -180,6 +180,7 @@ def _build_days(calculated_rows, params, scheduled_map, actual_map):
             'avg_agents': round(total_shrink / len(rows), 1),
             'peak_label': peak['hour_label'],
             'peak_agents': peak['agents_shrinkage'],
+            'weeks': (weeks_by_day or {}).get(day_name, 3),
         })
 
     return days
@@ -208,33 +209,57 @@ def erlang_calculator(request):
                             day=r['day'],
                             hour=r['hour'],
                             total_calls=r['total_calls'],
-                            avg_calls=r['avg_calls'],
+                            avg_calls=r['total_calls'],  # stored raw; divided at view time
                         )
                         for r in rows
                     ])
             except Exception as e:
                 error = f"Error reading file: {e}"
 
+        try:
+            weeks_default = max(1, int(request.POST.get('weeks', 3) or 3))
+        except (ValueError, TypeError):
+            weeks_default = 3
+        weeks_by_day = {}
+        for day in DAYS_ORDER:
+            val = request.POST.get(f'weeks_{day.lower()}', '').strip()
+            try:
+                weeks_by_day[day] = max(1, int(val)) if val else weeks_default
+            except (ValueError, TypeError):
+                weeks_by_day[day] = weeks_default
+
         request.session['erlang_params'] = {
             'target_sl': float(request.POST.get('target_sl', 80)),
             'target_seconds': int(request.POST.get('target_seconds', 20)),
             'shrinkage': float(request.POST.get('shrinkage', 0)),
             'aht_seconds': int(request.POST.get('aht_seconds', 420)),
+            'weeks': weeks_default,
+            'weeks_by_day': weeks_by_day,
         }
 
         if not error:
             return redirect(f"{request.path}?week_start={week_key}")
 
+    _p = request.session.get('erlang_params', {})
+    _weeks_by_day = _p.get('weeks_by_day') or {d: 3 for d in DAYS_ORDER}
+    _weeks_default = _p.get('weeks', 3)
+
     raw_rows = [
-        {'day': r.day, 'hour': r.hour, 'total_calls': r.total_calls, 'avg_calls': r.avg_calls}
+        {
+            'day': r.day,
+            'hour': r.hour,
+            'total_calls': r.total_calls,
+            'avg_calls': round(r.total_calls / _weeks_by_day.get(r.day, _weeks_default), 1),
+        }
         for r in ErlangCallRow.objects.filter(week_start=week_start)
     ]
-    _p = request.session.get('erlang_params', {})
     params = {
         'target_sl': _p.get('target_sl', 80),
         'target_seconds': _p.get('target_seconds', 20),
         'shrinkage': _p.get('shrinkage', 0),
         'aht_seconds': _p.get('aht_seconds', 420),
+        'weeks': _weeks_default,
+        'weeks_by_day': _weeks_by_day,
     }
 
     days = []
@@ -252,6 +277,7 @@ def erlang_calculator(request):
             calculated, params,
             scheduled_map,
             _build_actual_map(week_start),
+            weeks_by_day=_weeks_by_day,
         )
         import json
         agents_map_json = json.dumps({
@@ -325,11 +351,19 @@ def erlang_download(request):
         today = date.today()
         week_start = today - timedelta(days=today.weekday())
 
+    _p = request.session.get('erlang_params', {})
+    _weeks_by_day = _p.get('weeks_by_day') or {d: 3 for d in DAYS_ORDER}
+    _weeks_default = _p.get('weeks', 3)
+
     raw_rows = [
-        {'day': r.day, 'hour': r.hour, 'total_calls': r.total_calls, 'avg_calls': r.avg_calls}
+        {
+            'day': r.day,
+            'hour': r.hour,
+            'total_calls': r.total_calls,
+            'avg_calls': round(r.total_calls / _weeks_by_day.get(r.day, _weeks_default), 1),
+        }
         for r in ErlangCallRow.objects.filter(week_start=week_start)
     ]
-    _p = request.session.get('erlang_params', {})
     params = {
         'target_sl': _p.get('target_sl', 80),
         'target_seconds': _p.get('target_seconds', 20),
@@ -348,7 +382,7 @@ def erlang_download(request):
         params['aht_seconds'],
     )
 
-    scheduled_map = _build_scheduled_map(week_start)
+    scheduled_map, _ = _build_scheduled_map(week_start)
     actual_map = _build_actual_map(week_start)
 
     response = HttpResponse(content_type='text/csv')
