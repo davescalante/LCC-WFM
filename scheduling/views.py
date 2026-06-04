@@ -873,7 +873,7 @@ def overtime_list(request):
     }
     for shifts in ot_map.values():
         for s in shifts:
-            s._verification = verif_map.get(s.pk)
+            s.ot_verif = verif_map.get(s.pk)
 
     # Last login-logout upload covering any day this week
     last_ll_upload = (
