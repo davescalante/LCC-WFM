@@ -339,6 +339,37 @@ class Break(models.Model):
         return f"{self.shift.agent} - {self.break_type} {self.start_time}-{self.end_time}"
 
 
+class ScheduledRoleChange(models.Model):
+    """A role change queued to take effect automatically on a future date."""
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='scheduled_role_changes')
+    new_role_type = models.CharField(max_length=20, choices=Agent.ROLE_TYPE_CHOICES)
+    effective_date = models.DateField()
+    # Optional new schedule applied on effective_date
+    new_shift_days = models.JSONField(null=True, blank=True)       # list of 0-6 integers
+    new_shift_start_time = models.TimeField(null=True, blank=True)
+    new_shift_end_time = models.TimeField(null=True, blank=True)
+    # Audit
+    scheduled_by = models.ForeignKey(
+        'auth.User', null=True, on_delete=models.SET_NULL, related_name='+'
+    )
+    scheduled_at = models.DateTimeField(auto_now_add=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        'auth.User', null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
+
+    class Meta:
+        ordering = ['effective_date']
+
+    def __str__(self):
+        return f"{self.agent} → {self.new_role_type} on {self.effective_date}"
+
+    @property
+    def is_pending(self):
+        return self.applied_at is None and self.cancelled_at is None
+
+
 class RoleHistory(models.Model):
     agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='role_history')
     role = models.CharField(max_length=20)

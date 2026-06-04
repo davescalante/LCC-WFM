@@ -32,13 +32,50 @@ def _get_week_start(request):
 
 def _build_scheduled_map(week_start):
     """Count agents covering each (day_name, hour); also return which agents and their shift times."""
+    from scheduling.models import ScheduledRoleChange
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
-    call_agent_ids = set(Five9Profile.objects.filter(
-        role_type__in=('regular_agent', 'night_shift')
+    CALL_ROLES = {'regular_agent', 'night_shift'}
+
+    # Base call agents (current role)
+    base_call_ids = set(Five9Profile.objects.filter(
+        role_type__in=CALL_ROLES
     ).values_list('agent_id', flat=True).distinct())
 
-    # Pre-fetch agent display names for lookups below
+    # Pending role changes that take effect within this week — adjust per date
+    pending = list(ScheduledRoleChange.objects.filter(
+        effective_date__range=(week_dates[0], week_dates[-1]),
+        applied_at__isnull=True,
+        cancelled_at__isnull=True,
+    ).values('agent_id', 'new_role_type', 'effective_date'))
+
+    if pending:
+        affected_ids = {p['agent_id'] for p in pending}
+        cur_roles = dict(Five9Profile.objects.filter(
+            agent_id__in=affected_ids
+        ).values_list('agent_id', 'role_type'))
+    else:
+        cur_roles = {}
+
+    # Build per-date call-agent sets
+    call_ids_by_date = {}
+    for d in week_dates:
+        if not pending:
+            call_ids_by_date[d] = base_call_ids
+        else:
+            ids = set(base_call_ids)
+            for p in pending:
+                if p['effective_date'] <= d:
+                    old, new = cur_roles.get(p['agent_id'], ''), p['new_role_type']
+                    if new in CALL_ROLES and old not in CALL_ROLES:
+                        ids.add(p['agent_id'])
+                    elif new not in CALL_ROLES and old in CALL_ROLES:
+                        ids.discard(p['agent_id'])
+            call_ids_by_date[d] = ids
+
+    all_call_ids = set().union(*call_ids_by_date.values())
+
+    # Pre-fetch agent display names
     agent_names = {
         a.pk: str(a)
         for a in Agent.objects.select_related('user').filter(status='active')
@@ -67,13 +104,15 @@ def _build_scheduled_map(week_start):
             for h in range(start_hour, end_hour):
                 _add(day_name, h, agent_id, entry)
 
-    # Specific shift overrides for this week
+    # Specific shift overrides — date-aware role check
     shifts = Shift.objects.filter(
-        date__in=week_dates, is_off=False, agent_id__in=call_agent_ids,
+        date__in=week_dates, is_off=False, agent_id__in=all_call_ids,
     ).values('agent_id', 'date', 'start_time', 'end_time')
 
     agents_with_shift_override = set()
     for s in shifts:
+        if s['agent_id'] not in call_ids_by_date[s['date']]:
+            continue
         agents_with_shift_override.add((s['agent_id'], s['date']))
         name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
@@ -81,22 +120,30 @@ def _build_scheduled_map(week_start):
         _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
                    s['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
 
-    # Recurring templates — only for days not covered by a specific Shift
+    # Recurring templates — date-aware role check + effective_from/effective_until
     templates = ShiftTemplate.objects.filter(
-        agent_id__in=call_agent_ids, is_off=False,
-    ).values('agent_id', 'day_of_week', 'start_time', 'end_time')
+        agent_id__in=all_call_ids, is_off=False,
+    ).values('agent_id', 'day_of_week', 'start_time', 'end_time', 'effective_from', 'effective_until')
 
     for t in templates:
         for day_date in week_dates:
-            if day_date.weekday() == t['day_of_week']:
-                if (t['agent_id'], day_date) not in agents_with_shift_override:
-                    name = agent_names.get(t['agent_id'], f"Agent {t['agent_id']}")
-                    label = f"{t['start_time'].strftime('%H:%M')}–{t['end_time'].strftime('%H:%M')}"
-                    next_day = (day_date + timedelta(days=1)).strftime('%A')
-                    _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
-                               t['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
+            if day_date.weekday() != t['day_of_week']:
+                continue
+            if t['agent_id'] not in call_ids_by_date[day_date]:
+                continue
+            if t['effective_from'] and t['effective_from'] > day_date:
+                continue
+            if t['effective_until'] and t['effective_until'] <= day_date:
+                continue
+            if (t['agent_id'], day_date) in agents_with_shift_override:
+                continue
+            name = agent_names.get(t['agent_id'], f"Agent {t['agent_id']}")
+            label = f"{t['start_time'].strftime('%H:%M')}–{t['end_time'].strftime('%H:%M')}"
+            next_day = (day_date + timedelta(days=1)).strftime('%A')
+            _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
+                       t['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
 
-    # OT shifts — all agents regardless of role; cancelled shifts are not counted as coverage
+    # OT shifts — all agents regardless of role; cancelled excluded
     ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).exclude(status='cancelled').values(
         'agent_id', 'date', 'start_time', 'end_time'
     )

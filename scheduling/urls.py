@@ -28,4 +28,6 @@ urlpatterns = [
     path('records/', views.records_attendance, name='records_attendance'),
     path('records/hours/', views.records_hours, name='records_hours'),
     path('records/roles/', views.records_role_log, name='records_role_log'),
+    path('agents/<int:pk>/schedule-role-change/', views.schedule_role_change, name='schedule_role_change'),
+    path('role-changes/<int:pk>/cancel/', views.cancel_role_change, name='cancel_role_change'),
 ]

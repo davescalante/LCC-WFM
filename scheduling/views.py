@@ -6,8 +6,88 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, log_action
+from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
+
+
+_ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'testing', 'sms_email', 'admin_training', 'coordinator'}
+
+
+def apply_due_role_changes(agent=None):
+    """
+    Apply all pending ScheduledRoleChanges whose effective_date has arrived.
+    Pass agent= to limit to a single agent (used lazily on profile load).
+    Returns the number of changes applied.
+    """
+    today = timezone.localdate()
+    qs = ScheduledRoleChange.objects.filter(
+        effective_date__lte=today,
+        applied_at__isnull=True,
+        cancelled_at__isnull=True,
+    ).select_related('agent__supervisor')
+    if agent is not None:
+        qs = qs.filter(agent=agent)
+
+    count = 0
+    for src in qs:
+        ag = src.agent
+        old_role_type = ag.role_type
+        new_role_type = src.new_role_type
+        new_role = 'admin' if new_role_type in _ADMIN_ROLE_TYPES else 'agent'
+
+        # Update Agent
+        ag.role_type = new_role_type
+        ag.role = new_role
+        ag.save(update_fields=['role_type', 'role'])
+
+        # Update matching Five9Profiles
+        ag.five9_profiles.filter(role_type=old_role_type).update(role_type=new_role_type)
+
+        # Close open RoleHistory entry and open a new one
+        open_entry = ag.role_history.filter(effective_to__isnull=True).first()
+        if open_entry:
+            open_entry.effective_to = src.effective_date
+            open_entry.save(update_fields=['effective_to'])
+        RoleHistory.objects.create(
+            agent=ag,
+            role=new_role,
+            role_type=new_role_type,
+            supervisor=ag.supervisor,
+            employer=ag.employer,
+            billing_status=ag.billing_status,
+            effective_from=src.effective_date,
+            changed_by=src.scheduled_by,
+        )
+
+        # Apply new schedule if provided
+        if src.new_shift_days and src.new_shift_start_time and src.new_shift_end_time:
+            # Expire all currently open templates for this agent
+            ShiftTemplate.objects.filter(
+                agent=ag, effective_until__isnull=True
+            ).update(effective_until=src.effective_date)
+            # Create new templates effective on the change date
+            for day_num in src.new_shift_days:
+                ShiftTemplate.objects.create(
+                    agent=ag,
+                    day_of_week=day_num,
+                    start_time=src.new_shift_start_time,
+                    end_time=src.new_shift_end_time,
+                    is_off=False,
+                    effective_from=src.effective_date,
+                )
+
+        log_action(
+            src.scheduled_by,
+            'Scheduled role change applied',
+            f'Automatically applied: role changed to {src.get_new_role_type_display()} effective {src.effective_date}',
+            agent=ag,
+        )
+
+        src.applied_at = timezone.now()
+        src.save(update_fields=['applied_at'])
+        count += 1
+
+    return count
 
 
 @login_required
@@ -53,8 +133,18 @@ def agent_list(request):
 @login_required
 def agent_detail(request, pk):
     agent = get_object_or_404(Agent, pk=pk)
+    apply_due_role_changes(agent=agent)
     shifts = Shift.objects.filter(agent=agent).order_by('-date')[:30]
-    return render(request, 'scheduling/agent_detail.html', {'agent': agent, 'shifts': shifts})
+    pending_role_change = agent.scheduled_role_changes.filter(
+        applied_at__isnull=True, cancelled_at__isnull=True
+    ).first()
+    return render(request, 'scheduling/agent_detail.html', {
+        'agent': agent,
+        'shifts': shifts,
+        'pending_role_change': pending_role_change,
+        'role_type_choices': Agent.ROLE_TYPE_CHOICES,
+        'day_choices': ShiftTemplate.DAY_CHOICES,
+    })
 
 
 def _save_five9_profiles(request, agent):
@@ -2014,3 +2104,99 @@ def _parse_date(val, default):
         return date_cls.fromisoformat(val) if val else default
     except (ValueError, TypeError):
         return default
+
+
+# ── Scheduled Role Changes ────────────────────────────────────────────────────
+
+@login_required
+def schedule_role_change(request, pk):
+    from django.views.decorators.http import require_POST as _rp
+    if request.method != 'POST':
+        return redirect('agent_detail', pk=pk)
+
+    agent = get_object_or_404(Agent, pk=pk)
+
+    # Only one pending change at a time
+    if agent.scheduled_role_changes.filter(applied_at__isnull=True, cancelled_at__isnull=True).exists():
+        messages.error(request, "This agent already has a pending role change. Cancel it before scheduling a new one.")
+        return redirect('agent_detail', pk=pk)
+
+    new_role_type = request.POST.get('new_role_type', '').strip()
+    effective_date_str = request.POST.get('effective_date', '').strip()
+
+    valid_role_types = {k for k, _ in Agent.ROLE_TYPE_CHOICES}
+    if new_role_type not in valid_role_types:
+        messages.error(request, "Invalid role type selected.")
+        return redirect('agent_detail', pk=pk)
+
+    try:
+        effective_date = date.fromisoformat(effective_date_str)
+    except (ValueError, TypeError):
+        messages.error(request, "Invalid effective date.")
+        return redirect('agent_detail', pk=pk)
+
+    today = timezone.localdate()
+    if effective_date < today:
+        messages.error(request, "Effective date cannot be in the past.")
+        return redirect('agent_detail', pk=pk)
+
+    # Optional new schedule
+    days_raw = request.POST.getlist('new_shift_days')
+    start_raw = request.POST.get('new_shift_start_time', '').strip()
+    end_raw = request.POST.get('new_shift_end_time', '').strip()
+
+    new_shift_days = None
+    new_shift_start_time = None
+    new_shift_end_time = None
+
+    if days_raw and start_raw and end_raw:
+        try:
+            from datetime import time as time_cls
+            new_shift_days = sorted(int(d) for d in days_raw)
+            new_shift_start_time = time_cls.fromisoformat(start_raw)
+            new_shift_end_time = time_cls.fromisoformat(end_raw)
+        except (ValueError, TypeError):
+            new_shift_days = new_shift_start_time = new_shift_end_time = None
+
+    src = ScheduledRoleChange.objects.create(
+        agent=agent,
+        new_role_type=new_role_type,
+        effective_date=effective_date,
+        new_shift_days=new_shift_days,
+        new_shift_start_time=new_shift_start_time,
+        new_shift_end_time=new_shift_end_time,
+        scheduled_by=request.user,
+    )
+
+    log_action(
+        request.user,
+        'Scheduled role change',
+        f'Scheduled change to {src.get_new_role_type_display()} effective {effective_date}',
+        agent=agent,
+    )
+    messages.success(request, f"Role change to {src.get_new_role_type_display()} scheduled for {effective_date.strftime('%b %d, %Y')}.")
+    return redirect('agent_detail', pk=pk)
+
+
+@login_required
+def cancel_role_change(request, pk):
+    if request.method != 'POST':
+        return redirect('agent_list')
+
+    src = get_object_or_404(ScheduledRoleChange, pk=pk)
+    if not src.is_pending:
+        messages.error(request, "This role change has already been applied or cancelled.")
+        return redirect('agent_detail', pk=src.agent_id)
+
+    src.cancelled_at = timezone.now()
+    src.cancelled_by = request.user
+    src.save(update_fields=['cancelled_at', 'cancelled_by'])
+
+    log_action(
+        request.user,
+        'Cancelled scheduled role change',
+        f'Cancelled planned change to {src.get_new_role_type_display()} (was scheduled for {src.effective_date})',
+        agent=src.agent,
+    )
+    messages.success(request, "Scheduled role change cancelled.")
+    return redirect('agent_detail', pk=src.agent_id)

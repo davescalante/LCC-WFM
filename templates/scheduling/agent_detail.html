@@ -28,10 +28,36 @@
             <tr><td><strong>Start Date</strong></td><td>{{ agent.start_date|default:"—" }}</td></tr>
             <tr><td><strong>Termination Date</strong></td><td>{{ agent.termination_date|default:"—" }}</td></tr>
             <tr><td><strong>Role</strong></td><td>{{ agent.get_role_display }}</td></tr>
-            <tr><td><strong>Role Type</strong></td><td>{{ agent.get_role_type_display|default:"—" }}</td></tr>
+            <tr>
+                <td><strong>Role Type</strong></td>
+                <td>
+                    {{ agent.get_role_type_display|default:"—" }}
+                    {% if pending_role_change %}
+                    <span style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;white-space:nowrap;">
+                        → {{ pending_role_change.get_new_role_type_display }} on {{ pending_role_change.effective_date|date:"M j" }}
+                    </span>
+                    {% endif %}
+                </td>
+            </tr>
             <tr><td><strong>Status</strong></td><td>{% if agent.status == 'active' %}<span class="badge badge-green">Active</span>{% else %}<span class="badge badge-red">Inactive</span>{% endif %}</td></tr>
             <tr><td><strong>Supervisor</strong></td><td>{{ agent.supervisor|default:"—" }}</td></tr>
         </table>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            {% if not pending_role_change %}
+            <button onclick="document.getElementById('role-change-modal').style.display='flex'"
+                style="background:none;border:1px solid #cbd5e1;border-radius:4px;padding:5px 12px;font-size:12px;color:#555;cursor:pointer;">
+                Schedule Role Change
+            </button>
+            {% else %}
+            <span style="font-size:12px;color:#92400e;font-style:italic;">Pending role change scheduled</span>
+            <form method="post" action="{% url 'cancel_role_change' pending_role_change.pk %}" style="display:inline;" onsubmit="return confirm('Cancel the scheduled role change to {{ pending_role_change.get_new_role_type_display }}?')">
+                {% csrf_token %}
+                <button type="submit" style="background:none;border:1px solid #fca5a5;border-radius:4px;padding:5px 12px;font-size:12px;color:#b91c1c;cursor:pointer;">
+                    Cancel Change
+                </button>
+            </form>
+            {% endif %}
+        </div>
     </div>
 
     <div class="card">
@@ -94,4 +120,88 @@
         </tbody>
     </table>
 </div>
+
+<!-- Schedule Role Change Modal -->
+<div id="role-change-modal"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:10px;padding:28px 32px;width:100%;max-width:460px;box-shadow:0 8px 40px rgba(0,0,0,.18);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+            <h3 style="margin:0;font-size:16px;color:#1a3a5c;">Schedule Role Change — {{ agent }}</h3>
+            <button onclick="document.getElementById('role-change-modal').style.display='none'"
+                style="background:none;border:none;font-size:22px;color:#aaa;cursor:pointer;line-height:1;">×</button>
+        </div>
+        <form method="post" action="{% url 'schedule_role_change' agent.pk %}">
+            {% csrf_token %}
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">New Role Type</label>
+                <select name="new_role_type" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    {% for val, lbl in role_type_choices %}
+                    <option value="{{ val }}" {% if val == agent.role_type %}disabled{% endif %}>
+                        {{ lbl }}{% if val == agent.role_type %} (current){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Effective Date</label>
+                <input type="date" name="effective_date" id="src-eff-date" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">The change is applied automatically on this date. Defaults to tomorrow.</div>
+            </div>
+            <div style="margin-bottom:8px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">
+                    New Schedule <span style="font-weight:400;text-transform:none;color:#9ca3af;letter-spacing:0;">(optional)</span>
+                </label>
+                <div style="font-size:11px;color:#9ca3af;margin-bottom:8px;">Leave blank to keep the agent's current schedule.</div>
+                <div style="margin-bottom:10px;">
+                    <div style="font-size:12px;color:#666;margin-bottom:5px;">Working days</div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        {% for val, lbl in day_choices %}
+                        <label style="display:flex;align-items:center;gap:3px;font-size:12px;color:#444;cursor:pointer;user-select:none;">
+                            <input type="checkbox" name="new_shift_days" value="{{ val }}"> {{ lbl|slice:":3" }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div style="display:flex;gap:12px;">
+                    <div style="flex:1;">
+                        <div style="font-size:12px;color:#666;margin-bottom:4px;">Start time</div>
+                        <input type="time" name="new_shift_start_time"
+                            style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
+                    </div>
+                    <div style="flex:1;">
+                        <div style="font-size:12px;color:#666;margin-bottom:4px;">End time</div>
+                        <input type="time" name="new_shift_end_time"
+                            style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:24px;">
+                <button type="button" onclick="document.getElementById('role-change-modal').style.display='none'"
+                    style="padding:8px 18px;border:1px solid #ddd;border-radius:4px;background:white;font-size:14px;cursor:pointer;color:#555;">
+                    Cancel
+                </button>
+                <button type="submit" class="btn btn-primary" style="padding:8px 22px;font-size:14px;">
+                    Schedule Change
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+(function() {
+    // Default effective date to tomorrow
+    var tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    var iso = tomorrow.toISOString().slice(0, 10);
+    var inp = document.getElementById('src-eff-date');
+    if (inp) { inp.value = iso; inp.min = iso; }
+
+    // Close modal on backdrop click
+    document.getElementById('role-change-modal').addEventListener('click', function(e) {
+        if (e.target === this) this.style.display = 'none';
+    });
+})();
+</script>
 {% endblock %}
