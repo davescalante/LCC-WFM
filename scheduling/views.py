@@ -261,6 +261,7 @@ def _save_shift_template(agent, day_of_week, effective_date, is_off, start, end,
     """
     Cap any existing active template before effective_date and create a new one from effective_date.
     If an active template already starts on this exact date, just update it in place.
+    Any templates that start AFTER effective_date are deleted — they are fully superseded.
     effective_date is the specific date the change takes effect (not necessarily week Monday).
     Returns the (template, created) tuple.
     """
@@ -280,19 +281,26 @@ def _save_shift_template(agent, day_of_week, effective_date, is_off, start, end,
         active.notes = notes
         active.effective_until = None
         active.save()
-        return active, False
-    if active:
-        # Earlier date — cap it so prior days keep their correct schedule
-        active.effective_until = effective_date - timedelta(days=1)
-        active.save(update_fields=['effective_until'])
-    tmpl = ShiftTemplate.objects.create(
-        agent=agent, day_of_week=day_of_week,
-        start_time=start or '09:00',
-        end_time=end or '17:00',
-        is_off=is_off, notes=notes,
-        effective_from=effective_date, effective_until=None,
-    )
-    return tmpl, True
+        new_tmpl = active
+        created = False
+    else:
+        if active:
+            # Earlier date — cap it so prior days keep their correct schedule
+            active.effective_until = effective_date - timedelta(days=1)
+            active.save(update_fields=['effective_until'])
+        new_tmpl = ShiftTemplate.objects.create(
+            agent=agent, day_of_week=day_of_week,
+            start_time=start or '09:00',
+            end_time=end or '17:00',
+            is_off=is_off, notes=notes,
+            effective_from=effective_date, effective_until=None,
+        )
+        created = True
+    # Delete any templates that start after effective_date — the new template supersedes them.
+    ShiftTemplate.objects.filter(
+        agent=agent, day_of_week=day_of_week, effective_from__gt=effective_date,
+    ).exclude(pk=new_tmpl.pk).delete()
+    return new_tmpl, created
 
 
 @login_required
@@ -340,21 +348,31 @@ def shift_list(request):
     shifts_qs = Shift.objects.filter(date__in=week_dates, agent__in=agents)
     shift_map = {(s.agent_id, s.date): s for s in shifts_qs}
 
-    # Recurring templates — pick the template that covers this specific week for each agent+day.
-    templates_qs = ShiftTemplate.objects.filter(agent__in=agents)
-    template_map = {}
-    for t in templates_qs:
-        in_range = (
-            (t.effective_from is None or t.effective_from <= week_start)
-            and (t.effective_until is None or t.effective_until >= week_start)
-        )
-        if not in_range:
-            continue
-        key = (t.agent_id, t.day_of_week)
-        existing = template_map.get(key)
-        # Prefer the template with the latest effective_from (most specific)
-        if existing is None or (t.effective_from or date.min) > (existing.effective_from or date.min):
-            template_map[key] = t
+    # Recurring templates — per-day effective lookup so mid-week changes show correctly
+    # and the Shifts tab stays consistent with the Attendance tab.
+    all_templates_ls = list(ShiftTemplate.objects.filter(agent__in=agents))
+    # Pre-group by (agent_id, day_of_week) for fast per-day iteration
+    from collections import defaultdict as _dd
+    _tmpl_by_key = _dd(list)
+    for _t in all_templates_ls:
+        _tmpl_by_key[(_t.agent_id, _t.day_of_week)].append(_t)
+
+    templates_qs = ShiftTemplate.objects.filter(agent__in=agents)  # kept for .exists() checks below
+    template_map = {}  # (agent_id, day_date) -> ShiftTemplate
+    for day_date in week_dates:
+        dow = day_date.weekday()
+        for _ag in agents:
+            candidates = _tmpl_by_key.get((_ag.pk, dow), [])
+            best = None
+            for _t in candidates:
+                if _t.effective_from is not None and _t.effective_from > day_date:
+                    continue
+                if _t.effective_until is not None and _t.effective_until < day_date:
+                    continue
+                if best is None or (_t.effective_from or date.min) > (best.effective_from or date.min):
+                    best = _t
+            if best:
+                template_map[(_ag.pk, day_date)] = best
 
     has_prev_week = Shift.objects.filter(date__in=prev_week_dates).exists()
     has_this_week = shifts_qs.exists() or templates_qs.exists()
@@ -369,7 +387,7 @@ def shift_list(request):
         cells = []
         for day_date in week_dates:
             override = shift_map.get((agent.pk, day_date))
-            t = template_map.get((agent.pk, day_date.weekday()))
+            t = template_map.get((agent.pk, day_date))
             cells.append({
                 'date': day_date,
                 'shift': override,
@@ -381,10 +399,8 @@ def shift_list(request):
             'has_prev_week_shifts': agent.pk in prev_week_agent_ids,
             'has_this_week_shifts': agent.pk in this_week_override_ids,
             'has_template': any(
-                (t2 := template_map.get((agent.pk, d))) is not None
-                and (not t2.effective_from or t2.effective_from <= week_start)
-                and (t2.effective_until is None or t2.effective_until >= week_start)
-                for d in range(7)
+                template_map.get((agent.pk, d)) is not None
+                for d in week_dates
             ),
         })
 
@@ -398,7 +414,7 @@ def shift_list(request):
             return 'admin'
         if agent.role_type == 'kill_team':
             return 'kill_team'
-        for d in range(7):
+        for d in week_dates:
             t = tmpl_map.get((agent.pk, d))
             if t and not t.is_off and t.start_time:
                 return 'morning' if t.start_time.hour < 10 else 'afternoon'
