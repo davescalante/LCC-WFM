@@ -50,10 +50,6 @@ def _sync_pending_schedule(src):
                 start_time=None, end_time=None,
                 is_off=True, effective_from=eff,
             )
-    # Pre-apply supervisor so all tabs reflect the upcoming change immediately
-    if src.new_supervisor_id and ag.supervisor_id != src.new_supervisor_id:
-        ag.supervisor_id = src.new_supervisor_id
-        ag.save(update_fields=['supervisor'])
 
 
 def apply_due_role_changes(agent=None):
@@ -190,7 +186,6 @@ def agent_detail(request, pk):
     ).select_related('new_supervisor__user').first()
     if pending_role_change:
         _sync_pending_schedule(pending_role_change)
-        agent.refresh_from_db(fields=['supervisor'])
     supervisors = Agent.objects.filter(
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
@@ -2261,13 +2256,6 @@ def cancel_role_change(request, pk):
         ShiftTemplate.objects.filter(
             agent=src.agent, effective_until=src.effective_date
         ).update(effective_until=None)
-
-    # Restore supervisor if it was pre-applied — open RoleHistory still holds the original
-    if src.new_supervisor_id:
-        open_rh = src.agent.role_history.filter(effective_to__isnull=True).first()
-        if open_rh is not None:
-            src.agent.supervisor = open_rh.supervisor
-            src.agent.save(update_fields=['supervisor'])
 
     src.cancelled_at = timezone.now()
     src.cancelled_by = request.user
