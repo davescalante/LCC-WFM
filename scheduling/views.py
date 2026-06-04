@@ -28,21 +28,32 @@ def _sync_pending_schedule(src):
     ShiftTemplate.objects.filter(
         agent=ag, effective_until__isnull=True
     ).exclude(effective_from=eff).update(effective_until=eff)
-    # Create new templates for any days not already present
+    # Create new templates for all 7 days — working days with times, rest as off
     existing_days = set(
         ShiftTemplate.objects.filter(agent=ag, effective_from=eff)
         .values_list('day_of_week', flat=True)
     )
-    for day_num in src.new_shift_days:
-        if day_num not in existing_days:
+    working_days = set(src.new_shift_days)
+    for day_num in range(7):
+        if day_num in existing_days:
+            continue
+        if day_num in working_days:
             ShiftTemplate.objects.create(
-                agent=ag,
-                day_of_week=day_num,
+                agent=ag, day_of_week=day_num,
                 start_time=src.new_shift_start_time,
                 end_time=src.new_shift_end_time,
-                is_off=False,
-                effective_from=eff,
+                is_off=False, effective_from=eff,
             )
+        else:
+            ShiftTemplate.objects.create(
+                agent=ag, day_of_week=day_num,
+                start_time=None, end_time=None,
+                is_off=True, effective_from=eff,
+            )
+    # Pre-apply supervisor so all tabs reflect the upcoming change immediately
+    if src.new_supervisor_id and ag.supervisor_id != src.new_supervisor_id:
+        ag.supervisor_id = src.new_supervisor_id
+        ag.save(update_fields=['supervisor'])
 
 
 def apply_due_role_changes(agent=None):
@@ -179,6 +190,7 @@ def agent_detail(request, pk):
     ).select_related('new_supervisor__user').first()
     if pending_role_change:
         _sync_pending_schedule(pending_role_change)
+        agent.refresh_from_db(fields=['supervisor'])
     supervisors = Agent.objects.filter(
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
@@ -2249,6 +2261,13 @@ def cancel_role_change(request, pk):
         ShiftTemplate.objects.filter(
             agent=src.agent, effective_until=src.effective_date
         ).update(effective_until=None)
+
+    # Restore supervisor if it was pre-applied — open RoleHistory still holds the original
+    if src.new_supervisor_id:
+        open_rh = src.agent.role_history.filter(effective_to__isnull=True).first()
+        if open_rh is not None:
+            src.agent.supervisor = open_rh.supervisor
+            src.agent.save(update_fields=['supervisor'])
 
     src.cancelled_at = timezone.now()
     src.cancelled_by = request.user
