@@ -47,7 +47,8 @@ def _build_scheduled_map(week_start):
         effective_date__range=(week_dates[0], week_dates[-1]),
         applied_at__isnull=True,
         cancelled_at__isnull=True,
-    ).values('agent_id', 'new_role_type', 'effective_date'))
+    ).values('agent_id', 'new_role_type', 'effective_date',
+             'new_shift_days', 'new_shift_start_time', 'new_shift_end_time'))
 
     if pending:
         affected_ids = {p['agent_id'] for p in pending}
@@ -142,6 +143,28 @@ def _build_scheduled_map(week_start):
             next_day = (day_date + timedelta(days=1)).strftime('%A')
             _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
                        t['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
+
+    # Pending role changes with a new schedule — count them for planning before effective date applies
+    # This lets coordinators see next week's staffing with graduating agents already counted.
+    for p in pending:
+        if not (p['new_shift_days'] and p['new_shift_start_time'] and p['new_shift_end_time']):
+            continue
+        start_t = p['new_shift_start_time']
+        end_t = p['new_shift_end_time']
+        for day_date in week_dates:
+            if day_date < p['effective_date']:
+                continue
+            if day_date.weekday() not in p['new_shift_days']:
+                continue
+            if p['agent_id'] not in call_ids_by_date[day_date]:
+                continue
+            if (p['agent_id'], day_date) in agents_with_shift_override:
+                continue
+            name = agent_names.get(p['agent_id'], f"Agent {p['agent_id']}")
+            label = f"{start_t.strftime('%H:%M')}–{end_t.strftime('%H:%M')}"
+            next_day = (day_date + timedelta(days=1)).strftime('%A')
+            _add_hours(day_date.strftime('%A'), start_t.hour, end_t.hour,
+                       p['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
 
     # OT shifts — all agents regardless of role; cancelled excluded
     ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).exclude(status='cancelled').values(

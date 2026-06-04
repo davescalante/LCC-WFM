@@ -38,7 +38,11 @@ def apply_due_role_changes(agent=None):
         # Update Agent
         ag.role_type = new_role_type
         ag.role = new_role
-        ag.save(update_fields=['role_type', 'role'])
+        update_fields = ['role_type', 'role']
+        if src.new_supervisor is not None:
+            ag.supervisor = src.new_supervisor
+            update_fields.append('supervisor')
+        ag.save(update_fields=update_fields)
 
         # Update matching Five9Profiles
         ag.five9_profiles.filter(role_type=old_role_type).update(role_type=new_role_type)
@@ -52,7 +56,7 @@ def apply_due_role_changes(agent=None):
             agent=ag,
             role=new_role,
             role_type=new_role_type,
-            supervisor=ag.supervisor,
+            supervisor=src.new_supervisor if src.new_supervisor else ag.supervisor,
             employer=ag.employer,
             billing_status=ag.billing_status,
             effective_from=src.effective_date,
@@ -137,13 +141,17 @@ def agent_detail(request, pk):
     shifts = Shift.objects.filter(agent=agent).order_by('-date')[:30]
     pending_role_change = agent.scheduled_role_changes.filter(
         applied_at__isnull=True, cancelled_at__isnull=True
-    ).first()
+    ).select_related('new_supervisor__user').first()
+    supervisors = Agent.objects.filter(
+        role_type__in=('supervisor', 'coordinator'), status='active'
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
     return render(request, 'scheduling/agent_detail.html', {
         'agent': agent,
         'shifts': shifts,
         'pending_role_change': pending_role_change,
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'day_choices': ShiftTemplate.DAY_CHOICES,
+        'supervisors': supervisors,
     })
 
 
@@ -2158,6 +2166,14 @@ def schedule_role_change(request, pk):
         except (ValueError, TypeError):
             new_shift_days = new_shift_start_time = new_shift_end_time = None
 
+    new_supervisor = None
+    supervisor_id_raw = request.POST.get('new_supervisor_id', '').strip()
+    if supervisor_id_raw:
+        try:
+            new_supervisor = Agent.objects.get(pk=int(supervisor_id_raw))
+        except (Agent.DoesNotExist, ValueError, TypeError):
+            pass
+
     src = ScheduledRoleChange.objects.create(
         agent=agent,
         new_role_type=new_role_type,
@@ -2165,6 +2181,7 @@ def schedule_role_change(request, pk):
         new_shift_days=new_shift_days,
         new_shift_start_time=new_shift_start_time,
         new_shift_end_time=new_shift_end_time,
+        new_supervisor=new_supervisor,
         scheduled_by=request.user,
     )
 

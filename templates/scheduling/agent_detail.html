@@ -144,6 +144,16 @@
                 </select>
             </div>
             <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">New Supervisor <span style="font-weight:400;text-transform:none;color:#9ca3af;letter-spacing:0;">(optional)</span></label>
+                <select name="new_supervisor_id"
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    <option value="">— Keep current supervisor —</option>
+                    {% for sup in supervisors %}
+                    <option value="{{ sup.pk }}" {% if agent.supervisor_id == sup.pk %}selected{% endif %}>{{ sup }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="margin-bottom:16px;">
                 <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Effective Date</label>
                 <input type="date" name="effective_date" id="src-eff-date" required
                     style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">

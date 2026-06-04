@@ -348,6 +348,10 @@ class ScheduledRoleChange(models.Model):
     new_shift_days = models.JSONField(null=True, blank=True)       # list of 0-6 integers
     new_shift_start_time = models.TimeField(null=True, blank=True)
     new_shift_end_time = models.TimeField(null=True, blank=True)
+    # Optional new supervisor applied on effective_date
+    new_supervisor = models.ForeignKey(
+        'Agent', null=True, blank=True, on_delete=models.SET_NULL, related_name='+'
+    )
     # Audit
     scheduled_by = models.ForeignKey(
         'auth.User', null=True, on_delete=models.SET_NULL, related_name='+'
