@@ -468,6 +468,7 @@ async function submitCoding(agentId, dateStr) {
         document.getElementById(`end-${agentId}-${dateStr}`).value   = '';
         document.getElementById(`notes-${agentId}-${dateStr}`).value = '';
 
+        if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
         toggleAddForm(agentId, dateStr);
         updateCellTotal(agentId, dateStr);
         updateRowTotal(agentId);
