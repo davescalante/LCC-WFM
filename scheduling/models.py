@@ -235,6 +235,60 @@ class OvertimeShift(models.Model):
         return self.incentive_offered()
 
 
+class LoginLogoutUpload(models.Model):
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    filename = models.CharField(max_length=255)
+    row_count = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"{self.filename} ({self.uploaded_at:%Y-%m-%d %H:%M})"
+
+
+class AgentLoginSession(models.Model):
+    upload = models.ForeignKey(LoginLogoutUpload, on_delete=models.CASCADE, related_name='sessions')
+    agent = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='login_sessions')
+    five9_username = models.CharField(max_length=100)
+    date = models.DateField()
+    login_at = models.DateTimeField()
+    logout_at = models.DateTimeField()
+    session_seconds = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['date', 'login_at']
+        indexes = [
+            models.Index(fields=['agent', 'date']),
+            models.Index(fields=['five9_username', 'date']),
+        ]
+
+
+class OTShiftVerification(models.Model):
+    ot_shift = models.OneToOneField(OvertimeShift, on_delete=models.CASCADE, related_name='verification')
+    upload = models.ForeignKey(LoginLogoutUpload, on_delete=models.SET_NULL, null=True, related_name='verifications')
+    verified_seconds = models.IntegerField(default=0)
+    shift_seconds = models.IntegerField(default=0)
+    username_found = models.BooleanField(default=True)
+    verified_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def coverage_pct(self):
+        if self.shift_seconds == 0:
+            return None
+        return min(100.0, round(self.verified_seconds / self.shift_seconds * 100, 1))
+
+    @property
+    def verified_display(self):
+        h, m = divmod(self.verified_seconds // 60, 60)
+        return (f"{h}h {m}m" if m else f"{h}h") if h else f"{m}m"
+
+    @property
+    def shift_display(self):
+        h, m = divmod(self.shift_seconds // 60, 60)
+        return (f"{h}h {m}m" if m else f"{h}h") if h else f"{m}m"
+
+
 class AuditLog(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')

@@ -20,6 +20,7 @@ urlpatterns = [
     path('overtime/export/', views.overtime_export, name='overtime_export'),
     path('overtime/<int:pk>/delete/', views.overtime_delete, name='overtime_delete'),
     path('overtime/<int:pk>/set-status/', views.overtime_set_status, name='overtime_set_status'),
+    path('overtime/verify-upload/', views.verify_ot_upload, name='verify_ot_upload'),
     path('shifts/quick-edit/', views.shift_quick_edit, name='shift_quick_edit'),
     path('activity/', views.activity_log, name='activity_log'),
     path('poll/', views.live_poll, name='live_poll'),

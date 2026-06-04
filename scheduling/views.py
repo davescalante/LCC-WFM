@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, log_action
+from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -865,6 +865,22 @@ def overtime_list(request):
     for s in ot_qs:
         ot_map.setdefault((s.agent_id, s.date), []).append(s)
 
+    # Fetch verifications for this week's OT shifts
+    ot_pks = [s.pk for shifts in ot_map.values() for s in shifts]
+    verif_map = {
+        v.ot_shift_id: v
+        for v in OTShiftVerification.objects.filter(ot_shift_id__in=ot_pks)
+    }
+    for shifts in ot_map.values():
+        for s in shifts:
+            s._verification = verif_map.get(s.pk)
+
+    # Last login-logout upload covering any day this week
+    last_ll_upload = (
+        LoginLogoutUpload.objects.filter(sessions__date__in=week_dates)
+        .order_by('-uploaded_at').first()
+    )
+
     rows = []
     for agent in agents:
         cells = []
@@ -892,6 +908,133 @@ def overtime_list(request):
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'last_ll_upload': last_ll_upload,
+    })
+
+
+@login_required
+def verify_ot_upload(request):
+    import csv, io, json as _json
+    from datetime import datetime, timedelta as td
+    from django.http import JsonResponse
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    csv_file = request.FILES.get('file')
+    if not csv_file:
+        return JsonResponse({'ok': False, 'error': 'No file uploaded.'}, status=400)
+
+    try:
+        content = csv_file.read().decode('utf-8-sig')
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': f'Could not read file: {e}'}, status=400)
+
+    # Parse all sessions — index by (username, date)
+    by_username_date = {}   # {(username, date): [(login_at, logout_at, secs)]}
+    all_usernames = set()   # every username that appears anywhere in the file
+
+    for row in rows:
+        username = (row.get('AGENT') or '').strip().lower()
+        date_str = (row.get('DATE') or '').strip()
+        login_ts = (row.get('LOGIN TIMESTAMP') or '').strip()
+        logout_ts = (row.get('LOGOUT TIMESTAMP') or '').strip()
+        login_time = (row.get('LOGIN TIME') or '').strip()
+        if not username or not date_str:
+            continue
+        try:
+            row_date = datetime.strptime(date_str, '%Y/%m/%d').date()
+        except ValueError:
+            continue
+        try:
+            login_at = datetime.strptime(login_ts, '%a, %d %b %Y %H:%M:%S')
+            logout_at = datetime.strptime(logout_ts, '%a, %d %b %Y %H:%M:%S')
+        except ValueError:
+            continue
+        try:
+            p = login_time.split(':')
+            secs = int(p[0]) * 3600 + int(p[1]) * 60 + int(p[2])
+        except (ValueError, IndexError):
+            secs = max(0, int((logout_at - login_at).total_seconds()))
+        all_usernames.add(username)
+        by_username_date.setdefault((username, row_date), []).append((login_at, logout_at, secs))
+
+    dates_in_file = {d for _, d in by_username_date.keys()}
+    if not dates_in_file:
+        return JsonResponse({'ok': False, 'error': 'No valid data found in file.'}, status=400)
+
+    # Build agent → username(s) map from Five9Profile
+    profiles = Five9Profile.objects.filter(five9_username__gt='').select_related('agent')
+    agent_usernames = {}  # agent_id -> set of usernames
+    for p in profiles:
+        uname = p.five9_username.strip().lower()
+        agent_usernames.setdefault(p.agent_id, set()).add(uname)
+
+    # Replace sessions for these dates and create new upload record
+    AgentLoginSession.objects.filter(date__in=dates_in_file).delete()
+    upload = LoginLogoutUpload.objects.create(filename=csv_file.name, row_count=len(rows))
+
+    # Build agent_map for matching
+    agent_map = {
+        p.five9_username.strip().lower(): p.agent
+        for p in profiles if p.agent and p.agent.status == 'active'
+    }
+
+    session_objects = []
+    for (username, row_date), sessions in by_username_date.items():
+        agent = agent_map.get(username)
+        for login_at, logout_at, secs in sessions:
+            session_objects.append(AgentLoginSession(
+                upload=upload, agent=agent, five9_username=username,
+                date=row_date, login_at=login_at, logout_at=logout_at,
+                session_seconds=secs,
+            ))
+    AgentLoginSession.objects.bulk_create(session_objects)
+
+    # Verify OT shifts for dates covered
+    ot_shifts = OvertimeShift.objects.filter(date__in=dates_in_file).select_related('agent')
+    OTShiftVerification.objects.filter(ot_shift__in=ot_shifts).delete()
+
+    new_verifs = []
+    for ot in ot_shifts:
+        usernames = agent_usernames.get(ot.agent_id, set())
+        username_found = bool(usernames & all_usernames)
+
+        # Collect all sessions for this agent on this date
+        agent_sessions = []
+        for uname in usernames:
+            agent_sessions.extend(by_username_date.get((uname, ot.date), []))
+
+        # Overlap calculation
+        shift_start = datetime.combine(ot.date, ot.start_time)
+        shift_end = datetime.combine(ot.date, ot.end_time)
+        if shift_end <= shift_start:
+            shift_end += td(days=1)
+        shift_secs = int((shift_end - shift_start).total_seconds())
+
+        verified_secs = 0
+        for login_at, logout_at, _ in agent_sessions:
+            overlap = max(0.0, (min(shift_end, logout_at) - max(shift_start, login_at)).total_seconds())
+            verified_secs += int(overlap)
+        verified_secs = min(verified_secs, shift_secs)
+
+        new_verifs.append(OTShiftVerification(
+            ot_shift=ot, upload=upload,
+            verified_seconds=verified_secs,
+            shift_seconds=shift_secs,
+            username_found=username_found,
+        ))
+    OTShiftVerification.objects.bulk_create(new_verifs)
+
+    log_action(request.user, 'Uploaded OT verification report',
+               f'{csv_file.name} — {len(dates_in_file)} date(s), {len(new_verifs)} shifts verified')
+
+    return JsonResponse({
+        'ok': True,
+        'dates': sorted(d.isoformat() for d in dates_in_file),
+        'shifts_verified': len(new_verifs),
+        'filename': csv_file.name,
     })
 
 

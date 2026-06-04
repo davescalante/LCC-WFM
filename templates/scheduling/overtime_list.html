@@ -5,11 +5,39 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>OT Shifts</h1>
     <div style="display:flex;gap:8px;">
+        <button type="button" onclick="toggleVerifyPanel()"
+            class="btn" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:6px 14px;font-size:13px;">
+            &#10003; Verify OT Shifts
+        </button>
         <button type="button" onclick="toggleExportPanel()"
             class="btn" style="background:#e0f0e9;color:#15502e;border:1px solid #a7d3b8;padding:6px 14px;font-size:13px;">
             &#8681; Export for Payroll
         </button>
         <a href="{% url 'overtime_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">+ Edit OT Week</a>
+    </div>
+</div>
+
+<!-- Verify OT panel -->
+<div id="verify-panel" style="display:none;margin-bottom:16px;">
+    <div class="card" style="padding:16px 20px;background:#eff6ff;border:1px solid #bfdbfe;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div>
+                <div style="font-size:14px;font-weight:600;color:#1d4ed8;">Verify OT Shifts — Upload Login-Logout Report</div>
+                <div style="font-size:12px;color:#555;margin-top:2px;">Upload a Five9 Login-Logout CSV to verify agent attendance during scheduled OT windows.</div>
+            </div>
+            <button type="button" onclick="toggleVerifyPanel()" style="background:none;border:none;color:#888;font-size:18px;cursor:pointer;padding:0 4px;">&#215;</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <input type="file" id="verify-file-input" accept=".csv" style="font-size:13px;margin:0;">
+            <button type="button" onclick="submitVerifyUpload()" id="verify-upload-btn"
+                class="btn btn-primary" style="padding:6px 16px;font-size:13px;">Upload &amp; Verify</button>
+            <span id="verify-status" style="font-size:12px;color:#555;"></span>
+        </div>
+        {% if last_ll_upload %}
+        <div style="margin-top:8px;font-size:11px;color:#6b7280;">
+            Last upload: <strong>{{ last_ll_upload.filename }}</strong> — {{ last_ll_upload.uploaded_at|date:"M d, Y H:i" }}
+        </div>
+        {% endif %}
     </div>
 </div>
 
@@ -139,6 +167,23 @@
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'no_show')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#dc2626;">&#10007; No Show</button>
                             </div>
                         </div>
+                        <!-- Verification result -->
+                        {% with v=ot._verification %}
+                        {% if v %}
+                        <div style="margin-top:3px;font-size:10px;line-height:1.4;">
+                            {% if not v.username_found %}
+                            <span style="color:#9a3412;">Username not found in report</span>
+                            {% elif v.verified_seconds == 0 %}
+                            <span style="color:#dc2626;font-weight:600;">No login detected</span>
+                            {% else %}
+                            <span style="color:{% if v.coverage_pct >= 100 %}#15803d{% elif v.coverage_pct >= 80 %}#92400e{% else %}#dc2626{% endif %};">
+                                {{ v.verified_display }} of {{ v.shift_display }}
+                                ({{ v.coverage_pct }}%)
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% endwith %}
                         <!-- Hover-reveal action buttons -->
                         <div class="ot-row-actions" style="display:none;margin-top:4px;gap:4px;justify-content:center;">
                             <a href="{% url 'overtime_week' %}?week_start={{ week_start|date:'Y-m-d' }}&agent={{ row.agent.pk }}"
@@ -276,6 +321,44 @@ document.getElementById('delete-modal').addEventListener('click', function(e) {
 function toggleExportPanel() {
     const p = document.getElementById('export-panel');
     p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+function toggleVerifyPanel() {
+    const p = document.getElementById('verify-panel');
+    p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+function submitVerifyUpload() {
+    const input = document.getElementById('verify-file-input');
+    const status = document.getElementById('verify-status');
+    const btn = document.getElementById('verify-upload-btn');
+    if (!input.files.length) { status.textContent = 'Please select a file first.'; return; }
+    const fd = new FormData();
+    fd.append('file', input.files[0]);
+    fd.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+    btn.disabled = true;
+    btn.textContent = 'Processing…';
+    status.textContent = '';
+    fetch('/overtime/verify-upload/', {method: 'POST', body: fd})
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false;
+            btn.textContent = 'Upload & Verify';
+            if (data.ok) {
+                status.style.color = '#15803d';
+                status.textContent = `✓ ${data.shifts_verified} shifts verified across ${data.dates.length} date(s). Refreshing…`;
+                setTimeout(() => location.reload(), 1200);
+            } else {
+                status.style.color = '#dc2626';
+                status.textContent = data.error || 'Upload failed.';
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.textContent = 'Upload & Verify';
+            status.style.color = '#dc2626';
+            status.textContent = 'Network error — please try again.';
+        });
 }
 
 const OT_PILL = {
