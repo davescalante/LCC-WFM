@@ -207,6 +207,11 @@
                                 {{ v.verified_display }} of {{ v.shift_display }}
                                 ({{ v.coverage_pct }}%)
                             </span>
+                            {% if v.coding_seconds > 0 %}
+                            <div style="font-size:9px;color:#9ca3af;margin-top:1px;">
+                                Five9: {{ v.five9_display }} &middot; Coded: {{ v.coding_display }}
+                            </div>
+                            {% endif %}
                             {% endif %}
                         </div>
                         {% endif %}

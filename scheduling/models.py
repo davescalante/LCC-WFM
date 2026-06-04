@@ -270,6 +270,8 @@ class OTShiftVerification(models.Model):
     ot_shift = models.OneToOneField(OvertimeShift, on_delete=models.CASCADE, related_name='verification')
     upload = models.ForeignKey(LoginLogoutUpload, on_delete=models.SET_NULL, null=True, related_name='verifications')
     verified_seconds = models.IntegerField(default=0)
+    five9_seconds = models.IntegerField(default=0)
+    coding_seconds = models.IntegerField(default=0)
     shift_seconds = models.IntegerField(default=0)
     username_found = models.BooleanField(default=True)
     verified_at = models.DateTimeField(auto_now=True)
@@ -280,15 +282,26 @@ class OTShiftVerification(models.Model):
             return None
         return min(100.0, round(self.verified_seconds / self.shift_seconds * 100, 1))
 
-    @property
-    def verified_display(self):
-        h, m = divmod(self.verified_seconds // 60, 60)
+    @staticmethod
+    def _fmt_secs(secs):
+        h, m = divmod(secs // 60, 60)
         return (f"{h}h {m}m" if m else f"{h}h") if h else f"{m}m"
 
     @property
+    def verified_display(self):
+        return self._fmt_secs(self.verified_seconds)
+
+    @property
+    def five9_display(self):
+        return self._fmt_secs(self.five9_seconds)
+
+    @property
+    def coding_display(self):
+        return self._fmt_secs(self.coding_seconds)
+
+    @property
     def shift_display(self):
-        h, m = divmod(self.shift_seconds // 60, 60)
-        return (f"{h}h {m}m" if m else f"{h}h") if h else f"{m}m"
+        return self._fmt_secs(self.shift_seconds)
 
 
 class AuditLog(models.Model):

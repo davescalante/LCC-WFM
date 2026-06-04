@@ -1069,32 +1069,68 @@ def verify_ot_upload(request):
     ot_shifts = OvertimeShift.objects.filter(date__in=dates_in_file).select_related('agent')
     OTShiftVerification.objects.filter(ot_shift__in=ot_shifts).delete()
 
+    # Fetch codings for all relevant agents on dates in the file
+    from adherence.models import Coding
+    coding_intervals = {}  # {(agent_id, date): [(start_dt, end_dt)]}
+    for c in Coding.objects.filter(date__in=dates_in_file).values('agent_id', 'date', 'start_time', 'end_time'):
+        dt_s = datetime.combine(c['date'], c['start_time'])
+        dt_e = datetime.combine(c['date'], c['end_time'])
+        if dt_e > dt_s:
+            coding_intervals.setdefault((c['agent_id'], c['date']), []).append((dt_s, dt_e))
+
+    def _merge_and_sum(intervals):
+        if not intervals:
+            return 0
+        ivs = sorted(intervals)
+        cs, ce = ivs[0]
+        total = 0
+        for s, e in ivs[1:]:
+            if s <= ce:
+                ce = max(ce, e)
+            else:
+                total += (ce - cs).total_seconds()
+                cs, ce = s, e
+        total += (ce - cs).total_seconds()
+        return int(total)
+
     new_verifs = []
     for ot in ot_shifts:
         usernames = agent_usernames.get(ot.agent_id, set())
         username_found = bool(usernames & all_usernames)
 
-        # Collect all sessions for this agent on this date
-        agent_sessions = []
-        for uname in usernames:
-            agent_sessions.extend(by_username_date.get((uname, ot.date), []))
-
-        # Overlap calculation
         shift_start = datetime.combine(ot.date, ot.start_time)
         shift_end = datetime.combine(ot.date, ot.end_time)
         if shift_end <= shift_start:
             shift_end += td(days=1)
         shift_secs = int((shift_end - shift_start).total_seconds())
 
-        verified_secs = 0
-        for login_at, logout_at, _ in agent_sessions:
-            overlap = max(0.0, (min(shift_end, logout_at) - max(shift_start, login_at)).total_seconds())
-            verified_secs += int(overlap)
-        verified_secs = min(verified_secs, shift_secs)
+        # Clip each interval to the shift window
+        def _clip(s, e):
+            cs, ce = max(s, shift_start), min(e, shift_end)
+            return (cs, ce) if ce > cs else None
+
+        five9_ivs = []
+        for uname in usernames:
+            for login_at, logout_at, _ in by_username_date.get((uname, ot.date), []):
+                iv = _clip(login_at, logout_at)
+                if iv:
+                    five9_ivs.append(iv)
+
+        coding_ivs = []
+        for dt_s, dt_e in coding_intervals.get((ot.agent_id, ot.date), []):
+            iv = _clip(dt_s, dt_e)
+            if iv:
+                coding_ivs.append(iv)
+
+        five9_secs = min(_merge_and_sum(five9_ivs), shift_secs)
+        merged_secs = min(_merge_and_sum(five9_ivs + coding_ivs), shift_secs)
+        coding_secs = merged_secs - five9_secs  # net additional seconds codings contributed
 
         new_verifs.append(OTShiftVerification(
             ot_shift=ot, upload=upload,
-            verified_seconds=verified_secs,
+            verified_seconds=merged_secs,
+            five9_seconds=five9_secs,
+            coding_seconds=coding_secs,
             shift_seconds=shift_secs,
             username_found=username_found,
         ))
