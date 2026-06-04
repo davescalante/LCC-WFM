@@ -248,11 +248,18 @@
                         <span class="badge badge-green">Completed</span>
                         {% elif s.status == 'no_show' %}
                         <span class="badge badge-red">No Show</span>
+                        {% elif s.status == 'cancelled' %}
+                        <span class="badge" style="background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;text-decoration:line-through;">Cancelled</span>
                         {% else %}
                         <span class="badge badge-yellow">Pending</span>
                         {% endif %}
                     </td>
-                    <td style="font-size:11px;color:#555;">{{ s.notes|default:"—" }}</td>
+                    <td style="font-size:11px;color:#555;">
+                        {{ s.notes|default:"" }}
+                        {% if s.cancellation_reason %}
+                        <span style="color:#9ca3af;font-style:italic;">{% if s.notes %}· {% endif %}Cancelled: {{ s.cancellation_reason }}</span>
+                        {% elif not s.notes %}—{% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

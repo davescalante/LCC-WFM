@@ -309,11 +309,22 @@ def shift_list(request):
     default_week_start = today - timedelta(days=today.weekday())
 
     week_start_str = request.GET.get('week_start')
-    try:
-        week_start = date.fromisoformat(week_start_str) if week_start_str else default_week_start
-        week_start = week_start - timedelta(days=week_start.weekday())
-    except ValueError:
-        week_start = default_week_start
+    if week_start_str:
+        try:
+            week_start = date.fromisoformat(week_start_str)
+            week_start = week_start - timedelta(days=week_start.weekday())
+            request.session['shift_list_week_start'] = week_start.isoformat()
+        except ValueError:
+            week_start = default_week_start
+    else:
+        saved = request.session.get('shift_list_week_start')
+        if saved:
+            try:
+                week_start = date.fromisoformat(saved)
+            except ValueError:
+                week_start = default_week_start
+        else:
+            week_start = default_week_start
 
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
@@ -849,15 +860,25 @@ def shift_clear_recurring(request):
 
 
 def _get_week_start(request):
-    """Return Monday of the selected week from GET param or today."""
+    """Return Monday of the selected week from GET param, session, or current week."""
     today = timezone.localdate()
     default = today - timedelta(days=today.weekday())
     raw = request.GET.get('week_start')
-    try:
-        ws = date.fromisoformat(raw) if raw else default
-        return ws - timedelta(days=ws.weekday())
-    except (ValueError, TypeError):
-        return default
+    if raw:
+        try:
+            ws = date.fromisoformat(raw)
+            ws = ws - timedelta(days=ws.weekday())
+            request.session['sched_week_start'] = ws.isoformat()
+            return ws
+        except (ValueError, TypeError):
+            pass
+    saved = request.session.get('sched_week_start')
+    if saved:
+        try:
+            return date.fromisoformat(saved)
+        except ValueError:
+            pass
+    return default
 
 
 def _get_supervisor_filter(request):
@@ -895,7 +916,15 @@ def overtime_list(request):
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
 
+    status_filter = request.GET.get('status_filter', '')
+    if 'status_filter' in request.GET:
+        request.session['ot_status_filter'] = status_filter
+    else:
+        status_filter = request.session.get('ot_status_filter', '')
+
     ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents).order_by('start_time')
+    if status_filter:
+        ot_qs = ot_qs.filter(status=status_filter)
     ot_map = {}
     for s in ot_qs:
         ot_map.setdefault((s.agent_id, s.date), []).append(s)
@@ -923,16 +952,24 @@ def overtime_list(request):
         week_earned = None
         for day_date in week_dates:
             ot_shifts = ot_map.get((agent.pk, day_date), [])
-            offered_vals = [s.incentive_offered() for s in ot_shifts if s.incentive_offered() is not None]
-            earned_vals = [s.incentive_earned() for s in ot_shifts if s.incentive_earned() is not None]
+            active_shifts = [s for s in ot_shifts if s.status != 'cancelled']
+            offered_vals = [s.incentive_offered() for s in active_shifts if s.incentive_offered() is not None]
+            earned_vals = [s.incentive_earned() for s in active_shifts if s.incentive_earned() is not None]
             cell_offered = sum(offered_vals) if offered_vals else None
             cell_earned = sum(earned_vals) if earned_vals else None
             if cell_offered is not None:
                 week_offered = (week_offered or 0) + float(cell_offered)
             if cell_earned is not None:
                 week_earned = (week_earned or 0) + float(cell_earned)
-            cells.append({'date': day_date, 'ot_shifts': ot_shifts, 'offered': cell_offered, 'earned': cell_earned})
-        rows.append({'agent': agent, 'cells': cells, 'week_offered': week_offered, 'week_earned': week_earned})
+            cells.append({
+                'date': day_date,
+                'ot_shifts': ot_shifts,
+                'has_active_ot': bool(active_shifts),
+                'offered': cell_offered,
+                'earned': cell_earned,
+            })
+        if any(c['ot_shifts'] for c in cells):
+            rows.append({'agent': agent, 'cells': cells, 'week_offered': week_offered, 'week_earned': week_earned})
 
     return render(request, 'scheduling/overtime_list.html', {
         'rows': rows,
@@ -943,6 +980,7 @@ def overtime_list(request):
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'status_filter': status_filter,
         'last_ll_upload': last_ll_upload,
     })
 
@@ -1351,22 +1389,26 @@ def overtime_export(request):
         'Start Time', 'End Time', 'Total Hours',
         'Incentive Type', 'Incentivized Hours', 'Base Hourly Rate ($)',
         'Base Pay ($)', 'Incentive Bonus ($)', 'Total Pay Offered ($)',
-        'Completed',
+        'Status', 'Cancellation Reason',
     ])
     for ot in ot_qs:
         from decimal import Decimal
-        total_hrs = ot.total_shift_hours()
+        is_cancelled = ot.status == 'cancelled'
+        total_hrs = Decimal('0') if is_cancelled else ot.total_shift_hours()
         base_rate = ot.base_hourly_rate or Decimal('0')
         inc_hrs = ot.incentivized_hours or Decimal('0')
-        if ot.incentive_type == 'time_and_a_half':
-            premium = Decimal('0.5')
-        elif ot.incentive_type == 'power_hour':
-            premium = Decimal('1.0')
+        if is_cancelled:
+            base_pay = incentive_bonus = total_offered = '0.00'
         else:
-            premium = Decimal('0')
-        base_pay = (total_hrs * base_rate).quantize(Decimal('0.01')) if base_rate else ''
-        incentive_bonus = (inc_hrs * base_rate * premium).quantize(Decimal('0.01')) if base_rate else ''
-        total_offered = ot.incentive_offered() or ''
+            if ot.incentive_type == 'time_and_a_half':
+                premium = Decimal('0.5')
+            elif ot.incentive_type == 'power_hour':
+                premium = Decimal('1.0')
+            else:
+                premium = Decimal('0')
+            base_pay = (total_hrs * base_rate).quantize(Decimal('0.01')) if base_rate else ''
+            incentive_bonus = (inc_hrs * base_rate * premium).quantize(Decimal('0.01')) if base_rate else ''
+            total_offered = ot.incentive_offered() or ''
         week_start = ot.date - timedelta(days=ot.date.weekday())
         writer.writerow([
             str(ot.agent),
@@ -1386,6 +1428,7 @@ def overtime_export(request):
             str(incentive_bonus),
             str(total_offered),
             ot.get_status_display(),
+            ot.cancellation_reason,
         ])
     return response
 
@@ -1399,18 +1442,30 @@ def overtime_set_status(request, pk):
     try:
         body = _json.loads(request.body)
         new_status = body.get('status', '')
+        cancellation_reason = body.get('cancellation_reason', '').strip()
     except (ValueError, KeyError):
         new_status = ''
-    valid = {'pending', 'completed', 'no_show'}
+        cancellation_reason = ''
+    valid = {'pending', 'completed', 'no_show', 'cancelled'}
     if new_status not in valid:
         return JsonResponse({'error': 'Invalid status'}, status=400)
+    if new_status == 'cancelled' and not cancellation_reason:
+        return JsonResponse({'error': 'Cancellation reason is required.'}, status=400)
     ot_shift = get_object_or_404(OvertimeShift, pk=pk)
     ot_shift.status = new_status
-    ot_shift.save(update_fields=['status'])
+    update_fields = ['status']
+    if new_status == 'cancelled':
+        ot_shift.cancellation_reason = cancellation_reason
+        update_fields.append('cancellation_reason')
+    elif ot_shift.cancellation_reason:
+        ot_shift.cancellation_reason = ''
+        update_fields.append('cancellation_reason')
+    ot_shift.save(update_fields=update_fields)
     log_action(request.user, 'Updated OT status',
-               f'{ot_shift.agent} on {ot_shift.date}: status={new_status}',
+               f'{ot_shift.agent} on {ot_shift.date}: status={new_status}'
+               + (f' (reason: {cancellation_reason})' if cancellation_reason else ''),
                agent=ot_shift.agent)
-    return JsonResponse({'status': new_status, 'pk': pk})
+    return JsonResponse({'status': new_status, 'pk': pk, 'cancellation_reason': ot_shift.cancellation_reason})
 
 
 @login_required

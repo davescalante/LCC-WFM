@@ -196,9 +196,11 @@ class OvertimeShift(models.Model):
         ('pending', 'Pending'),
         ('completed', 'Completed'),
         ('no_show', 'No Show'),
+        ('cancelled', 'Cancelled'),
     ]
-    status = models.CharField(max_length=10, choices=OT_STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=12, choices=OT_STATUS_CHOICES, default='pending')
     notes = models.TextField(blank=True)
+    cancellation_reason = models.TextField(blank=True)
 
     class Meta:
         ordering = ['date']

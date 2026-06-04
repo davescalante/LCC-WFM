@@ -233,11 +233,21 @@ def _get_week_start(request):
     today = timezone.localdate()
     default = today - timedelta(days=today.weekday())
     raw = request.GET.get('week_start') or request.POST.get('week_start')
-    try:
-        ws = date.fromisoformat(raw) if raw else default
-        return ws - timedelta(days=ws.weekday())
-    except ValueError:
-        return default
+    if raw:
+        try:
+            ws = date.fromisoformat(raw)
+            ws = ws - timedelta(days=ws.weekday())
+            request.session['adh_week_start'] = ws.isoformat()
+            return ws
+        except ValueError:
+            pass
+    saved = request.session.get('adh_week_start')
+    if saved:
+        try:
+            return date.fromisoformat(saved)
+        except ValueError:
+            pass
+    return default
 
 
 def _build_maps(agents, week_dates):
@@ -277,7 +287,7 @@ def _build_maps(agents, week_dates):
         coded_map[key] = coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
 
     # Multiple OT per day — list-valued map
-    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents)
+    ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents).exclude(status='cancelled')
     ot_map = {}
     for s in ot_qs:
         ot_map.setdefault((s.agent_id, s.date), []).append(s)
@@ -1090,9 +1100,9 @@ def _zero_missing_scheduled(upload_date, matched_agent_ids):
     """
     matched = set(matched_agent_ids)
 
-    # OT shifts on this date
+    # OT shifts on this date (cancelled shifts don't count as scheduled)
     scheduled = set(
-        OvertimeShift.objects.filter(date=upload_date, agent__status='active')
+        OvertimeShift.objects.filter(date=upload_date, agent__status='active').exclude(status='cancelled')
         .values_list('agent_id', flat=True)
     )
     # Non-off shift overrides

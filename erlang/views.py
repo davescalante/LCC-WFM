@@ -92,8 +92,8 @@ def _build_scheduled_map(week_start):
                     _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
                                {'name': name, 'time': label, 'ot': False}, next_day)
 
-    # OT shifts — all agents regardless of role
-    ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).values(
+    # OT shifts — all agents regardless of role; cancelled shifts are not counted as coverage
+    ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).exclude(status='cancelled').values(
         'agent_id', 'date', 'start_time', 'end_time'
     )
     for s in ot_shifts:

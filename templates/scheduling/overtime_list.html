@@ -75,22 +75,38 @@
 
 {% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
 
-<!-- Supervisor filter -->
+<!-- Filters -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
-    <form method="get" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <form method="get" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
         <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-        <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Filter by Supervisor:</label>
-        <select name="supervisor" onchange="this.form.submit()"
-            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
-            <option value="">All</option>
-            {% for sup in supervisors %}
-            <option value="{{ sup.pk }}" {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>
-                {{ sup }}
-            </option>
-            {% endfor %}
-        </select>
-        {% if selected_supervisor %}
-        <a href="?week_start={{ week_start|date:'Y-m-d' }}&supervisor=" style="font-size:12px;color:#888;text-decoration:none;">&#10005; Clear</a>
+
+        <div style="display:flex;align-items:center;gap:8px;">
+            <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Supervisor:</label>
+            <select name="supervisor" onchange="this.form.submit()"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+                <option value="">All</option>
+                {% for sup in supervisors %}
+                <option value="{{ sup.pk }}" {% if selected_supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>
+                    {{ sup }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;">
+            <label style="margin:0;font-size:13px;color:#555;white-space:nowrap;">Status:</label>
+            <select name="status_filter" onchange="this.form.submit()"
+                style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+                <option value="">All</option>
+                <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>Pending</option>
+                <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Completed</option>
+                <option value="no_show" {% if status_filter == 'no_show' %}selected{% endif %}>No Show</option>
+                <option value="cancelled" {% if status_filter == 'cancelled' %}selected{% endif %}>Cancelled</option>
+            </select>
+        </div>
+
+        {% if selected_supervisor or status_filter %}
+        <a href="?week_start={{ week_start|date:'Y-m-d' }}&supervisor=&status_filter=" style="font-size:12px;color:#888;text-decoration:none;">&#10005; Clear filters</a>
         {% endif %}
     </form>
 </div>
@@ -98,13 +114,14 @@
 <!-- Week navigation -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <a href="?week_start={{ prev_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+        <a href="?week_start={{ prev_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}"
            class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} &ndash; {{ week_end|date:"F d, Y" }}</strong>
-        <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}"
+        <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}"
            class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
         <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
             {% if selected_supervisor %}<input type="hidden" name="supervisor" value="{{ selected_supervisor }}">{% endif %}
+            {% if status_filter %}<input type="hidden" name="status_filter" value="{{ status_filter }}">{% endif %}
             <label style="margin:0;font-size:13px;color:#555;">Jump to week:</label>
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
@@ -136,21 +153,25 @@
                 <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
             </td>
             {% for cell in row.cells %}
-            <td style="padding:6px 4px;text-align:center;vertical-align:middle;{% if cell.ot_shifts %}background:#f0fdf4;{% endif %}">
+            <td style="padding:6px 4px;text-align:center;vertical-align:middle;{% if cell.has_active_ot %}background:#f0fdf4;{% elif cell.ot_shifts %}background:#f9fafb;{% endif %}">
                 {% if cell.ot_shifts %}
                     {% for ot in cell.ot_shifts %}
-                    <div class="ot-entry"
+                    <div class="ot-entry{% if ot.status == 'cancelled' %} ot-cancelled{% endif %}"
                          data-pk="{{ ot.pk }}"
-                         data-offered="{% if ot.incentive_offered %}{{ ot.incentive_offered }}{% else %}0{% endif %}"
+                         data-offered="{% if ot.status != 'cancelled' and ot.incentive_offered %}{{ ot.incentive_offered }}{% else %}0{% endif %}"
+                         data-base-offered="{% if ot.incentive_offered %}{{ ot.incentive_offered }}{% else %}0{% endif %}"
                          data-earned="{% if ot.incentive_earned %}{{ ot.incentive_earned }}{% else %}0{% endif %}"
-                         style="position:relative;{% if not forloop.first %}border-top:1px solid #d1fae5;padding-top:6px;margin-top:6px;{% endif %}">
-                        <div style="font-size:12px;font-weight:600;color:#16a34a;white-space:nowrap;">
+                         style="position:relative;{% if not forloop.first %}border-top:1px solid {% if ot.status == 'cancelled' %}#e5e7eb{% else %}#d1fae5{% endif %};padding-top:6px;margin-top:6px;{% endif %}{% if ot.status == 'cancelled' %}opacity:0.6;{% endif %}">
+                        <div class="ot-time" style="font-size:12px;font-weight:600;white-space:nowrap;
+                            {% if ot.status == 'cancelled' %}color:#9ca3af;text-decoration:line-through;{% else %}color:#16a34a;{% endif %}">
                             {{ ot.start_time|time:"H:i" }}&ndash;{{ ot.end_time|time:"H:i" }}
                         </div>
-                        {% if ot.incentive_type == 'time_and_a_half' %}
-                        <span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fbbf24;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">1.5x</span>
-                        {% elif ot.incentive_type == 'power_hour' %}
-                        <span style="display:inline-block;background:#ffedd5;color:#9a3412;border:1px solid #f97316;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">2x</span>
+                        {% if ot.status != 'cancelled' %}
+                            {% if ot.incentive_type == 'time_and_a_half' %}
+                            <span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fbbf24;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">1.5x</span>
+                            {% elif ot.incentive_type == 'power_hour' %}
+                            <span style="display:inline-block;background:#ffedd5;color:#9a3412;border:1px solid #f97316;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">2x</span>
+                            {% endif %}
                         {% endif %}
                         <!-- Status pill -->
                         <div id="ot-status-{{ ot.pk }}" style="position:relative;display:inline-block;margin-top:4px;">
@@ -158,16 +179,22 @@
                                 style="font-size:10px;padding:2px 7px;border-radius:10px;cursor:pointer;border:1px solid;line-height:1.5;
                                     {% if ot.status == 'completed' %}background:#dcfce7;color:#15803d;border-color:#86efac;
                                     {% elif ot.status == 'no_show' %}background:#fee2e2;color:#dc2626;border-color:#fca5a5;
+                                    {% elif ot.status == 'cancelled' %}background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb;text-decoration:line-through;
                                     {% else %}background:#f3f4f6;color:#6b7280;border-color:#d1d5db;{% endif %}">
-                                {% if ot.status == 'completed' %}&#10003;{% elif ot.status == 'no_show' %}&#10007;{% else %}Pending{% endif %}
+                                {% if ot.status == 'completed' %}&#10003;{% elif ot.status == 'no_show' %}&#10007;{% elif ot.status == 'cancelled' %}Cancelled{% else %}Pending{% endif %}
                             </button>
-                            <div class="ot-dropdown" style="display:none;position:absolute;left:0;top:calc(100% + 3px);z-index:200;background:white;border:1px solid #e5e7eb;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.12);min-width:100px;overflow:hidden;">
+                            <div class="ot-dropdown" style="display:none;position:absolute;left:0;top:calc(100% + 3px);z-index:200;background:white;border:1px solid #e5e7eb;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.12);min-width:110px;overflow:hidden;">
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'pending')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#374151;">Pending</button>
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'completed')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#15803d;">&#10003; Done</button>
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'no_show')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#dc2626;">&#10007; No Show</button>
+                                <button type="button" onclick="setOTStatus({{ ot.pk }}, 'cancelled')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#6b7280;border-top:1px solid #f3f4f6;">&#215; Cancelled</button>
                             </div>
                         </div>
-                        <!-- Verification result -->
+                        {% if ot.cancellation_reason %}
+                        <div class="cancel-reason-text" style="font-size:10px;color:#9ca3af;margin-top:3px;font-style:italic;line-height:1.3;">{{ ot.cancellation_reason }}</div>
+                        {% endif %}
+                        <!-- Verification result (only for non-cancelled) -->
+                        {% if ot.status != 'cancelled' %}
                         {% with v=ot.ot_verif %}
                         {% if v %}
                         <div style="margin-top:3px;font-size:10px;line-height:1.4;">
@@ -184,6 +211,7 @@
                         </div>
                         {% endif %}
                         {% endwith %}
+                        {% endif %}
                         <!-- Hover-reveal action buttons -->
                         <div class="ot-row-actions" style="display:none;margin-top:4px;gap:4px;justify-content:center;">
                             <a href="{% url 'overtime_week' %}?week_start={{ week_start|date:'Y-m-d' }}&agent={{ row.agent.pk }}"
@@ -219,7 +247,7 @@
             </td>
         </tr>
         {% empty %}
-        <tr><td colspan="12" style="padding:30px;color:#888;text-align:center;">No agents found.</td></tr>
+        <tr><td colspan="12" style="padding:30px;color:#888;text-align:center;">No OT shifts found for this week.</td></tr>
         {% endfor %}
     </tbody>
 </table>
@@ -238,12 +266,37 @@
     </div>
 </div>
 
+<!-- Cancellation reason modal -->
+<div id="cancel-modal" style="display:none;position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:28px 32px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 style="margin:0 0 8px;font-size:17px;color:#1a3a5c;">Cancel OT Shift</h3>
+        <p style="margin:0 0 16px;font-size:14px;color:#555;line-height:1.5;">
+            The shift record will be kept but removed from all hour and coverage calculations.
+        </p>
+        <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:#374151;">
+            Reason for cancellation <span style="color:#dc2626;">*</span>
+        </label>
+        <input type="text" id="cancel-reason-input" placeholder="Enter reason…" maxlength="500"
+            style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"
+            onkeydown="if(event.key==='Enter'){confirmCancel();}">
+        <div id="cancel-reason-error" style="display:none;font-size:12px;color:#dc2626;margin-top:4px;">
+            Please enter a reason for cancellation.
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
+            <button onclick="closeCancelModal()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Keep Shift</button>
+            <button onclick="confirmCancel()" style="padding:8px 20px;border:none;border-radius:6px;background:#6b7280;color:white;font-size:14px;font-weight:600;cursor:pointer;">Cancel Shift</button>
+        </div>
+    </div>
+</div>
+
 <style>
 .ot-entry:hover .ot-row-actions { display: flex !important; }
+.ot-cancelled .ot-row-actions { opacity: 0.8; }
 </style>
 
 <script>
 let pendingDeletePk = null;
+let pendingCancelPk = null;
 
 function confirmDeleteOT(pk, label, agentName) {
     pendingDeletePk = pk;
@@ -288,34 +341,17 @@ function executeDelete() {
 function removeOTEntryFromDOM(pk) {
     const entry = document.querySelector(`.ot-entry[data-pk="${pk}"]`);
     if (!entry) return;
-
-    // Find the agent row to recalculate totals
     const row = entry.closest('tr[data-agent]');
     const agentPk = row ? row.dataset.agent : null;
-
-    // Remove entry from DOM
     entry.remove();
-
-    // Recalculate offered/earned for this agent row
-    if (agentPk) {
-        const allEntries = document.querySelectorAll(`tr[data-agent="${agentPk}"] .ot-entry`);
-        let offered = 0, earned = 0, hasOffered = false, hasEarned = false;
-        allEntries.forEach(e => {
-            const o = parseFloat(e.dataset.offered) || 0;
-            const ea = parseFloat(e.dataset.earned) || 0;
-            if (o > 0) { offered += o; hasOffered = true; }
-            if (ea > 0) { earned += ea; hasEarned = true; }
-        });
-        const offeredCell = document.getElementById('offered-' + agentPk);
-        const earnedCell = document.getElementById('earned-' + agentPk);
-        if (offeredCell) offeredCell.textContent = hasOffered ? '$' + offered.toFixed(2) : '—';
-        if (earnedCell) earnedCell.textContent = hasEarned ? '$' + earned.toFixed(2) : '—';
-    }
+    if (agentPk) recalcAgentTotals(document.querySelector(`tr[data-agent="${agentPk}"]`));
 }
 
-// Close modal on backdrop click
 document.getElementById('delete-modal').addEventListener('click', function(e) {
     if (e.target === this) closeDeleteModal();
+});
+document.getElementById('cancel-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeCancelModal();
 });
 
 function toggleExportPanel() {
@@ -362,9 +398,10 @@ function submitVerifyUpload() {
 }
 
 const OT_PILL = {
-    pending:   {bg:'#f3f4f6', color:'#6b7280', border:'#d1d5db', text:'Pending'},
-    completed: {bg:'#dcfce7', color:'#15803d', border:'#86efac', text:'✓'},
-    no_show:   {bg:'#fee2e2', color:'#dc2626', border:'#fca5a5', text:'✗'},
+    pending:   {bg:'#f3f4f6', color:'#6b7280', border:'#d1d5db', text:'Pending', strikethrough: false},
+    completed: {bg:'#dcfce7', color:'#15803d', border:'#86efac', text:'✓',       strikethrough: false},
+    no_show:   {bg:'#fee2e2', color:'#dc2626', border:'#fca5a5', text:'✗',       strikethrough: false},
+    cancelled: {bg:'#f3f4f6', color:'#9ca3af', border:'#e5e7eb', text:'Cancelled', strikethrough: true},
 };
 
 function toggleOTDropdown(pk, e) {
@@ -380,26 +417,90 @@ document.addEventListener('click', function() {
 });
 
 function setOTStatus(pk, newStatus) {
+    document.querySelectorAll('.ot-dropdown').forEach(d => d.style.display = 'none');
+    if (newStatus === 'cancelled') {
+        pendingCancelPk = pk;
+        document.getElementById('cancel-reason-input').value = '';
+        document.getElementById('cancel-reason-error').style.display = 'none';
+        document.getElementById('cancel-modal').style.display = 'flex';
+        setTimeout(() => document.getElementById('cancel-reason-input').focus(), 50);
+        return;
+    }
+    doSetOTStatus(pk, newStatus, '');
+}
+
+function closeCancelModal() {
+    pendingCancelPk = null;
+    document.getElementById('cancel-modal').style.display = 'none';
+}
+
+function confirmCancel() {
+    const reason = document.getElementById('cancel-reason-input').value.trim();
+    if (!reason) {
+        document.getElementById('cancel-reason-error').style.display = 'block';
+        return;
+    }
+    const pk = pendingCancelPk;
+    closeCancelModal();
+    doSetOTStatus(pk, 'cancelled', reason);
+}
+
+function doSetOTStatus(pk, newStatus, cancellationReason) {
     const wrap = document.getElementById('ot-status-' + pk);
-    if (wrap) wrap.querySelector('.ot-dropdown').style.display = 'none';
     const csrfToken = getCookie('csrftoken');
+    const body = {status: newStatus};
+    if (cancellationReason) body.cancellation_reason = cancellationReason;
+
     fetch('/overtime/' + pk + '/set-status/', {
         method: 'POST',
         headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json'},
-        body: JSON.stringify({status: newStatus}),
+        body: JSON.stringify(body),
     })
     .then(r => r.json())
     .then(data => {
         if (!data.status || !wrap) return;
-        const p = OT_PILL[data.status];
+        const p = OT_PILL[data.status] || OT_PILL.pending;
         const pill = wrap.querySelector('.ot-pill');
         pill.textContent = p.text;
         pill.style.background = p.bg;
         pill.style.color = p.color;
         pill.style.borderColor = p.border;
+        pill.style.textDecoration = p.strikethrough ? 'line-through' : '';
+
         const entry = wrap.closest('.ot-entry');
         if (entry) {
-            entry.dataset.earned = data.status === 'completed' ? parseFloat(entry.dataset.offered || 0) : 0;
+            const isCancelled = data.status === 'cancelled';
+            // Update visual treatment
+            entry.style.opacity = isCancelled ? '0.6' : '';
+            entry.classList.toggle('ot-cancelled', isCancelled);
+            const timeEl = entry.querySelector('.ot-time');
+            if (timeEl) {
+                timeEl.style.textDecoration = isCancelled ? 'line-through' : '';
+                timeEl.style.color = isCancelled ? '#9ca3af' : '#16a34a';
+            }
+
+            // Update or show/hide cancellation reason text
+            let reasonEl = entry.querySelector('.cancel-reason-text');
+            if (isCancelled && data.cancellation_reason) {
+                if (!reasonEl) {
+                    reasonEl = document.createElement('div');
+                    reasonEl.className = 'cancel-reason-text';
+                    reasonEl.style.cssText = 'font-size:10px;color:#9ca3af;margin-top:3px;font-style:italic;line-height:1.3;';
+                    wrap.insertAdjacentElement('afterend', reasonEl);
+                }
+                reasonEl.textContent = data.cancellation_reason;
+            } else if (reasonEl && !isCancelled) {
+                reasonEl.remove();
+            }
+
+            // Update offered/earned data attributes
+            if (isCancelled) {
+                entry.dataset.offered = '0';
+                entry.dataset.earned = '0';
+            } else {
+                entry.dataset.offered = entry.dataset.baseOffered || '0';
+                entry.dataset.earned = data.status === 'completed' ? (entry.dataset.baseOffered || '0') : '0';
+            }
             recalcAgentTotals(entry.closest('tr'));
         }
     })
