@@ -31,6 +31,24 @@ class ErlangCallRow(models.Model):
         return f"{self.week_start} {self.day} {self.hour}:00 — {self.avg_calls} avg calls"
 
 
+class ErlangWeekParams(models.Model):
+    """Calculation parameters for one week — shared across all users."""
+    week_start = models.DateField(unique=True)
+    target_sl = models.FloatField(default=80)
+    target_seconds = models.IntegerField(default=20)
+    shrinkage = models.FloatField(default=0)
+    aht_seconds = models.IntegerField(default=420)
+    weeks = models.IntegerField(default=3)
+    weeks_by_day = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-week_start']
+
+    def __str__(self):
+        return f"{self.week_start} — {self.weeks}w AHT={self.aht_seconds}s SL={self.target_sl}%"
+
+
 class ErlangReport(models.Model):
     name = models.CharField(max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)

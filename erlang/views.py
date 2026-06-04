@@ -12,7 +12,7 @@ from .calculator import (
     agents_required, service_level, occupancy,
     parse_aht, calculate_staffing, format_aht,
 )
-from .models import ErlangReport, ErlangActualStaff, ErlangCallRow
+from .models import ErlangReport, ErlangActualStaff, ErlangCallRow, ErlangWeekParams
 from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift, Agent
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -232,23 +232,24 @@ def erlang_calculator(request):
             except (ValueError, TypeError):
                 weeks_by_day[day] = weeks_default
 
-        all_params = request.session.get('erlang_params_by_week', {})
-        all_params[week_key] = {
-            'target_sl': float(request.POST.get('target_sl', 80)),
-            'target_seconds': int(request.POST.get('target_seconds', 20)),
-            'shrinkage': float(request.POST.get('shrinkage', 0)),
-            'aht_seconds': int(request.POST.get('aht_seconds', 420)),
-            'weeks': weeks_default,
-            'weeks_by_day': weeks_by_day,
-        }
-        request.session['erlang_params_by_week'] = all_params
+        ErlangWeekParams.objects.update_or_create(
+            week_start=week_start,
+            defaults={
+                'target_sl': float(request.POST.get('target_sl', 80)),
+                'target_seconds': int(request.POST.get('target_seconds', 20)),
+                'shrinkage': float(request.POST.get('shrinkage', 0)),
+                'aht_seconds': int(request.POST.get('aht_seconds', 420)),
+                'weeks': weeks_default,
+                'weeks_by_day': weeks_by_day,
+            },
+        )
 
         if not error:
             return redirect(f"{request.path}?week_start={week_key}")
 
-    _p = request.session.get('erlang_params_by_week', {}).get(week_key, {})
-    _weeks_by_day = _p.get('weeks_by_day') or {d: 3 for d in DAYS_ORDER}
-    _weeks_default = _p.get('weeks', 3)
+    _wp = ErlangWeekParams.objects.filter(week_start=week_start).first()
+    _weeks_by_day = (_wp.weeks_by_day if _wp and _wp.weeks_by_day else None) or {d: 3 for d in DAYS_ORDER}
+    _weeks_default = _wp.weeks if _wp else 3
 
     raw_rows = [
         {
@@ -260,10 +261,10 @@ def erlang_calculator(request):
         for r in ErlangCallRow.objects.filter(week_start=week_start)
     ]
     params = {
-        'target_sl': _p.get('target_sl', 80),
-        'target_seconds': _p.get('target_seconds', 20),
-        'shrinkage': _p.get('shrinkage', 0),
-        'aht_seconds': _p.get('aht_seconds', 420),
+        'target_sl': _wp.target_sl if _wp else 80,
+        'target_seconds': _wp.target_seconds if _wp else 20,
+        'shrinkage': _wp.shrinkage if _wp else 0,
+        'aht_seconds': _wp.aht_seconds if _wp else 420,
         'weeks': _weeks_default,
         'weeks_by_day': _weeks_by_day,
     }
@@ -357,9 +358,9 @@ def erlang_download(request):
         today = date.today()
         week_start = today - timedelta(days=today.weekday())
 
-    _p = request.session.get('erlang_params_by_week', {}).get(week_start.isoformat(), {})
-    _weeks_by_day = _p.get('weeks_by_day') or {d: 3 for d in DAYS_ORDER}
-    _weeks_default = _p.get('weeks', 3)
+    _wp = ErlangWeekParams.objects.filter(week_start=week_start).first()
+    _weeks_by_day = (_wp.weeks_by_day if _wp and _wp.weeks_by_day else None) or {d: 3 for d in DAYS_ORDER}
+    _weeks_default = _wp.weeks if _wp else 3
 
     raw_rows = [
         {
@@ -371,10 +372,10 @@ def erlang_download(request):
         for r in ErlangCallRow.objects.filter(week_start=week_start)
     ]
     params = {
-        'target_sl': _p.get('target_sl', 80),
-        'target_seconds': _p.get('target_seconds', 20),
-        'shrinkage': _p.get('shrinkage', 0),
-        'aht_seconds': _p.get('aht_seconds', 420),
+        'target_sl': _wp.target_sl if _wp else 80,
+        'target_seconds': _wp.target_seconds if _wp else 20,
+        'shrinkage': _wp.shrinkage if _wp else 0,
+        'aht_seconds': _wp.aht_seconds if _wp else 420,
     }
 
     if not raw_rows:
