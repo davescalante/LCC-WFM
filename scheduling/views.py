@@ -13,6 +13,38 @@ from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 _ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'testing', 'sms_email', 'admin_training', 'coordinator'}
 
 
+def _sync_pending_schedule(src):
+    """
+    Immediately create ShiftTemplates for a pending role change's new schedule
+    so that the Shifts view and Adherence tab reflect the upcoming schedule
+    before the effective date arrives. Idempotent — safe to call repeatedly.
+    Also expires old open templates so they don't bleed past the effective date.
+    """
+    if not (src.new_shift_days and src.new_shift_start_time and src.new_shift_end_time):
+        return
+    ag = src.agent
+    eff = src.effective_date
+    # Expire old open templates so they stop at the effective date
+    ShiftTemplate.objects.filter(
+        agent=ag, effective_until__isnull=True
+    ).exclude(effective_from=eff).update(effective_until=eff)
+    # Create new templates for any days not already present
+    existing_days = set(
+        ShiftTemplate.objects.filter(agent=ag, effective_from=eff)
+        .values_list('day_of_week', flat=True)
+    )
+    for day_num in src.new_shift_days:
+        if day_num not in existing_days:
+            ShiftTemplate.objects.create(
+                agent=ag,
+                day_of_week=day_num,
+                start_time=src.new_shift_start_time,
+                end_time=src.new_shift_end_time,
+                is_off=False,
+                effective_from=eff,
+            )
+
+
 def apply_due_role_changes(agent=None):
     """
     Apply all pending ScheduledRoleChanges whose effective_date has arrived.
@@ -63,22 +95,25 @@ def apply_due_role_changes(agent=None):
             changed_by=src.scheduled_by,
         )
 
-        # Apply new schedule if provided
+        # Apply new schedule if provided — idempotent, _sync_pending_schedule may have run already
         if src.new_shift_days and src.new_shift_start_time and src.new_shift_end_time:
-            # Expire all currently open templates for this agent
             ShiftTemplate.objects.filter(
                 agent=ag, effective_until__isnull=True
-            ).update(effective_until=src.effective_date)
-            # Create new templates effective on the change date
+            ).exclude(effective_from=src.effective_date).update(effective_until=src.effective_date)
+            existing_days = set(
+                ShiftTemplate.objects.filter(agent=ag, effective_from=src.effective_date)
+                .values_list('day_of_week', flat=True)
+            )
             for day_num in src.new_shift_days:
-                ShiftTemplate.objects.create(
-                    agent=ag,
-                    day_of_week=day_num,
-                    start_time=src.new_shift_start_time,
-                    end_time=src.new_shift_end_time,
-                    is_off=False,
-                    effective_from=src.effective_date,
-                )
+                if day_num not in existing_days:
+                    ShiftTemplate.objects.create(
+                        agent=ag,
+                        day_of_week=day_num,
+                        start_time=src.new_shift_start_time,
+                        end_time=src.new_shift_end_time,
+                        is_off=False,
+                        effective_from=src.effective_date,
+                    )
 
         log_action(
             src.scheduled_by,
@@ -142,6 +177,8 @@ def agent_detail(request, pk):
     pending_role_change = agent.scheduled_role_changes.filter(
         applied_at__isnull=True, cancelled_at__isnull=True
     ).select_related('new_supervisor__user').first()
+    if pending_role_change:
+        _sync_pending_schedule(pending_role_change)
     supervisors = Agent.objects.filter(
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
@@ -2184,6 +2221,7 @@ def schedule_role_change(request, pk):
         new_supervisor=new_supervisor,
         scheduled_by=request.user,
     )
+    _sync_pending_schedule(src)
 
     log_action(
         request.user,
@@ -2204,6 +2242,13 @@ def cancel_role_change(request, pk):
     if not src.is_pending:
         messages.error(request, "This role change has already been applied or cancelled.")
         return redirect('agent_detail', pk=src.agent_id)
+
+    # Undo pre-created templates from _sync_pending_schedule
+    if src.new_shift_days:
+        ShiftTemplate.objects.filter(agent=src.agent, effective_from=src.effective_date).delete()
+        ShiftTemplate.objects.filter(
+            agent=src.agent, effective_until=src.effective_date
+        ).update(effective_until=None)
 
     src.cancelled_at = timezone.now()
     src.cancelled_by = request.user
