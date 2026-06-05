@@ -168,7 +168,7 @@
             AHT <strong>{{ week_params.aht_seconds }}s</strong>
             &middot; SL <strong>{{ week_params.target_sl|floatformat:0 }}%</strong> in <strong>{{ week_params.target_seconds }}s</strong>
             &middot; Shrinkage <strong>{{ week_params.shrinkage|floatformat:1 }}%</strong>
-            &middot; <strong>{{ week_params.weeks }}w</strong> avg
+            &middot; {% if weeks_audit %}<strong>{{ weeks_audit }}</strong>{% else %}<strong>{{ week_params.weeks }}w</strong> (all days){% endif %}
         </div>
         {% if week_params.csv_uploaded_at %}
         <div style="font-size:11px;color:#6b7280;">

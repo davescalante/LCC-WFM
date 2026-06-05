@@ -408,10 +408,23 @@ def erlang_calculator(request):
     today = date.today()
     current_week = today - timedelta(days=today.weekday())
 
+    # Build a human-readable weeks summary for the audit line.
+    # Shows "3w (all days)" when uniform, or per-day breakdown when they differ.
+    _abbrev = {'Monday':'Mon','Tuesday':'Tue','Wednesday':'Wed',
+               'Thursday':'Thu','Friday':'Fri','Saturday':'Sat','Sunday':'Sun'}
+    weeks_audit = None
+    if _wp and _wp.weeks_by_day:
+        wbd = _wp.weeks_by_day
+        if any(wbd.get(d, _wp.weeks) != _wp.weeks for d in DAYS_ORDER):
+            weeks_audit = ' · '.join(
+                f"{_abbrev[d]} {wbd.get(d, _wp.weeks)}w" for d in DAYS_ORDER
+            )
+
     return render(request, 'erlang/calculator.html', {
         'days': days,
         'params': params,
         'week_params': _wp,
+        'weeks_audit': weeks_audit,
         'has_data': bool(raw_rows),
         'error': error,
         'days_order': DAYS_ORDER,
