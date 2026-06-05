@@ -52,6 +52,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'scheduling.middleware.ApplyScheduledRoleChangesMiddleware',
 ]
 
 ROOT_URLCONF = 'wfm.urls'
