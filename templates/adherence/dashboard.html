@@ -125,14 +125,14 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 
 /* ── Supervisor divider rows ────────────────────────────────────────────────── */
 .group-hdr td {
-    padding: 2px 10px;
-    font-size: 9px;
+    padding: 3px 10px;
+    font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .6px;
-    color: #9ca3af;
-    background: #f3f4f6;
-    border-top: 2px solid #e5e7eb;
+    color: #374151;
+    background: #dde3ec;
+    border-top: 2px solid #b6c2d4;
 }
 
 /* ── Summary cells ──────────────────────────────────────────────────────────── */
@@ -180,12 +180,16 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 }
 
 /* ── Cell sub-elements ──────────────────────────────────────────────────────── */
-.cell-sched   { font-size: 10px; color: #777; margin-bottom: 2px; white-space: nowrap; }
-.cell-ot      { font-size: 10px; color: #7c3aed; font-weight: 600; margin-bottom: 2px; white-space: nowrap; }
-.cell-hrs     { font-size: 10px; color: #aaa; margin-bottom: 2px; }
-.cell-status  { width: 100%; font-size: 10px; padding: 1px 2px; border: 1px solid #ccc; border-radius: 3px; background: transparent; }
-.cell-log     { font-size: 10px; padding: 1px 3px; margin-top: 1px; font-family: monospace; color: #555; min-height: 14px; }
-.cell-missing { font-size: 9px; color: #c0392b; font-weight: 600; margin-top: 1px; }
+.cell-sched   { font-size: 10px; color: #777; margin-bottom: 1px; white-space: nowrap; }
+.cell-ot      { font-size: 10px; color: #7c3aed; font-weight: 600; margin-bottom: 0; white-space: nowrap; }
+.cell-hrs     { display: none; }
+.cell-status  { width: auto; min-width: 36px; max-width: 100%; font-size: 11px; font-weight: 700; padding: 1px 3px; border: 1px solid rgba(0,0,0,.18); border-radius: 10px; background: rgba(255,255,255,.65); color: #222; text-align: center; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.cell-log     { font-size: 10px; padding: 0 3px; margin-top: 0; font-family: monospace; color: #555; min-height: 0; }
+.cell-missing { font-size: 9px; color: #c0392b; font-weight: 600; margin-top: 0; }
+
+/* ── OFF day cells ──────────────────────────────────────────────────────── */
+.day-cell.cell-off-day { background: #f0f1f3 !important; }
+.cell-off-label { font-size: 10px; color: #b0b5bc; font-weight: 500; }
 
 /* ── Column sort ────────────────────────────────────────────────────────── */
 .th-sortable { cursor:pointer; user-select:none; }
@@ -258,7 +262,7 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 
             {% for cell in row.cells %}
             <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                class="day-cell {% if cell.date|date:'Y-m-d' == today_str %}col-today{% endif %}"
+                class="day-cell {% if cell.date|date:'Y-m-d' == today_str %}col-today{% endif %}{% if cell.is_off and not cell.status %} cell-off-day{% endif %}"
                 data-agent="{{ row.agent.pk }}"
                 data-date="{{ cell.date|date:'Y-m-d' }}"
                 data-sched-hrs="{{ cell.sched_hrs|default:'0' }}"
@@ -267,7 +271,7 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
                 {% if cell.scheduled %}
                 <div class="sched-cell-wrap">
                     <div class="cell-sched">
-                        {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
+                        {% if cell.is_off %}<span class="cell-off-label">OFF</span>
                         {% else %}{{ cell.scheduled }}
                         {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
                         {% endif %}
@@ -325,7 +329,7 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
             <td class="sum-cell mono">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell mono" style="{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:700;{% else %}color:#e67e22;font-weight:700;{% endif %}{% endif %}">{{ row.actual_hours|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell mono">{{ row.coded_hours|to_hhmmss|default:"—" }}</td>
-            <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#e67e22;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
+            <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#c0392b;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell">
                 {% if row.bonus == 'Yes' %}<span class="badge badge-green" style="font-size:10px;padding:1px 5px;">Yes</span>
                 {% elif row.bonus == 'No' %}
