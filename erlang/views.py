@@ -58,10 +58,35 @@ def _build_scheduled_map(week_start):
     else:
         cur_roles = {}
 
+    # Mid-week role changes made via direct edit (recorded in RoleHistory)
+    from scheduling.models import RoleHistory
+    rh_new = list(RoleHistory.objects.filter(
+        effective_from__range=(week_dates[0], week_dates[-1]),
+    ).values('agent_id', 'role_type', 'effective_from').order_by('agent_id', 'effective_from'))
+    rh_transitions = {}
+    if rh_new:
+        changed_ids = {e['agent_id'] for e in rh_new}
+        closed = list(RoleHistory.objects.filter(
+            agent_id__in=changed_ids,
+            effective_to__range=(week_dates[0], week_dates[-1]),
+        ).values('agent_id', 'role_type').order_by('agent_id', '-effective_from'))
+        old_role_map = {}
+        for e in closed:
+            if e['agent_id'] not in old_role_map:
+                old_role_map[e['agent_id']] = e['role_type']
+        for e in rh_new:
+            aid = e['agent_id']
+            if aid in old_role_map:
+                rh_transitions[aid] = {
+                    'old': old_role_map[aid],
+                    'new': e['role_type'],
+                    'from': e['effective_from'],
+                }
+
     # Build per-date call-agent sets
     call_ids_by_date = {}
     for d in week_dates:
-        if not pending:
+        if not pending and not rh_transitions:
             call_ids_by_date[d] = base_call_ids
         else:
             ids = set(base_call_ids)
@@ -72,6 +97,13 @@ def _build_scheduled_map(week_start):
                         ids.add(p['agent_id'])
                     elif new not in CALL_ROLES and old in CALL_ROLES:
                         ids.discard(p['agent_id'])
+            # RoleHistory adjustments: for days before a mid-week change, use the old role
+            for aid, t in rh_transitions.items():
+                if d < t['from']:
+                    if t['old'] in CALL_ROLES and t['new'] not in CALL_ROLES:
+                        ids.add(aid)      # was call agent before the change
+                    elif t['old'] not in CALL_ROLES and t['new'] in CALL_ROLES:
+                        ids.discard(aid)  # was not a call agent before the change
             call_ids_by_date[d] = ids
 
     all_call_ids = set().union(*call_ids_by_date.values())
