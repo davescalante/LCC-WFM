@@ -309,6 +309,8 @@ def agent_edit(request, pk):
                 'supervisor_id': agent.supervisor_id,
                 'employer': agent.employer, 'billing_status': agent.billing_status,
             }
+            if _old['role_type'] != _new['role_type'] and _old['role_type']:
+                agent.five9_profiles.filter(role_type=_old['role_type']).update(role_type=_new['role_type'])
             if _old != _new:
                 from django.utils import timezone as _tz
                 today = _tz.localdate()
