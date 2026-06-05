@@ -125,14 +125,14 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 
 /* ── Supervisor divider rows ────────────────────────────────────────────────── */
 .group-hdr td {
-    padding: 3px 10px;
-    font-size: 10px;
+    padding: 2px 10px;
+    font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .6px;
-    color: #374151;
-    background: #e2e8f0;
-    border-top: 2px solid #cbd5e1;
+    color: #9ca3af;
+    background: #f3f4f6;
+    border-top: 2px solid #e5e7eb;
 }
 
 /* ── Summary cells ──────────────────────────────────────────────────────────── */
@@ -183,15 +183,9 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 .cell-sched   { font-size: 10px; color: #777; margin-bottom: 2px; white-space: nowrap; }
 .cell-ot      { font-size: 10px; color: #7c3aed; font-weight: 600; margin-bottom: 2px; white-space: nowrap; }
 .cell-hrs     { font-size: 10px; color: #aaa; margin-bottom: 2px; }
-.cell-status  { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 1; padding: 0; border: none; margin: 0; }
+.cell-status  { width: 100%; font-size: 10px; padding: 1px 2px; border: 1px solid #ccc; border-radius: 3px; background: transparent; }
 .cell-log     { font-size: 10px; padding: 1px 3px; margin-top: 1px; font-family: monospace; color: #555; min-height: 14px; }
 .cell-missing { font-size: 9px; color: #c0392b; font-weight: 600; margin-top: 1px; }
-.cell-off-text { font-size: 9px; color: #b0b5bc; font-weight: 500; letter-spacing: .3px; }
-.cell-info-row { display: flex; align-items: center; justify-content: center; gap: 3px; font-size: 9px; font-family: monospace; color: #777; margin-top: 1px; white-space: nowrap; }
-.cell-missing-inline { color: #c0392b; font-weight: 700; font-size: 9px; }
-.status-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1px; }
-.status-pill { display: inline-block; min-width: 28px; padding: 1px 5px; border-radius: 10px; font-size: 11px; font-weight: 700; text-align: center; background: rgba(255,255,255,.6); border: 1px solid rgba(0,0,0,.15); color: #222; cursor: pointer; user-select: none; line-height: 16px; }
-.cell-off { background: #eff0f2 !important; }
 
 /* ── Column sort ────────────────────────────────────────────────────────── */
 .th-sortable { cursor:pointer; user-select:none; }
@@ -264,36 +258,54 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
 
             {% for cell in row.cells %}
             <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                class="day-cell {% if cell.date|date:'Y-m-d' == today_str %}col-today{% endif %}{% if cell.is_off and not cell.status %} cell-off{% endif %}"
+                class="day-cell {% if cell.date|date:'Y-m-d' == today_str %}col-today{% endif %}"
                 data-agent="{{ row.agent.pk }}"
                 data-date="{{ cell.date|date:'Y-m-d' }}"
                 data-sched-hrs="{{ cell.sched_hrs|default:'0' }}"
                 data-actual-hrs="{{ cell.display_hrs|default:'0' }}"
-                data-is-off="{% if cell.is_off %}1{% else %}0{% endif %}"
                 style="background:{{ cell.color|default:'#f5f5f5' }};">
-                <div class="status-wrap">
-                    <span class="status-pill">{% if cell.status %}{% if cell.status == 'Absent' %}A{% else %}{{ cell.status }}{% endif %}{% elif cell.is_off %}OFF{% else %}—{% endif %}</span>
-                    <select onchange="onStatusChange(this)" class="cell-status">
-                        <option value="">—</option>
-                        {% for val, label in status_choices %}
-                        <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{% if val == 'Absent' %}A{% else %}{{ val }}{% endif %}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% if cell.scheduled and not cell.is_off %}
-                <div class="cell-info-row">
-                    <span class="sched-cell-wrap">{{ cell.scheduled }}{% for lbl in cell.split_block_labels %}/{{ lbl }}{% endfor %}{% if cell.shift_start %}<button class="quick-edit-btn" data-agent="{{ row.agent.pk }}" data-agent-name="{{ row.agent }}" data-date="{{ cell.date|date:'Y-m-d' }}" data-start="{{ cell.shift_start }}" data-end="{{ cell.shift_end }}" data-blocks="{{ cell.split_block_labels|join:'|' }}" onclick="openQuickEdit(this)" title="Quick-edit this day's schedule">✏</button>{% endif %}</span>
-                    {% if cell.display_hrs %}<span style="color:#bbb;">·</span><span>{{ cell.display_hrs|to_hhmmss }}</span>{% endif %}
-                    {% if cell.missing_hrs %}<span class="cell-missing-inline">&#8722;{{ cell.missing_hrs|to_hhmmss }}</span>{% endif %}
-                </div>
-                {% elif cell.display_hrs %}
-                <div class="cell-info-row">
-                    <span>{{ cell.display_hrs|to_hhmmss }}</span>
-                    {% if cell.missing_hrs %}<span class="cell-missing-inline">&#8722;{{ cell.missing_hrs|to_hhmmss }}</span>{% endif %}
+                {% if cell.scheduled %}
+                <div class="sched-cell-wrap">
+                    <div class="cell-sched">
+                        {% if cell.is_off %}<span style="color:#c0392b;font-weight:600;">OFF</span>
+                        {% else %}{{ cell.scheduled }}
+                        {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
+                        {% endif %}
+                    </div>
+                    {% if not cell.is_off and cell.shift_start %}
+                    <button class="quick-edit-btn"
+                        data-agent="{{ row.agent.pk }}"
+                        data-agent-name="{{ row.agent }}"
+                        data-date="{{ cell.date|date:'Y-m-d' }}"
+                        data-start="{{ cell.shift_start }}"
+                        data-end="{{ cell.shift_end }}"
+                        data-blocks="{{ cell.split_block_labels|join:'|' }}"
+                        onclick="openQuickEdit(this)"
+                        title="Quick-edit this day's schedule">✏</button>
+                    {% endif %}
                 </div>
                 {% endif %}
-                {% for ot_t in cell.ot_times %}<div class="cell-ot">OT {{ ot_t }}</div>{% endfor %}
-                {% if cell.spill_label %}<div class="cell-ot">&#8627; {{ cell.spill_label }}</div>{% endif %}
+                {% for ot_t in cell.ot_times %}
+                <div class="cell-ot">OT {{ ot_t }}</div>
+                {% endfor %}
+                {% if cell.spill_label %}
+                <div class="cell-ot">&#8627; {{ cell.spill_label }}</div>
+                {% endif %}
+                {% if cell.sched_hrs %}
+                <div class="cell-hrs"{% if cell.split_block_labels %} style="cursor:help;" title="Split: {{ cell.scheduled }} + {{ cell.split_block_labels|join:', ' }}"{% endif %}>
+                    {{ cell.sched_hrs|to_hhmm }}h{% if cell.split_block_labels %} &#8853;{% endif %}
+                </div>
+                {% endif %}
+                <select onchange="onStatusChange(this)" class="cell-status">
+                    <option value="">—</option>
+                    {% for val, label in status_choices %}
+                    <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{% if val == 'Absent' %}A{% else %}{{ val }}{% endif %}</option>
+                    {% endfor %}
+                </select>
+                <div class="cell-log">{{ cell.display_hrs|to_hhmmss }}</div>
+                {% if cell.missing_hrs %}
+                <div class="cell-missing">&#8722;{{ cell.missing_hrs|to_hhmmss }}</div>
+                {% endif %}
                 <button class="note-btn"
                     data-agent="{{ row.agent.pk }}"
                     data-agent-name="{{ row.agent }}"
@@ -313,7 +325,7 @@ tbody td.col-today           { box-shadow: inset 0 0 0 1px #93c5fd; }
             <td class="sum-cell mono">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell mono" style="{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:700;{% else %}color:#e67e22;font-weight:700;{% endif %}{% endif %}">{{ row.actual_hours|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell mono">{{ row.coded_hours|to_hhmmss|default:"—" }}</td>
-            <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#c0392b;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
+            <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#e67e22;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
             <td class="sum-cell">
                 {% if row.bonus == 'Yes' %}<span class="badge badge-green" style="font-size:10px;padding:1px 5px;">Yes</span>
                 {% elif row.bonus == 'No' %}
@@ -517,15 +529,7 @@ async function saveCell(agentId, dateStr, status) {
 
 function onStatusChange(sel) {
     const td = sel.closest('td');
-    td.style.background = STATUS_COLORS[sel.value] || (td.dataset.isOff === '1' ? '#eff0f2' : '#f5f5f5');
-    const pill = td.querySelector('.status-pill');
-    if (pill) {
-        if (sel.value) {
-            pill.textContent = sel.options[sel.selectedIndex].text;
-        } else {
-            pill.textContent = td.dataset.isOff === '1' ? 'OFF' : '—';
-        }
-    }
+    td.style.background = STATUS_COLORS[sel.value] || '#f5f5f5';
     saveCell(td.dataset.agent, td.dataset.date, sel.value);
     recomputeCoS();
 }
