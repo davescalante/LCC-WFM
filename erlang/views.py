@@ -2,6 +2,7 @@ import csv
 import io
 import math
 from datetime import date, timedelta
+from django.utils import timezone
 
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
@@ -302,6 +303,7 @@ def erlang_calculator(request):
     week_key = week_start.isoformat()
 
     if request.method == 'POST':
+        csv_uploaded_now = False
         if 'csv_file' in request.FILES and request.FILES['csv_file'].name:
             try:
                 rows = _parse_five9_csv(request.FILES['csv_file'])
@@ -319,6 +321,7 @@ def erlang_calculator(request):
                         )
                         for r in rows
                     ])
+                    csv_uploaded_now = True
             except Exception as e:
                 error = f"Error reading file: {e}"
 
@@ -334,16 +337,22 @@ def erlang_calculator(request):
             except (ValueError, TypeError):
                 weeks_by_day[day] = weeks_default
 
+        param_defaults = {
+            'target_sl': float(request.POST.get('target_sl', 80)),
+            'target_seconds': int(request.POST.get('target_seconds', 20)),
+            'shrinkage': float(request.POST.get('shrinkage', 0)),
+            'aht_seconds': int(request.POST.get('aht_seconds', 420)),
+            'weeks': weeks_default,
+            'weeks_by_day': weeks_by_day,
+            'calculated_by': request.user,
+        }
+        if csv_uploaded_now:
+            param_defaults['csv_uploaded_at'] = timezone.now()
+            param_defaults['csv_uploaded_by'] = request.user
+
         ErlangWeekParams.objects.update_or_create(
             week_start=week_start,
-            defaults={
-                'target_sl': float(request.POST.get('target_sl', 80)),
-                'target_seconds': int(request.POST.get('target_seconds', 20)),
-                'shrinkage': float(request.POST.get('shrinkage', 0)),
-                'aht_seconds': int(request.POST.get('aht_seconds', 420)),
-                'weeks': weeks_default,
-                'weeks_by_day': weeks_by_day,
-            },
+            defaults=param_defaults,
         )
 
         if not error:
@@ -402,6 +411,7 @@ def erlang_calculator(request):
     return render(request, 'erlang/calculator.html', {
         'days': days,
         'params': params,
+        'week_params': _wp,
         'has_data': bool(raw_rows),
         'error': error,
         'days_order': DAYS_ORDER,

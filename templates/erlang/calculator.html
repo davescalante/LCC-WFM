@@ -157,6 +157,29 @@
         </div>
 
     </form>
+
+    {% if week_params and week_params.calculated_by %}
+    <div style="margin-top:12px;border-top:1px solid #f0f4f8;padding-top:10px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
+        <div style="font-size:11px;color:#6b7280;">
+            <span style="font-weight:600;color:#374151;">Last calculated:</span>
+            {{ week_params.updated_at|date:"M j, Y" }} at {{ week_params.updated_at|time:"g:i A" }}
+            by <strong style="color:#1a3a5c;">{{ week_params.calculated_by.get_full_name|default:week_params.calculated_by.username }}</strong>
+            &nbsp;&mdash;&nbsp;
+            AHT <strong>{{ week_params.aht_seconds }}s</strong>
+            &middot; SL <strong>{{ week_params.target_sl|floatformat:0 }}%</strong> in <strong>{{ week_params.target_seconds }}s</strong>
+            &middot; Shrinkage <strong>{{ week_params.shrinkage|floatformat:1 }}%</strong>
+            &middot; <strong>{{ week_params.weeks }}w</strong> avg
+        </div>
+        {% if week_params.csv_uploaded_at %}
+        <div style="font-size:11px;color:#6b7280;">
+            <span style="font-weight:600;color:#374151;">Last upload:</span>
+            {{ week_params.csv_uploaded_at|date:"M j, Y" }} at {{ week_params.csv_uploaded_at|time:"g:i A" }}
+            by <strong style="color:#1a3a5c;">{{ week_params.csv_uploaded_by.get_full_name|default:week_params.csv_uploaded_by.username }}</strong>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
 </div>
 
 {% if has_data %}

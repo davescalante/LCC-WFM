@@ -41,6 +41,15 @@ class ErlangWeekParams(models.Model):
     weeks = models.IntegerField(default=3)
     weeks_by_day = models.JSONField(default=dict)
     updated_at = models.DateTimeField(auto_now=True)
+    calculated_by = models.ForeignKey(
+        'auth.User', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='erlang_calculations',
+    )
+    csv_uploaded_at = models.DateTimeField(null=True, blank=True)
+    csv_uploaded_by = models.ForeignKey(
+        'auth.User', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='erlang_uploads',
+    )
 
     class Meta:
         ordering = ['-week_start']
