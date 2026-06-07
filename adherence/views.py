@@ -17,7 +17,7 @@ from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlo
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
-BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
+BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO', 'V'}
 BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA', 'S'}
 VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
 
