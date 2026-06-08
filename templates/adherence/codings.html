@@ -1,6 +1,5 @@
 {% extends 'base.html' %}
 {% load adherence_filters %}
-{% now "Y-m-d" as today_str %}
 {% block title %} - Codings{% endblock %}
 {% block content %}
 
@@ -256,8 +255,8 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
             <th class="fc fc-3 th-left">Five9</th>
             <th class="fc fc-4" style="text-align:center;">ID</th>
             {% for d in week_dates %}
-            <th class="th-day {% if d|date:'Y-m-d' == today_str %}col-today{% endif %}">
-                {% if d|date:'Y-m-d' == today_str %}<div class="day-today-label">TODAY</div>{% endif %}
+            <th class="th-day {% if d == today %}col-today{% endif %}">
+                {% if d == today %}<div class="day-today-label">TODAY</div>{% endif %}
                 <div class="day-name">{{ d|date:"D" }}</div>
                 <div class="day-date">{{ d|date:"M d" }}</div>
             </th>
@@ -283,7 +282,7 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
             <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
 
             {% for cell in row.cells %}
-            <td class="day-cell {% if cell.date|date:'Y-m-d' == today_str %}col-today{% endif %}{% if cell.entries %} has-entries{% endif %}"
+            <td class="day-cell {% if cell.date == today %}col-today{% endif %}{% if cell.entries %} has-entries{% endif %}"
                 data-agent="{{ row.agent.pk }}" data-date="{{ cell.date|date:'Y-m-d' }}"
                 {% if cell.entries %}style="background:#fffde7;"{% endif %}>
 
