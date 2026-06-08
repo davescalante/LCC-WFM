@@ -49,15 +49,14 @@ class SessionTimeoutMiddleware:
 
 
 class AgentAccessMiddleware:
-    """
-    Sets request.is_agent for template use.
-    Redirects agent-role users away from staff-only pages.
-    """
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
         request.is_agent = False
+        request.agent_request_badge = 0
+        request.supervisor_request_badge = 0
+
         if request.user.is_authenticated:
             try:
                 profile = request.user.agent
@@ -65,6 +64,17 @@ class AgentAccessMiddleware:
                     request.is_agent = True
                     if not any(request.path.startswith(p) for p in _AGENT_ALLOWED):
                         return redirect('agent_my_shifts')
+                    from scheduling.models import AgentRequest
+                    request.agent_request_badge = AgentRequest.objects.filter(
+                        agent=profile, agent_read=False
+                    ).count()
+                else:
+                    from scheduling.models import AgentRequest
+                    badge_qs = AgentRequest.objects.filter(status='pending', supervisor_read=False)
+                    if profile.role_type == 'supervisor':
+                        badge_qs = badge_qs.filter(agent__supervisor=profile)
+                    request.supervisor_request_badge = badge_qs.count()
             except Exception:
                 pass
+
         return self.get_response(request)

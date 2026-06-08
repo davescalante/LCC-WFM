@@ -396,3 +396,103 @@ class RoleHistory(models.Model):
     def __str__(self):
         to = self.effective_to.strftime('%b %d, %Y') if self.effective_to else 'Present'
         return f"{self.agent} — {self.role} from {self.effective_from.strftime('%b %d, %Y')} to {to}"
+
+
+class AgentRequest(models.Model):
+    REQUEST_TYPE_CHOICES = [
+        ('coding', 'Coding Request'),
+        ('vacation', 'Vacation Request'),
+        ('day_off_change', 'Day Off Change Request'),
+        ('vto', 'VTO Request'),
+        ('loa', 'LOA Request'),
+        ('schedule_change', 'Schedule Change Request'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('done', 'Done'),
+    ]
+
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='agent_requests')
+    request_type = models.CharField(max_length=20, choices=REQUEST_TYPE_CHOICES)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
+
+    # Coding
+    coding_date = models.DateField(null=True, blank=True)
+    coding_start_time = models.TimeField(null=True, blank=True)
+    coding_end_time = models.TimeField(null=True, blank=True)
+
+    # Vacation
+    vacation_start = models.DateField(null=True, blank=True)
+    vacation_end = models.DateField(null=True, blank=True)
+
+    # Day Off Change
+    day_off_type = models.CharField(max_length=10, blank=True)  # 'one_time' or 'permanent'
+    current_day_off = models.IntegerField(null=True, blank=True)   # 0=Mon..6=Sun
+    requested_day_off = models.IntegerField(null=True, blank=True)
+    effective_date = models.DateField(null=True, blank=True)
+
+    # VTO
+    vto_date = models.DateField(null=True, blank=True)
+
+    # LOA
+    loa_start = models.DateField(null=True, blank=True)
+    loa_end = models.DateField(null=True, blank=True)
+
+    # Schedule Change
+    current_schedule_desc = models.TextField(blank=True)
+    requested_schedule_desc = models.TextField(blank=True)
+
+    # Review
+    reviewed_by = models.ForeignKey(
+        'auth.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='reviewed_agent_requests'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+
+    # Done
+    done_by = models.ForeignKey(
+        'auth.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='done_agent_requests'
+    )
+    done_at = models.DateTimeField(null=True, blank=True)
+
+    # Audit
+    auto_action_log = models.TextField(blank=True)
+
+    # Notification flags: False = unread / needs attention
+    supervisor_read = models.BooleanField(default=False)  # False when newly submitted
+    agent_read = models.BooleanField(default=True)        # False when supervisor responds
+
+    class Meta:
+        ordering = ['-submitted_at']
+
+    def __str__(self):
+        return f"{self.agent} — {self.get_request_type_display()} ({self.submitted_at:%Y-%m-%d})"
+
+    def summary(self):
+        _days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        if self.request_type == 'coding' and self.coding_date:
+            t1 = self.coding_start_time.strftime('%H:%M') if self.coding_start_time else '?'
+            t2 = self.coding_end_time.strftime('%H:%M') if self.coding_end_time else '?'
+            return f"{self.coding_date} · {t1}–{t2}"
+        if self.request_type == 'vacation' and self.vacation_start:
+            if not self.vacation_end or self.vacation_start == self.vacation_end:
+                return str(self.vacation_start)
+            return f"{self.vacation_start} – {self.vacation_end}"
+        if self.request_type == 'day_off_change':
+            cur = _days[self.current_day_off] if self.current_day_off is not None else '?'
+            req = _days[self.requested_day_off] if self.requested_day_off is not None else '?'
+            tag = ' (One-Time)' if self.day_off_type == 'one_time' else ' (Permanent)' if self.day_off_type == 'permanent' else ''
+            return f"{cur} → {req}{tag}"
+        if self.request_type == 'vto':
+            return str(self.vto_date) if self.vto_date else ''
+        if self.request_type == 'loa' and self.loa_start:
+            return f"{self.loa_start} – {self.loa_end}" if self.loa_end else str(self.loa_start)
+        if self.request_type == 'schedule_change':
+            return (self.requested_schedule_desc or '')[:80]
+        return (self.notes or '')[:60]

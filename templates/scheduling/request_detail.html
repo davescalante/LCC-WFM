@@ -1,0 +1,156 @@
+{% extends 'base.html' %}
+{% block title %} - Request Detail{% endblock %}
+{% block content %}
+
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+    <a href="{% url 'requests_list' %}" class="btn" style="background:#e2e8f0;color:#374151;padding:6px 14px;font-size:13px;">&larr; Back to Requests</a>
+</div>
+
+{% if messages %}
+{% for msg in messages %}
+<div class="alert {% if 'error' in msg.tags %}badge-red{% elif 'warning' in msg.tags %}badge-yellow{% endif %}" style="margin-bottom:16px;">{{ msg }}</div>
+{% endfor %}
+{% endif %}
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+    <h1 style="margin:0;">{{ ar.get_request_type_display }}</h1>
+    <div>
+        {% if ar.status == 'pending' %}
+            <span class="badge" style="background:#e5e7eb;color:#374151;font-size:14px;padding:4px 14px;">Pending</span>
+        {% elif ar.status == 'approved' %}
+            <span class="badge badge-green" style="font-size:14px;padding:4px 14px;">Approved</span>
+        {% elif ar.status == 'rejected' %}
+            <span class="badge badge-red" style="font-size:14px;padding:4px 14px;">Rejected</span>
+        {% elif ar.status == 'done' %}
+            <span class="badge badge-blue" style="font-size:14px;padding:4px 14px;">Done</span>
+        {% endif %}
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Request Details</h2>
+
+        <div style="font-size:13px;color:#555;line-height:2;">
+            <div><strong>Agent:</strong> {{ ar.agent }}</div>
+            <div><strong>Type:</strong> {{ ar.get_request_type_display }}</div>
+            <div><strong>Submitted:</strong> {{ ar.submitted_at|date:"M j, Y g:i A" }}</div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:12px 0;">
+
+        {% if ar.request_type == 'coding' %}
+            <div style="font-size:13px;color:#555;line-height:2;">
+                <div><strong>Date:</strong> {{ ar.coding_date }}</div>
+                <div><strong>Start Time:</strong> {{ ar.coding_start_time }}</div>
+                <div><strong>End Time:</strong> {{ ar.coding_end_time }}</div>
+            </div>
+        {% elif ar.request_type == 'vacation' %}
+            <div style="font-size:13px;color:#555;line-height:2;">
+                <div><strong>Start Date:</strong> {{ ar.vacation_start }}</div>
+                <div><strong>End Date:</strong> {{ ar.vacation_end }}</div>
+            </div>
+        {% elif ar.request_type == 'day_off_change' %}
+            <div style="font-size:13px;color:#555;line-height:2;">
+                <div><strong>Change Type:</strong> {% if ar.day_off_type == 'one_time' %}One-Time{% elif ar.day_off_type == 'permanent' %}Permanent{% else %}{{ ar.day_off_type }}{% endif %}</div>
+                <div><strong>Current Day Off:</strong>
+                    {% for day in DAY_NAMES %}{% if forloop.counter0 == ar.current_day_off %}{{ day }}{% endif %}{% endfor %}
+                </div>
+                <div><strong>Requested Day Off:</strong>
+                    {% for day in DAY_NAMES %}{% if forloop.counter0 == ar.requested_day_off %}{{ day }}{% endif %}{% endfor %}
+                </div>
+                <div><strong>Effective Date:</strong> {{ ar.effective_date }}</div>
+            </div>
+        {% elif ar.request_type == 'vto' %}
+            <div style="font-size:13px;color:#555;line-height:2;">
+                <div><strong>Date:</strong> {{ ar.vto_date }}</div>
+            </div>
+        {% elif ar.request_type == 'loa' %}
+            <div style="font-size:13px;color:#555;line-height:2;">
+                <div><strong>Start Date:</strong> {{ ar.loa_start }}</div>
+                <div><strong>Expected End Date:</strong> {{ ar.loa_end }}</div>
+            </div>
+        {% elif ar.request_type == 'schedule_change' %}
+            <div style="font-size:13px;color:#555;line-height:1.8;">
+                <div><strong>Current Schedule:</strong></div>
+                <div style="background:#f8fafc;padding:8px 12px;border-radius:4px;margin:4px 0 12px;white-space:pre-wrap;">{{ ar.current_schedule_desc }}</div>
+                <div><strong>Requested Schedule:</strong></div>
+                <div style="background:#f8fafc;padding:8px 12px;border-radius:4px;margin:4px 0;white-space:pre-wrap;">{{ ar.requested_schedule_desc }}</div>
+            </div>
+        {% endif %}
+
+        {% if ar.notes %}
+        <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:600;color:#888;margin-bottom:4px;">REASON / NOTES</div>
+            <div style="font-size:13px;color:#374151;background:#f8fafc;padding:10px 12px;border-radius:4px;white-space:pre-wrap;">{{ ar.notes }}</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div>
+        <div class="card">
+            <h2>Timeline</h2>
+            <div style="font-size:13px;color:#555;line-height:2.2;">
+                <div>Submitted by <strong>{{ ar.agent }}</strong> on {{ ar.submitted_at|date:"M j, Y" }}</div>
+                {% if ar.reviewed_by %}
+                <div>{% if ar.status == 'rejected' %}Rejected{% else %}Approved{% endif %} by <strong>{{ ar.reviewed_by.get_full_name|default:ar.reviewed_by.username }}</strong> on {{ ar.reviewed_at|date:"M j, Y" }}</div>
+                {% endif %}
+                {% if ar.done_by %}
+                <div>Marked as done by <strong>{{ ar.done_by.get_full_name|default:ar.done_by.username }}</strong> on {{ ar.done_at|date:"M j, Y" }}</div>
+                {% endif %}
+            </div>
+            {% if ar.rejection_reason %}
+            <div style="margin-top:12px;padding:10px 12px;background:#fff1f2;border-radius:4px;border-left:3px solid #f87171;">
+                <div style="font-size:11px;font-weight:700;color:#9f1239;margin-bottom:4px;">REJECTION REASON</div>
+                <div style="font-size:13px;color:#374151;">{{ ar.rejection_reason }}</div>
+            </div>
+            {% endif %}
+            {% if ar.auto_action_log %}
+            <div style="margin-top:12px;padding:10px 12px;background:#f0fdf4;border-radius:4px;border-left:3px solid #4ade80;">
+                <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px;">AUTO-ACTIONS TAKEN</div>
+                <div style="font-size:12px;color:#374151;white-space:pre-wrap;">{{ ar.auto_action_log }}</div>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if ar.status == 'pending' %}
+        <div class="card">
+            <h2>Actions</h2>
+            <form method="post" action="{% url 'request_approve' pk=ar.pk %}" style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary" style="margin-right:8px;margin-bottom:8px;">Approve</button>
+            </form>
+            <button class="btn" style="background:#fee2e2;color:#dc2626;margin-bottom:8px;" onclick="document.getElementById('reject-section').style.display='block';this.style.display='none';">Reject</button>
+
+            <div id="reject-section" style="display:none;margin-top:12px;">
+                <form method="post" action="{% url 'request_reject' pk=ar.pk %}">
+                    {% csrf_token %}
+                    <label style="font-size:13px;">Rejection Reason <span style="font-weight:400;color:#888;">(optional)</span></label>
+                    <textarea name="rejection_reason" rows="3" placeholder="Explain why this request was rejected…" style="font-size:13px;"></textarea>
+                    <button type="submit" class="btn" style="background:#dc2626;color:white;">Confirm Rejection</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if ar.status == 'approved' and ar.request_type == 'loa' or ar.status == 'approved' and ar.request_type == 'schedule_change' %}
+        <div class="card" style="border-left:4px solid #f59e0b;background:#fffbeb;">
+            <div style="font-size:13px;color:#92400e;">
+                <strong>Manual action required.</strong> Please update the agent's records in the system, then mark this request as done.
+            </div>
+            <form method="post" action="{% url 'request_mark_done' pk=ar.pk %}" style="margin-top:12px;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary">Mark as Done</button>
+            </form>
+        </div>
+        {% elif ar.status == 'approved' %}
+        <div class="card">
+            <form method="post" action="{% url 'request_mark_done' pk=ar.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary">Mark as Done</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

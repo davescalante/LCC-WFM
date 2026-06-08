@@ -32,4 +32,10 @@ urlpatterns = [
     path('role-changes/<int:pk>/cancel/', views.cancel_role_change, name='cancel_role_change'),
     path('agent/my-shifts/', views.agent_my_shifts, name='agent_my_shifts'),
     path('agent/my-ot-shifts/', views.agent_my_ot_shifts, name='agent_my_ot_shifts'),
+    path('requests/', views.requests_list, name='requests_list'),
+    path('requests/<int:pk>/', views.request_detail, name='request_detail'),
+    path('requests/<int:pk>/approve/', views.request_approve, name='request_approve'),
+    path('requests/<int:pk>/reject/', views.request_reject, name='request_reject'),
+    path('requests/<int:pk>/done/', views.request_mark_done, name='request_mark_done'),
+    path('agent/my-requests/', views.agent_my_requests, name='agent_my_requests'),
 ]

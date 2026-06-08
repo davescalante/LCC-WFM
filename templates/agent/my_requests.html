@@ -1,0 +1,186 @@
+{% extends 'base.html' %}
+{% block title %} - My Requests{% endblock %}
+{% block content %}
+<style>
+.req-section { display:none; }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>My Requests</h1>
+    <button id="show-form-btn" class="btn btn-primary" onclick="showRequestForm()">+ Submit a Request</button>
+</div>
+
+{% if messages %}
+{% for msg in messages %}
+<div class="alert {% if msg.tags == 'error' %}badge-red{% endif %}" style="margin-bottom:16px;">{{ msg }}</div>
+{% endfor %}
+{% endif %}
+
+<div id="request-form-card" class="card" style="display:none;margin-bottom:20px;">
+    <h2 style="margin-bottom:16px;">New Request</h2>
+    <form method="post" id="request-form">
+        {% csrf_token %}
+
+        <label>Request Type</label>
+        <select name="request_type" id="req-type" onchange="updateReqForm()">
+            <option value="">— Select type —</option>
+            <option value="coding">Coding Request</option>
+            <option value="vacation">Vacation Request</option>
+            <option value="day_off_change">Day Off Change Request</option>
+            <option value="vto">VTO Request</option>
+            <option value="loa">LOA Request</option>
+            <option value="schedule_change">Schedule Change Request</option>
+        </select>
+
+        <div class="req-section" id="sec-coding">
+            <label>Date</label>
+            <input type="date" name="coding_date">
+            <label>Start Time</label>
+            <input type="time" name="coding_start_time">
+            <label>End Time</label>
+            <input type="time" name="coding_end_time">
+        </div>
+
+        <div class="req-section" id="sec-vacation">
+            <label>Start Date</label>
+            <input type="date" name="vacation_start">
+            <label>End Date <span style="font-weight:400;color:#888;">(same as start for a single day)</span></label>
+            <input type="date" name="vacation_end">
+        </div>
+
+        <div class="req-section" id="sec-day_off_change">
+            <label>Change Type</label>
+            <select name="day_off_type">
+                <option value="one_time">One-Time — affects only this specific date</option>
+                <option value="permanent">Permanent — changes my recurring schedule going forward</option>
+            </select>
+            <div class="grid-2">
+                <div>
+                    <label>Day I Currently Have Off</label>
+                    <select name="current_day_off">
+                        <option value="0">Monday</option><option value="1">Tuesday</option>
+                        <option value="2">Wednesday</option><option value="3">Thursday</option>
+                        <option value="4">Friday</option><option value="5">Saturday</option>
+                        <option value="6">Sunday</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Day I Want Off Instead</label>
+                    <select name="requested_day_off">
+                        <option value="0">Monday</option><option value="1">Tuesday</option>
+                        <option value="2">Wednesday</option><option value="3">Thursday</option>
+                        <option value="4">Friday</option><option value="5">Saturday</option>
+                        <option value="6">Sunday</option>
+                    </select>
+                </div>
+            </div>
+            <label>Effective Date <span style="font-weight:400;color:#888;">(the date you want off, or the start of the new recurring schedule)</span></label>
+            <input type="date" name="effective_date">
+        </div>
+
+        <div class="req-section" id="sec-vto">
+            <label>Date</label>
+            <input type="date" name="vto_date">
+        </div>
+
+        <div class="req-section" id="sec-loa">
+            <label>Start Date</label>
+            <input type="date" name="loa_start">
+            <label>Expected End Date</label>
+            <input type="date" name="loa_end">
+        </div>
+
+        <div class="req-section" id="sec-schedule_change">
+            <label>My Current Schedule</label>
+            <textarea name="current_schedule_desc" rows="2" placeholder="e.g. Mon–Fri 9:00–17:00, Sat–Sun off"></textarea>
+            <label>Schedule I'm Requesting</label>
+            <textarea name="requested_schedule_desc" rows="2" placeholder="e.g. Mon–Thu 8:00–18:00, Fri–Sun off"></textarea>
+        </div>
+
+        <div id="notes-section" style="display:none;">
+            <label>Reason / Notes</label>
+            <textarea name="notes" rows="3" placeholder="Explain your request in your own words..."></textarea>
+            <div style="display:flex;gap:10px;margin-top:4px;">
+                <button type="submit" class="btn btn-primary">Submit Request</button>
+                <button type="button" class="btn" style="background:#e2e8f0;color:#374151;" onclick="hideRequestForm()">Cancel</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="padding:0;">
+    {% if requests %}
+    <table>
+        <thead>
+            <tr>
+                <th>Type</th>
+                <th>Submitted</th>
+                <th>Details</th>
+                <th>Status</th>
+                <th>Response</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for req in requests %}
+            <tr>
+                <td style="font-weight:600;white-space:nowrap;font-size:13px;">{{ req.get_request_type_display }}</td>
+                <td style="color:#6b7280;white-space:nowrap;font-size:13px;">{{ req.submitted_at|date:"M j, Y" }}</td>
+                <td style="font-size:13px;">{{ req.summary }}</td>
+                <td style="white-space:nowrap;">
+                    {% if req.status == 'pending' %}
+                        <span class="badge" style="background:#e5e7eb;color:#374151;">Pending</span>
+                    {% elif req.status == 'approved' %}
+                        <span class="badge badge-green">Approved</span>
+                    {% elif req.status == 'rejected' %}
+                        <span class="badge badge-red">Rejected</span>
+                    {% elif req.status == 'done' %}
+                        <span class="badge badge-blue">Done</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:13px;">
+                    {% if req.status == 'rejected' %}
+                        {% if req.rejection_reason %}
+                            <span style="color:#dc2626;">{{ req.rejection_reason }}</span>
+                        {% else %}
+                            <span style="color:#6b7280;">No reason provided</span>
+                        {% endif %}
+                    {% elif req.reviewed_by and req.status != 'pending' %}
+                        <span style="color:#6b7280;">{{ req.reviewed_at|date:"M j" }} by {{ req.reviewed_by.get_full_name|default:req.reviewed_by.username }}</span>
+                    {% else %}
+                        <span style="color:#d1d5db;">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center;padding:48px;color:#9ca3af;font-size:14px;">
+        No requests yet. Click "Submit a Request" above to get started.
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function showRequestForm() {
+    document.getElementById('request-form-card').style.display = 'block';
+    document.getElementById('show-form-btn').style.display = 'none';
+    document.getElementById('request-form-card').scrollIntoView({behavior:'smooth'});
+}
+function hideRequestForm() {
+    document.getElementById('request-form-card').style.display = 'none';
+    document.getElementById('show-form-btn').style.display = '';
+}
+function updateReqForm() {
+    var type = document.getElementById('req-type').value;
+    document.querySelectorAll('.req-section').forEach(function(s) { s.style.display = 'none'; });
+    if (type) {
+        var sec = document.getElementById('sec-' + type);
+        if (sec) sec.style.display = 'block';
+        document.getElementById('notes-section').style.display = 'block';
+    } else {
+        document.getElementById('notes-section').style.display = 'none';
+    }
+}
+</script>
+{% endblock %}

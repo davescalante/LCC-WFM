@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, log_action
+from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -2373,3 +2373,325 @@ def agent_my_ot_shifts(request):
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
     })
+
+
+# ── Agent Request views ────────────────────────────────────────────────────────
+
+@login_required
+def agent_my_requests(request):
+    try:
+        agent = request.user.agent
+    except Exception:
+        return redirect('dashboard')
+    if agent.role != 'agent':
+        return redirect('dashboard')
+
+    if request.method == 'POST':
+        req_type = request.POST.get('request_type', '').strip()
+        if not req_type:
+            messages.error(request, "Please select a request type.")
+            return redirect('agent_my_requests')
+
+        ar = AgentRequest(agent=agent, request_type=req_type,
+                          notes=request.POST.get('notes', '').strip(),
+                          supervisor_read=False, agent_read=True)
+
+        if req_type == 'coding':
+            ar.coding_date = request.POST.get('coding_date') or None
+            ar.coding_start_time = request.POST.get('coding_start_time') or None
+            ar.coding_end_time = request.POST.get('coding_end_time') or None
+        elif req_type == 'vacation':
+            ar.vacation_start = request.POST.get('vacation_start') or None
+            ar.vacation_end = request.POST.get('vacation_end') or request.POST.get('vacation_start') or None
+        elif req_type == 'day_off_change':
+            ar.day_off_type = request.POST.get('day_off_type', '')
+            try:
+                ar.current_day_off = int(request.POST.get('current_day_off', ''))
+            except (ValueError, TypeError):
+                pass
+            try:
+                ar.requested_day_off = int(request.POST.get('requested_day_off', ''))
+            except (ValueError, TypeError):
+                pass
+            ar.effective_date = request.POST.get('effective_date') or None
+        elif req_type == 'vto':
+            ar.vto_date = request.POST.get('vto_date') or None
+        elif req_type == 'loa':
+            ar.loa_start = request.POST.get('loa_start') or None
+            ar.loa_end = request.POST.get('loa_end') or None
+        elif req_type == 'schedule_change':
+            ar.current_schedule_desc = request.POST.get('current_schedule_desc', '').strip()
+            ar.requested_schedule_desc = request.POST.get('requested_schedule_desc', '').strip()
+
+        ar.save()
+        log_action(request.user, f'Submitted agent request: {ar.get_request_type_display()}',
+                   ar.summary(), agent=agent)
+        messages.success(request, "Your request has been submitted and is pending review.")
+        return redirect('agent_my_requests')
+
+    # Mark agent's unread responses as seen
+    AgentRequest.objects.filter(agent=agent, agent_read=False).update(agent_read=True)
+    reqs = AgentRequest.objects.filter(agent=agent).order_by('-submitted_at')
+
+    return render(request, 'agent/my_requests.html', {
+        'agent': agent,
+        'requests': reqs,
+        'today': timezone.localdate(),
+    })
+
+
+@login_required
+def requests_list(request):
+    # Agents are blocked by middleware; this is staff-only
+    try:
+        viewer = request.user.agent
+    except Exception:
+        viewer = None
+
+    qs = AgentRequest.objects.select_related(
+        'agent__user', 'agent__supervisor__user', 'reviewed_by', 'done_by'
+    ).order_by('-submitted_at')
+
+    if viewer and viewer.role_type == 'supervisor':
+        qs = qs.filter(agent__supervisor=viewer)
+
+    # Filters
+    agent_search = request.GET.get('agent_search', '').strip()
+    type_filter = request.GET.get('type', '').strip()
+    status_filter = request.GET.get('status', '').strip()
+    date_from = request.GET.get('date_from', '').strip()
+    date_to = request.GET.get('date_to', '').strip()
+
+    if agent_search:
+        from django.db.models import Q as _Q
+        qs = qs.filter(
+            _Q(agent__user__first_name__icontains=agent_search) |
+            _Q(agent__user__last_name__icontains=agent_search) |
+            _Q(agent__agent_name__icontains=agent_search)
+        )
+    if type_filter:
+        qs = qs.filter(request_type=type_filter)
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+    if date_from:
+        try:
+            qs = qs.filter(submitted_at__date__gte=date.fromisoformat(date_from))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            qs = qs.filter(submitted_at__date__lte=date.fromisoformat(date_to))
+        except ValueError:
+            pass
+
+    # Mark all visible pending requests as seen by supervisor
+    mark_read = qs.filter(status='pending', supervisor_read=False)
+    mark_read.update(supervisor_read=True)
+
+    rows = list(qs)
+    pending  = [r for r in rows if r.status == 'pending']
+    approved = [r for r in rows if r.status == 'approved']
+    rejected = [r for r in rows if r.status == 'rejected']
+    done     = [r for r in rows if r.status == 'done']
+
+    return render(request, 'scheduling/requests_list.html', {
+        'pending': pending,
+        'approved': approved,
+        'rejected': rejected,
+        'done': done,
+        'type_choices': AgentRequest.REQUEST_TYPE_CHOICES,
+        'status_choices': AgentRequest.STATUS_CHOICES,
+        'filters': {
+            'agent_search': agent_search,
+            'type': type_filter,
+            'status': status_filter,
+            'date_from': date_from,
+            'date_to': date_to,
+        },
+    })
+
+
+@login_required
+def request_detail(request, pk):
+    ar = get_object_or_404(AgentRequest, pk=pk)
+    try:
+        viewer = request.user.agent
+        if viewer.role == 'agent':
+            return redirect('agent_my_requests')
+        if viewer.role_type == 'supervisor' and ar.agent.supervisor != viewer:
+            return redirect('requests_list')
+    except Exception:
+        pass
+    return render(request, 'scheduling/request_detail.html', {
+        'ar': ar,
+        'DAY_NAMES': _DAY_NAMES,
+    })
+
+
+@login_required
+def request_approve(request, pk):
+    if request.method != 'POST':
+        return redirect('requests_list')
+
+    ar = get_object_or_404(AgentRequest, pk=pk)
+    try:
+        viewer = request.user.agent
+        if viewer.role == 'agent':
+            return redirect('agent_my_requests')
+    except Exception:
+        pass
+
+    if ar.status != 'pending':
+        messages.error(request, "This request has already been reviewed.")
+        return redirect('request_detail', pk=pk)
+
+    agent = ar.agent
+    actions = []
+
+    if ar.request_type == 'coding':
+        from adherence.models import Coding
+        Coding.objects.create(
+            agent=agent,
+            date=ar.coding_date,
+            start_time=ar.coding_start_time,
+            end_time=ar.coding_end_time,
+            notes=ar.notes or '',
+        )
+        actions.append(f"Coding entry created: {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
+
+    elif ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
+        from adherence.models import AdherenceRecord
+        d = ar.vacation_start
+        count = 0
+        while d <= ar.vacation_end:
+            AdherenceRecord.objects.update_or_create(
+                agent=agent, date=d, defaults={'status': 'V'}
+            )
+            d += timedelta(days=1)
+            count += 1
+        actions.append(f"Set V (Vacation) for {count} day(s): {ar.vacation_start} – {ar.vacation_end}")
+
+    elif ar.request_type == 'vto' and ar.vto_date:
+        from adherence.models import AdherenceRecord
+        AdherenceRecord.objects.update_or_create(
+            agent=agent, date=ar.vto_date, defaults={'status': 'VTO'}
+        )
+        actions.append(f"Set VTO status for {ar.vto_date}")
+
+    elif ar.request_type == 'day_off_change' and ar.effective_date:
+        if ar.day_off_type == 'one_time':
+            Shift.objects.update_or_create(
+                agent=agent, date=ar.effective_date,
+                defaults={'start_time': '00:00', 'end_time': '00:00', 'is_off': True}
+            )
+            actions.append(f"Shift override: {ar.effective_date} marked as day off")
+            if ar.current_day_off is not None:
+                week_mon = ar.effective_date - timedelta(days=ar.effective_date.weekday())
+                working_date = week_mon + timedelta(days=ar.current_day_off)
+                work_tmpl = ShiftTemplate.objects.filter(
+                    agent=agent, is_off=False, start_time__isnull=False
+                ).first()
+                if work_tmpl:
+                    Shift.objects.update_or_create(
+                        agent=agent, date=working_date,
+                        defaults={
+                            'start_time': work_tmpl.start_time,
+                            'end_time': work_tmpl.end_time,
+                            'is_off': False,
+                        }
+                    )
+                    actions.append(f"Shift override: {working_date} set as working ({work_tmpl.start_time}–{work_tmpl.end_time})")
+
+        elif ar.day_off_type == 'permanent':
+            eff_mon = ar.effective_date - timedelta(days=ar.effective_date.weekday())
+            if ar.requested_day_off is not None:
+                _save_shift_template(agent, ar.requested_day_off, eff_mon, True, None, None, '')
+                actions.append(f"ShiftTemplate: {_DAY_NAMES[ar.requested_day_off]} set as day off from {eff_mon}")
+            if ar.current_day_off is not None:
+                work_tmpl = ShiftTemplate.objects.filter(
+                    agent=agent, is_off=False, start_time__isnull=False
+                ).first()
+                if work_tmpl:
+                    _save_shift_template(
+                        agent, ar.current_day_off, eff_mon, False,
+                        work_tmpl.start_time.strftime('%H:%M'),
+                        work_tmpl.end_time.strftime('%H:%M'), ''
+                    )
+                    actions.append(f"ShiftTemplate: {_DAY_NAMES[ar.current_day_off]} set as working from {eff_mon}")
+
+    elif ar.request_type in ('loa', 'schedule_change'):
+        actions.append("Manual action required: please update the agent's records in the system.")
+
+    ar.status = 'approved'
+    ar.reviewed_by = request.user
+    ar.reviewed_at = timezone.now()
+    ar.auto_action_log = '\n'.join(actions)
+    ar.agent_read = False
+    ar.save()
+
+    log_action(request.user, f'Approved agent request: {ar.get_request_type_display()}',
+               ar.summary(), agent=agent)
+
+    if ar.request_type in ('loa', 'schedule_change'):
+        messages.warning(request, "Request approved. Manual update required — please make the change in the system.")
+    else:
+        messages.success(request, "Request approved.")
+    return redirect('request_detail', pk=pk)
+
+
+@login_required
+def request_reject(request, pk):
+    if request.method != 'POST':
+        return redirect('requests_list')
+
+    ar = get_object_or_404(AgentRequest, pk=pk)
+    try:
+        viewer = request.user.agent
+        if viewer.role == 'agent':
+            return redirect('agent_my_requests')
+    except Exception:
+        pass
+
+    if ar.status != 'pending':
+        messages.error(request, "This request has already been reviewed.")
+        return redirect('request_detail', pk=pk)
+
+    ar.status = 'rejected'
+    ar.reviewed_by = request.user
+    ar.reviewed_at = timezone.now()
+    ar.rejection_reason = request.POST.get('rejection_reason', '').strip()
+    ar.agent_read = False
+    ar.save()
+
+    log_action(request.user, f'Rejected agent request: {ar.get_request_type_display()}',
+               ar.summary(), agent=ar.agent)
+    messages.success(request, "Request rejected.")
+    return redirect('request_detail', pk=pk)
+
+
+@login_required
+def request_mark_done(request, pk):
+    if request.method != 'POST':
+        return redirect('requests_list')
+
+    ar = get_object_or_404(AgentRequest, pk=pk)
+    try:
+        viewer = request.user.agent
+        if viewer.role == 'agent':
+            return redirect('agent_my_requests')
+    except Exception:
+        pass
+
+    if ar.status != 'approved':
+        messages.error(request, "Only approved requests can be marked as done.")
+        return redirect('request_detail', pk=pk)
+
+    ar.status = 'done'
+    ar.done_by = request.user
+    ar.done_at = timezone.now()
+    ar.save()
+
+    log_action(request.user, f'Marked agent request as done: {ar.get_request_type_display()}',
+               ar.summary(), agent=ar.agent)
+    messages.success(request, "Request marked as done.")
+    return redirect('request_detail', pk=pk)
