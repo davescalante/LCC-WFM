@@ -1120,6 +1120,7 @@ def overtime_list(request):
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
+        'today': timezone.localdate(),
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'supervisors': supervisors,

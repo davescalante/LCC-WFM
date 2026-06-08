@@ -136,9 +136,11 @@
         <tr style="background:#f0f4f8;">
             <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
             {% for d in week_dates %}
-            <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;">
-                <div style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
-                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+            <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;"
+                {% if d == today %}class="col-today-th"{% endif %}>
+                {% if d == today %}<span class="col-today-label">TODAY</span>{% endif %}
+                <div class="ot-day-name" style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
+                <div class="ot-day-date" style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
             </th>
             {% endfor %}
             <th style="min-width:90px;padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:12px;">Offered</th>
@@ -153,7 +155,8 @@
                 <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
             </td>
             {% for cell in row.cells %}
-            <td style="padding:6px 4px;text-align:center;vertical-align:middle;{% if cell.has_active_ot %}background:#f0fdf4;{% elif cell.ot_shifts %}background:#f9fafb;{% endif %}">
+            <td {% if cell.date == today %}class="col-today-td"{% endif %}
+                style="padding:6px 4px;text-align:center;vertical-align:middle;{% if cell.has_active_ot %}background:#f0fdf4;{% elif cell.ot_shifts %}background:#f9fafb;{% endif %}">
                 {% if cell.ot_shifts %}
                     {% for ot in cell.ot_shifts %}
                     <div class="ot-entry{% if ot.status == 'cancelled' %} ot-cancelled{% endif %}"
@@ -301,6 +304,16 @@
 <style>
 .ot-entry:hover .ot-row-actions { display: flex !important; }
 .ot-cancelled .ot-row-actions { opacity: 0.8; }
+
+.col-today-th {
+    background: #bfdbfe !important;
+    color: #1e3a8a !important;
+    border-bottom-color: #60a5fa !important;
+}
+.col-today-th .ot-day-name { color: #1e3a8a; }
+.col-today-th .ot-day-date { color: #3b82f6; }
+.col-today-label { display: block; font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
+.col-today-td { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0 0 0 #60a5fa; }
 </style>
 
 <script>
