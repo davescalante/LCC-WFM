@@ -235,7 +235,7 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
 .sort-arrow { font-size:9px; color:#888; margin-left:2px; }
 </style>
 
-<div class="card" style="overflow-x:auto;overflow-y:clip;padding:0;">
+<div id="tbl-card-cod" class="card" style="overflow-x:auto;padding:0;">
 <table id="cod-table">
     <colgroup>
         <!-- Frozen columns -->
@@ -559,4 +559,5 @@ function escHtml(str) {
     });
 })('cod-table',[0,1,2,3],['group-hdr']);
 </script>
+<script>document.addEventListener('DOMContentLoaded',function(){_initStickyHeader(document.getElementById('tbl-card-cod'));});</script>
 {% endblock %}

@@ -199,7 +199,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 .sort-arrow { font-size:9px; color:#888; margin-left:2px; }
 </style>
 
-<div class="card" style="overflow-x:auto;overflow-y:clip;padding:0;">
+<div id="tbl-card-adh" class="card" style="overflow-x:auto;padding:0;">
 <table id="adh-table">
     <colgroup>
         <!-- Frozen columns -->
@@ -1024,4 +1024,5 @@ document.getElementById('qe-modal').addEventListener('click', function(e) {
     });
 })('adh-table',[0,1,2,3],['group-hdr']);
 </script>
+<script>document.addEventListener('DOMContentLoaded',function(){_initStickyHeader(document.getElementById('tbl-card-adh'));});</script>
 {% endblock %}

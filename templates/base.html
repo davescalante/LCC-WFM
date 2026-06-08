@@ -56,5 +56,83 @@
     <div class="container">
         {% block content %}{% endblock %}
     </div>
+<script>
+/* Floating sticky header for overflow-x:auto tables.
+   CSS sticky doesn't work inside overflow-x:auto containers because they become
+   scroll containers themselves. This clones the thead and pins it via position:fixed. */
+function _initStickyHeader(container) {
+    if (!container) return;
+    var table = container.querySelector('table');
+    if (!table || !table.querySelector('thead')) return;
+    var thead = table.querySelector('thead');
+    var NAV_H = 56;
+
+    var sample = thead.querySelector('th');
+    var hdrBg = sample ? getComputedStyle(sample).backgroundColor : '#e8edf4';
+    if (!hdrBg || hdrBg === 'rgba(0, 0, 0, 0)') hdrBg = '#e8edf4';
+
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;top:' + NAV_H + 'px;z-index:50;overflow:hidden;display:none;box-shadow:0 2px 4px rgba(0,0,0,.1);';
+
+    var ft = document.createElement('table');
+    ft.className = table.className;
+    ft.style.cssText = (table.getAttribute('style') || '') + ';margin:0;';
+    var cg = table.querySelector('colgroup');
+    if (cg) ft.appendChild(cg.cloneNode(true));
+
+    var fth = thead.cloneNode(true);
+    ft.appendChild(fth);
+    wrap.appendChild(ft);
+    document.body.appendChild(wrap);
+
+    function applyBg() {
+        Array.from(fth.querySelectorAll('th')).forEach(function(th) {
+            if (!th.classList.contains('col-today') && !th.classList.contains('col-today-th'))
+                th.style.backgroundColor = hdrBg;
+        });
+    }
+    applyBg();
+
+    function syncWidths() {
+        var orig = Array.from(thead.querySelectorAll('th'));
+        var clone = Array.from(fth.querySelectorAll('th'));
+        orig.forEach(function(th, i) {
+            if (clone[i]) { clone[i].style.width = th.offsetWidth + 'px'; clone[i].style.minWidth = th.offsetWidth + 'px'; }
+        });
+    }
+
+    var active = false;
+    function tick() {
+        var cr = container.getBoundingClientRect();
+        var tr = thead.getBoundingClientRect();
+        if (tr.bottom < NAV_H && cr.bottom > NAV_H + 30) {
+            wrap.style.left = cr.left + 'px';
+            wrap.style.width = cr.width + 'px';
+            wrap.scrollLeft = container.scrollLeft;
+            if (!active) { syncWidths(); wrap.style.display = 'block'; active = true; }
+        } else if (active) {
+            wrap.style.display = 'none'; active = false;
+        }
+    }
+
+    container.addEventListener('scroll', function() { if (active) wrap.scrollLeft = container.scrollLeft; });
+
+    wrap.addEventListener('click', function(e) {
+        var cloneTh = e.target.closest('th');
+        if (!cloneTh) return;
+        var clones = Array.from(fth.querySelectorAll('th'));
+        var origs = Array.from(thead.querySelectorAll('th'));
+        var i = clones.indexOf(cloneTh);
+        if (i >= 0 && origs[i]) {
+            origs[i].click();
+            setTimeout(function() { fth.innerHTML = thead.innerHTML; applyBg(); syncWidths(); }, 20);
+        }
+    });
+
+    window.addEventListener('scroll', tick, {passive: true});
+    window.addEventListener('resize', function() { active = false; wrap.style.display = 'none'; setTimeout(tick, 60); });
+    setTimeout(tick, 80);
+}
+</script>
 </body>
 </html>

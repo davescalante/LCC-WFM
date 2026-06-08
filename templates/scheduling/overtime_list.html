@@ -130,7 +130,7 @@
     </div>
 </div>
 
-<div class="card" style="overflow-x:auto;overflow-y:clip;padding:0;">
+<div id="tbl-card-ot" class="card" style="overflow-x:auto;padding:0;">
 <table id="ot-table" style="table-layout:auto;min-width:900px;border-collapse:collapse;">
     <thead>
         <tr style="background:#f0f4f8;">
@@ -556,5 +556,5 @@ function getCookie(name) {
 
 <!-- CSRF for JS fetch -->
 <form style="display:none;">{% csrf_token %}</form>
-
+<script>document.addEventListener('DOMContentLoaded',function(){_initStickyHeader(document.getElementById('tbl-card-ot'));});</script>
 {% endblock %}
