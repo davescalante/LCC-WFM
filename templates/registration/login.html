@@ -15,12 +15,14 @@
         button { width: 100%; padding: 10px; background: #1a3a5c; color: white; border: none; border-radius: 4px; font-size: 15px; cursor: pointer; }
         button:hover { background: #254e7a; }
         .error { color: #c0392b; font-size: 13px; margin-bottom: 12px; }
+        .expired-msg { background: #fff3cd; color: #856404; border: 1px solid #ffc107; border-radius: 4px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
     </style>
 </head>
 <body>
     <div class="login-box">
         <h1>LCC Workforce Management</h1>
         <p>Sign in to continue</p>
+        <div id="expired-banner" class="expired-msg" style="display:none;">Your session has expired. Please log in again to continue.</div>
         {% if form.errors %}
         <div class="error">Invalid username or password.</div>
         {% endif %}
@@ -33,5 +35,10 @@
             <button type="submit">Sign In</button>
         </form>
     </div>
+    <script>
+        if (new URLSearchParams(window.location.search).get('expired') === '1') {
+            document.getElementById('expired-banner').style.display = 'block';
+        }
+    </script>
 </body>
 </html>
