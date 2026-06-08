@@ -313,9 +313,9 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
                 <div id="add-form-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}" style="display:none;">
                     <div class="cod-add-inputs">
                         <input type="text" id="start-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                            placeholder="HH:MM:SS" maxlength="8" class="cod-add-input">
+                            placeholder="H:MM:SS" maxlength="8" class="cod-add-input">
                         <input type="text" id="end-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                            placeholder="HH:MM:SS" maxlength="8" class="cod-add-input">
+                            placeholder="H:MM:SS" maxlength="8" class="cod-add-input">
                     </div>
                     <input type="text" id="notes-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
                         placeholder="Notes" class="cod-notes-input">
@@ -435,14 +435,20 @@ function toggleAddForm(agentId, dateStr) {
     }
 }
 
+function padTime(s) {
+    const parts = s.split(':');
+    if (parts.length) parts[0] = parts[0].padStart(2, '0');
+    return parts.join(':');
+}
+
 async function submitCoding(agentId, dateStr) {
     const btn   = document.getElementById(`save-btn-${agentId}-${dateStr}`);
-    const start = document.getElementById(`start-${agentId}-${dateStr}`).value.trim();
-    const end   = document.getElementById(`end-${agentId}-${dateStr}`).value.trim();
+    const start = padTime(document.getElementById(`start-${agentId}-${dateStr}`).value.trim());
+    const end   = padTime(document.getElementById(`end-${agentId}-${dateStr}`).value.trim());
     const notes = document.getElementById(`notes-${agentId}-${dateStr}`).value;
 
-    if (!start || !end) {
-        alert('Please enter both a start time and end time in HH:MM:SS format (e.g. 16:00:00).');
+    if (!start || !end || start === ':' || end === ':') {
+        alert('Please enter both a start time and end time (e.g. 8:00:00 or 08:00:00).');
         return;
     }
 

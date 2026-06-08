@@ -650,13 +650,22 @@ def add_coding_ajax(request):
     if not all([agent_id, date_str, start_time, end_time]):
         return JsonResponse({'ok': False, 'error': 'missing fields'}, status=400)
 
+    # Normalize H:MM:SS → HH:MM:SS so leading zero is optional
+    def _pad_time(s):
+        parts = s.strip().split(':')
+        if parts:
+            parts[0] = parts[0].zfill(2)
+        return ':'.join(parts)
+    start_time = _pad_time(start_time)
+    end_time   = _pad_time(end_time)
+
     # Validate time format and end > start
     from datetime import time as time_cls
     try:
         start_t = time_cls.fromisoformat(start_time)
         end_t   = time_cls.fromisoformat(end_time)
     except ValueError:
-        return JsonResponse({'ok': False, 'error': 'Invalid time format. Use HH:MM:SS (e.g. 16:00:00)'}, status=400)
+        return JsonResponse({'ok': False, 'error': 'Invalid time format. Use H:MM:SS or HH:MM:SS (e.g. 8:00:00)'}, status=400)
 
     if end_t <= start_t:
         return JsonResponse({'ok': False, 'error': 'End time must be after start time. If the shift crossed midnight, split it into two entries.'}, status=400)
