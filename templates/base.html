@@ -65,7 +65,7 @@ function _initStickyHeader(container) {
     var table = container.querySelector('table');
     if (!table || !table.querySelector('thead')) return;
     var thead = table.querySelector('thead');
-    var NAV_H = 56;
+    var NAV_H = 0;
 
     var sample = thead.querySelector('th');
     var hdrBg = sample ? getComputedStyle(sample).backgroundColor : '#e8edf4';
