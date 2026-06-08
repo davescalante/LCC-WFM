@@ -1414,3 +1414,138 @@ def adherence_poll(request):
     timestamps = [t for t in [result['latest'], coding_result['latest']] if t]
     latest = max(timestamps).isoformat() if timestamps else None
     return JsonResponse({'latest': latest})
+
+
+# ── Agent self-service: My Adherence ──────────────────────────────────────────
+
+@login_required
+def agent_my_adherence(request):
+    try:
+        agent = request.user.agent
+    except Exception:
+        return redirect('agent_my_shifts')
+    if agent.role != 'agent':
+        return redirect('adherence_dashboard')
+
+    today = timezone.localdate()
+    default_week_start = today - timedelta(days=today.weekday())
+    raw = request.GET.get('week_start')
+    try:
+        week_start = date.fromisoformat(raw) if raw else default_week_start
+        week_start -= timedelta(days=week_start.weekday())
+    except (ValueError, TypeError):
+        week_start = default_week_start
+
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    week_end = week_dates[-1]
+
+    from scheduling.models import Shift, ShiftTemplate
+
+    overrides = {s.date: s for s in Shift.objects.filter(agent=agent, date__in=week_dates)}
+    all_templates = list(ShiftTemplate.objects.filter(agent=agent))
+    records = {r.date: r for r in AdherenceRecord.objects.filter(agent=agent, date__in=week_dates)}
+    codings_per_day = {}
+    for c in Coding.objects.filter(agent=agent, date__in=week_dates):
+        codings_per_day[c.date] = codings_per_day.get(c.date, Decimal('0')) + Decimal(str(c.total_hours()))
+
+    def _best_tmpl(d):
+        dow = d.weekday()
+        best = None
+        for t in all_templates:
+            if t.day_of_week != dow:
+                continue
+            if t.effective_from is not None and t.effective_from > d:
+                continue
+            if t.effective_until is not None and t.effective_until < d:
+                continue
+            if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
+                best = t
+        return best
+
+    def _fmt(d):
+        if d is None or d == Decimal('0'):
+            return '—'
+        total_min = int(round(float(d) * 60))
+        h, m = divmod(total_min, 60)
+        return f'{h}:{m:02d}'
+
+    _DAY_ABBR = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    cells = []
+    sched_total = Decimal('0')
+    logged_total = Decimal('0')
+    coded_total = Decimal('0')
+    bonus = True
+    bonus_determined = False
+    bonus_reasons = []
+
+    for i, d in enumerate(week_dates):
+        override = overrides.get(d)
+        tmpl = None if override else _best_tmpl(d)
+        src = override or tmpl
+        record = records.get(d)
+        is_off = src.is_off if src else False
+
+        if src and not is_off and getattr(src, 'start_time', None) and getattr(src, 'end_time', None):
+            sched_hrs = _scheduled_hours(src)
+            sched_total += sched_hrs
+        else:
+            sched_hrs = None
+
+        status = record.status if record else ''
+        actual_hrs = record.actual_hours if record else None
+        coded_hrs = codings_per_day.get(d) or None
+
+        if actual_hrs:
+            logged_total += actual_hrs
+        if coded_hrs:
+            coded_total += coded_hrs
+
+        if status in BONUS_DISQUALIFYING:
+            bonus = False
+            bonus_determined = True
+            bonus_reasons.append(f"{d.strftime('%a %b %d')}: {status}")
+        elif status in BONUS_QUALIFYING:
+            bonus_determined = True
+        elif status:
+            bonus = False
+            bonus_determined = True
+            bonus_reasons.append(f"{d.strftime('%a %b %d')}: {status}")
+
+        total_hrs = (actual_hrs or Decimal('0')) + (coded_hrs or Decimal('0'))
+
+        cells.append({
+            'day': _DAY_ABBR[i],
+            'date': d,
+            'is_today': d == today,
+            'status': status,
+            'status_color': STATUS_COLORS.get(status, '') if status else '',
+            'is_off': is_off,
+            'sched_display': _fmt(sched_hrs),
+            'logged_display': _fmt(actual_hrs),
+            'coded_display': _fmt(coded_hrs),
+            'total_display': _fmt(total_hrs) if (actual_hrs or coded_hrs) else '—',
+        })
+
+    if bonus is False:
+        bonus_display = 'No'
+    elif bonus_determined:
+        bonus_display = 'Yes'
+    else:
+        bonus_display = '—'
+
+    return render(request, 'agent/my_adherence.html', {
+        'agent': agent,
+        'cells': cells,
+        'week_start': week_start,
+        'week_end': week_end,
+        'today': today,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'sched_total': _fmt(sched_total),
+        'logged_total': _fmt(logged_total),
+        'coded_total': _fmt(coded_total),
+        'adjusted_total': _fmt(logged_total + coded_total),
+        'bonus': bonus_display,
+        'bonus_reasons': bonus_reasons,
+    })
+

@@ -5,6 +5,9 @@ from django.shortcuts import redirect
 INACTIVITY_TIMEOUT = 4 * 3600   # 4 hours
 ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 
+# URL path prefixes agents are allowed to access
+_AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
+
 
 class SessionTimeoutMiddleware:
     def __init__(self, get_response):
@@ -43,3 +46,25 @@ class SessionTimeoutMiddleware:
             return JsonResponse({'expired': True}, status=401)
 
         return redirect(f'/accounts/login/?expired=1&next={next_url}')
+
+
+class AgentAccessMiddleware:
+    """
+    Sets request.is_agent for template use.
+    Redirects agent-role users away from staff-only pages.
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        request.is_agent = False
+        if request.user.is_authenticated:
+            try:
+                profile = request.user.agent
+                if profile.role == 'agent':
+                    request.is_agent = True
+                    if not any(request.path.startswith(p) for p in _AGENT_ALLOWED):
+                        return redirect('agent_my_shifts')
+            except Exception:
+                pass
+        return self.get_response(request)

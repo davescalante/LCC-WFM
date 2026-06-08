@@ -54,6 +54,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'scheduling.middleware.ApplyScheduledRoleChangesMiddleware',
     'wfm.middleware.SessionTimeoutMiddleware',
+    'wfm.middleware.AgentAccessMiddleware',
 ]
 
 ROOT_URLCONF = 'wfm.urls'

@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+{% block title %} - My OT Shifts{% endblock %}
+{% block content %}
+<h1>My OT Shifts</h1>
+
+<div class="card">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">&larr; Previous</a>
+        <span style="font-weight:600;color:#1a3a5c;font-size:15px;">
+            {{ week_start|date:"M j" }} &ndash; {{ week_end|date:"M j, Y" }}
+        </span>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">Next &rarr;</a>
+    </div>
+
+    {% if ot_shifts %}
+    <table>
+        <thead>
+            <tr>
+                <th>Day</th>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Incentive</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for shift in ot_shifts %}
+            <tr {% if shift.date == today %}style="background:#dbeafe !important;"{% endif %}>
+                <td style="font-weight:600;color:#374151;">
+                    {{ shift.date|date:"l" }}
+                    {% if shift.date == today %}<span style="font-size:10px;font-weight:700;color:#2563eb;margin-left:6px;letter-spacing:.5px;">TODAY</span>{% endif %}
+                </td>
+                <td style="color:#6b7280;">{{ shift.date|date:"M j" }}</td>
+                <td style="white-space:nowrap;">{{ shift.start_time|time:"H:i" }} &ndash; {{ shift.end_time|time:"H:i" }}</td>
+                <td>
+                    {% if shift.incentive_type == 'none' %}
+                        <span style="color:#9ca3af;">None</span>
+                    {% elif shift.incentive_type == 'time_and_a_half' %}
+                        Time &amp; a Half (1.5&times;)
+                    {% elif shift.incentive_type == 'power_hour' %}
+                        Power Hour (2&times;)
+                    {% endif %}
+                </td>
+                <td>
+                    {% if shift.status == 'completed' %}
+                        <span class="badge badge-green">Completed</span>
+                    {% elif shift.status == 'no_show' %}
+                        <span class="badge badge-red">No Show</span>
+                    {% elif shift.status == 'cancelled' %}
+                        <span class="badge" style="background:#e5e7eb;color:#6b7280;">Cancelled</span>
+                    {% else %}
+                        <span class="badge badge-yellow">Pending</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center;padding:48px;color:#9ca3af;font-size:14px;">
+        No overtime shifts scheduled for this week.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

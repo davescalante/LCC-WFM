@@ -62,7 +62,7 @@
                 {% if user_form.password.help_text %}<p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">{{ user_form.password.help_text }}</p>{% endif %}
             </div>
             <div id="no-login-notice" style="display:none;background:#fff3cd;color:#856404;padding:10px 14px;border-radius:4px;font-size:13px;">
-                Website login is restricted to <strong>Supervisor</strong> and <strong>Coordinator</strong> role types. This user will not be able to log in.
+                Website login is not available for this role type. This user will not be able to log in.
             </div>
         </div>
 
@@ -372,7 +372,8 @@ function removePeriod(pk) {
     function updateLoginAccess() {
         const role = document.getElementById('id_role').value;
         const roleType = document.getElementById('id_role_type').value;
-        const eligible = role === 'admin' && LOGIN_ELIGIBLE_TYPES.includes(roleType);
+        // Agents always get login; admins only if supervisor/coordinator
+        const eligible = role === 'agent' || (role === 'admin' && LOGIN_ELIGIBLE_TYPES.includes(roleType));
         document.getElementById('password-section').style.display = eligible ? '' : 'none';
         document.getElementById('no-login-notice').style.display = eligible ? 'none' : '';
     }

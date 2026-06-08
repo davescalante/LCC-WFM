@@ -254,7 +254,7 @@ def agent_create(request):
             changed_by=request.user,
         )
         _save_five9_profiles(request, agent)
-        if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
+        if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator'):
             user.set_unusable_password()
             user.save()
         start_date = request.POST.get('start_date', '').strip()
@@ -334,7 +334,7 @@ def agent_edit(request, pk):
                     billing_status=agent.billing_status,
                     effective_from=today, changed_by=request.user,
                 )
-            if not (agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')):
+            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator'):
                 user.set_unusable_password()
                 user.save()
 
@@ -2272,3 +2272,104 @@ def cancel_role_change(request, pk):
     )
     messages.success(request, "Scheduled role change cancelled.")
     return redirect('agent_detail', pk=src.agent_id)
+
+
+# ── Agent self-service views ───────────────────────────────────────────────────
+
+_DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+
+def _agent_week_start(request):
+    today = timezone.localdate()
+    default = today - timedelta(days=today.weekday())
+    raw = request.GET.get('week_start')
+    try:
+        ws = date.fromisoformat(raw) if raw else default
+        ws -= timedelta(days=ws.weekday())
+        return ws
+    except (ValueError, TypeError):
+        return default
+
+
+def _best_shift_template(all_templates, agent_id, d):
+    dow = d.weekday()
+    best = None
+    for t in all_templates:
+        if t.agent_id != agent_id or t.day_of_week != dow:
+            continue
+        if t.effective_from is not None and t.effective_from > d:
+            continue
+        if t.effective_until is not None and t.effective_until < d:
+            continue
+        if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
+            best = t
+    return best
+
+
+@login_required
+def agent_my_shifts(request):
+    try:
+        agent = request.user.agent
+    except Exception:
+        return redirect('dashboard')
+    if agent.role != 'agent':
+        return redirect('dashboard')
+
+    today = timezone.localdate()
+    week_start = _agent_week_start(request)
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+
+    overrides = {s.date: s for s in Shift.objects.filter(agent=agent, date__in=week_dates)}
+    all_templates = list(ShiftTemplate.objects.filter(agent=agent))
+
+    days = []
+    for i, d in enumerate(week_dates):
+        override = overrides.get(d)
+        tmpl = None if override else _best_shift_template(all_templates, agent.pk, d)
+        src = override or tmpl
+        days.append({
+            'name': _DAY_NAMES[i],
+            'date': d,
+            'is_today': d == today,
+            'is_off': src.is_off if src else None,
+            'start': src.start_time.strftime('%H:%M') if src and src.start_time and not src.is_off else '',
+            'end': src.end_time.strftime('%H:%M') if src and src.end_time and not src.is_off else '',
+            'no_data': src is None,
+        })
+
+    return render(request, 'agent/my_shifts.html', {
+        'agent': agent,
+        'days': days,
+        'week_start': week_start,
+        'week_end': week_dates[-1],
+        'today': today,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+    })
+
+
+@login_required
+def agent_my_ot_shifts(request):
+    try:
+        agent = request.user.agent
+    except Exception:
+        return redirect('dashboard')
+    if agent.role != 'agent':
+        return redirect('dashboard')
+
+    today = timezone.localdate()
+    week_start = _agent_week_start(request)
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    ot_shifts = list(
+        OvertimeShift.objects.filter(agent=agent, date__in=week_dates).order_by('date', 'start_time')
+    )
+
+    return render(request, 'agent/my_ot_shifts.html', {
+        'agent': agent,
+        'ot_shifts': ot_shifts,
+        'week_start': week_start,
+        'week_end': week_dates[-1],
+        'today': today,
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+    })

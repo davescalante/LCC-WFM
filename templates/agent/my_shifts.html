@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %} - My Shifts{% endblock %}
+{% block content %}
+<h1>My Shifts</h1>
+
+<div class="card">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">&larr; Previous</a>
+        <span style="font-weight:600;color:#1a3a5c;font-size:15px;">
+            {{ week_start|date:"M j" }} &ndash; {{ week_end|date:"M j, Y" }}
+        </span>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">Next &rarr;</a>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Day</th>
+                <th>Date</th>
+                <th>Schedule</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for day in days %}
+            <tr {% if day.is_today %}style="background:#dbeafe !important;"{% endif %}>
+                <td style="font-weight:600;color:#374151;">
+                    {{ day.name }}
+                    {% if day.is_today %}<span style="font-size:10px;font-weight:700;color:#2563eb;margin-left:6px;letter-spacing:.5px;">TODAY</span>{% endif %}
+                </td>
+                <td style="color:#6b7280;">{{ day.date|date:"M j" }}</td>
+                <td>
+                    {% if day.no_data %}
+                        <span style="color:#bbb;">—</span>
+                    {% elif day.is_off %}
+                        <span style="color:#9ca3af;font-style:italic;">Day Off</span>
+                    {% else %}
+                        <span style="font-weight:500;">{{ day.start }} &ndash; {{ day.end }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

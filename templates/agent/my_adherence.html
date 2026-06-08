@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% block title %} - My Adherence{% endblock %}
+{% block content %}
+<h1>My Adherence</h1>
+
+<div class="card" style="padding:0;">
+    <div style="padding:16px 20px 12px;">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <a href="?week_start={{ prev_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">&larr; Previous</a>
+            <span style="font-weight:600;color:#1a3a5c;font-size:15px;">
+                {{ week_start|date:"M j" }} &ndash; {{ week_end|date:"M j, Y" }}
+            </span>
+            <a href="?week_start={{ next_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">Next &rarr;</a>
+        </div>
+    </div>
+
+    <div style="overflow-x:auto;">
+    <table style="min-width:700px;">
+        <thead>
+            <tr>
+                <th style="width:110px;background:#e8edf4;position:sticky;left:0;z-index:2;"></th>
+                {% for cell in cells %}
+                <th style="text-align:center;min-width:90px;{% if cell.is_today %}background:#bfdbfe;color:#1e3a8a;{% endif %}">
+                    {% if cell.is_today %}<div style="font-size:8px;font-weight:800;letter-spacing:.8px;color:#2563eb;margin-bottom:1px;">TODAY</div>{% endif %}
+                    <span style="font-size:13px;">{{ cell.day }}</span><br>
+                    <span style="font-weight:400;font-size:11px;color:#888;">{{ cell.date|date:"M j" }}</span>
+                </th>
+                {% endfor %}
+                <th style="text-align:center;min-width:72px;border-left:2px solid #b6c2d4;background:#e8edf4;">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="font-weight:600;color:#555;font-size:13px;background:#f8fafc;position:sticky;left:0;border-right:1px solid #e5e7eb;">Status</td>
+                {% for cell in cells %}
+                <td style="text-align:center;background:{% if cell.status_color %}{{ cell.status_color }}{% elif cell.is_off %}#f0f0f0{% elif cell.is_today %}#dbeafe{% else %}#fff{% endif %};">
+                    {% if cell.status %}
+                        <span style="font-weight:700;font-size:13px;">{{ cell.status }}</span>
+                    {% elif cell.is_off %}
+                        <span style="color:#aaa;font-size:12px;font-style:italic;">Off</span>
+                    {% else %}
+                        <span style="color:#ddd;">&mdash;</span>
+                    {% endif %}
+                </td>
+                {% endfor %}
+                <td style="border-left:2px solid #b6c2d4;background:#f8fafc;"></td>
+            </tr>
+            <tr>
+                <td style="font-weight:600;color:#555;font-size:13px;background:#f8fafc;position:sticky;left:0;border-right:1px solid #e5e7eb;">Scheduled</td>
+                {% for cell in cells %}
+                <td style="text-align:center;font-size:13px;color:#374151;{% if cell.is_today %}background:#dbeafe;{% endif %}">{{ cell.sched_display }}</td>
+                {% endfor %}
+                <td style="text-align:center;font-size:13px;font-weight:600;border-left:2px solid #b6c2d4;background:#f8fafc;">{{ sched_total }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight:600;color:#555;font-size:13px;background:#f8fafc;position:sticky;left:0;border-right:1px solid #e5e7eb;">Logged In</td>
+                {% for cell in cells %}
+                <td style="text-align:center;font-size:13px;color:#374151;{% if cell.is_today %}background:#dbeafe;{% endif %}">{{ cell.logged_display }}</td>
+                {% endfor %}
+                <td style="text-align:center;font-size:13px;font-weight:600;border-left:2px solid #b6c2d4;background:#f8fafc;">{{ logged_total }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight:600;color:#555;font-size:13px;background:#f8fafc;position:sticky;left:0;border-right:1px solid #e5e7eb;">Codings</td>
+                {% for cell in cells %}
+                <td style="text-align:center;font-size:13px;color:#374151;{% if cell.is_today %}background:#dbeafe;{% endif %}">{{ cell.coded_display }}</td>
+                {% endfor %}
+                <td style="text-align:center;font-size:13px;font-weight:600;border-left:2px solid #b6c2d4;background:#f8fafc;">{{ coded_total }}</td>
+            </tr>
+            <tr style="background:#f0f4f8;">
+                <td style="font-weight:700;color:#1a3a5c;font-size:13px;background:#e8edf4;position:sticky;left:0;border-right:1px solid #e5e7eb;">Total Hours</td>
+                {% for cell in cells %}
+                <td style="text-align:center;font-size:13px;font-weight:700;color:#1a3a5c;{% if cell.is_today %}background:#dbeafe;{% endif %}">{{ cell.total_display }}</td>
+                {% endfor %}
+                <td style="text-align:center;font-size:13px;font-weight:700;color:#1a3a5c;border-left:2px solid #b6c2d4;background:#e8edf4;">{{ adjusted_total }}</td>
+            </tr>
+        </tbody>
+    </table>
+    </div>
+
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span style="font-weight:600;color:#555;font-size:13px;">Adherence Bonus:</span>
+        {% if bonus == 'Yes' %}
+            <span class="badge badge-green" style="font-size:13px;padding:4px 14px;">Qualified</span>
+        {% elif bonus == 'No' %}
+            <span class="badge badge-red" style="font-size:13px;padding:4px 14px;">Disqualified</span>
+            {% if bonus_reasons %}
+            <span style="font-size:12px;color:#888;">{{ bonus_reasons|join:" &bull; " }}</span>
+            {% endif %}
+        {% else %}
+            <span style="color:#888;font-size:13px;">&mdash; Not yet determined</span>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

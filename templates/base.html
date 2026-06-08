@@ -51,6 +51,11 @@
 <body>
     <nav>
         <div class="brand">LCC WFM</div>
+        {% if request.is_agent %}
+        <a href="{% url 'agent_my_shifts' %}">My Shifts</a>
+        <a href="{% url 'agent_my_ot_shifts' %}">My OT Shifts</a>
+        <a href="{% url 'agent_my_adherence' %}">My Adherence</a>
+        {% else %}
         <a href="{% url 'dashboard' %}">Dashboard</a>
         <a href="{% url 'agent_list' %}">Users</a>
         <a href="{% url 'shift_list' %}">Shifts</a>
@@ -62,6 +67,7 @@
         <a href="{% url 'erlang_reports' %}">Reports</a>
         <a href="{% url 'records_attendance' %}">Records</a>
         <a href="{% url 'activity_log' %}">Activity</a>
+        {% endif %}
         {% if request.user.is_authenticated %}
         <div class="nav-user">
             <span class="nav-username">{{ request.user.get_full_name|default:request.user.username }}</span>

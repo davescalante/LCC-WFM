@@ -30,4 +30,6 @@ urlpatterns = [
     path('records/roles/', views.records_role_log, name='records_role_log'),
     path('agents/<int:pk>/schedule-role-change/', views.schedule_role_change, name='schedule_role_change'),
     path('role-changes/<int:pk>/cancel/', views.cancel_role_change, name='cancel_role_change'),
+    path('agent/my-shifts/', views.agent_my_shifts, name='agent_my_shifts'),
+    path('agent/my-ot-shifts/', views.agent_my_ot_shifts, name='agent_my_ot_shifts'),
 ]
