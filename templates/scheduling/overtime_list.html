@@ -131,10 +131,10 @@
 </div>
 
 <div class="card" style="overflow-x:auto;padding:0;">
-<table style="table-layout:auto;min-width:900px;border-collapse:collapse;">
+<table id="ot-table" style="table-layout:auto;min-width:900px;border-collapse:collapse;">
     <thead>
         <tr style="background:#f0f4f8;">
-            <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;background:#f0f4f8;z-index:2;">Agent</th>
+            <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;top:0;background:#f0f4f8;z-index:8;">Agent</th>
             {% for d in week_dates %}
             <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;"
                 {% if d == today %}class="col-today-th"{% endif %}>
@@ -302,6 +302,7 @@
 </div>
 
 <style>
+#ot-table thead th { position: sticky; top: 0; z-index: 3; }
 .ot-entry:hover .ot-row-actions { display: flex !important; }
 .ot-cancelled .ot-row-actions { opacity: 0.8; }
 
