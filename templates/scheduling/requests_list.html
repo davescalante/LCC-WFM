@@ -10,6 +10,13 @@
             <input type="text" name="agent_search" value="{{ filters.agent_search }}" placeholder="Search name…" style="width:170px;padding:6px 10px;font-size:13px;margin-bottom:0;">
         </div>
         <div>
+            <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:3px;">Supervisor</label>
+            <select name="supervisor" style="padding:6px 10px;font-size:13px;margin-bottom:0;">
+                <option value="">All supervisors</option>
+                {% for sup in supervisors %}<option value="{{ sup.pk }}" {% if filters.supervisor == sup.pk|stringformat:"s" %}selected{% endif %}>{{ sup.agent_name }}</option>{% endfor %}
+            </select>
+        </div>
+        <div>
             <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:3px;">Type</label>
             <select name="type" style="padding:6px 10px;font-size:13px;margin-bottom:0;">
                 <option value="">All types</option>

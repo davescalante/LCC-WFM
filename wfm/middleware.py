@@ -70,10 +70,9 @@ class AgentAccessMiddleware:
                     ).count()
                 else:
                     from scheduling.models import AgentRequest
-                    badge_qs = AgentRequest.objects.filter(status='pending', supervisor_read=False)
-                    if profile.role_type == 'supervisor':
-                        badge_qs = badge_qs.filter(agent__supervisor=profile)
-                    request.supervisor_request_badge = badge_qs.count()
+                    request.supervisor_request_badge = AgentRequest.objects.filter(
+                        status='pending', supervisor_read=False
+                    ).count()
             except Exception:
                 pass
 

@@ -2452,8 +2452,10 @@ def requests_list(request):
         'agent__user', 'agent__supervisor__user', 'reviewed_by', 'done_by'
     ).order_by('-submitted_at')
 
-    if viewer and viewer.role_type == 'supervisor':
-        qs = qs.filter(agent__supervisor=viewer)
+    # Build supervisor list for filter dropdown (agents with supervisor role_type)
+    supervisors = Agent.objects.filter(
+        role='admin', role_type='supervisor'
+    ).select_related('user').order_by('agent_name')
 
     # Filters
     agent_search = request.GET.get('agent_search', '').strip()
@@ -2461,6 +2463,13 @@ def requests_list(request):
     status_filter = request.GET.get('status', '').strip()
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
+    supervisor_filter = request.GET.get('supervisor', '').strip()
+
+    if supervisor_filter:
+        try:
+            qs = qs.filter(agent__supervisor_id=int(supervisor_filter))
+        except ValueError:
+            pass
 
     if agent_search:
         from django.db.models import Q as _Q
@@ -2501,12 +2510,14 @@ def requests_list(request):
         'done': done,
         'type_choices': AgentRequest.REQUEST_TYPE_CHOICES,
         'status_choices': AgentRequest.STATUS_CHOICES,
+        'supervisors': supervisors,
         'filters': {
             'agent_search': agent_search,
             'type': type_filter,
             'status': status_filter,
             'date_from': date_from,
             'date_to': date_to,
+            'supervisor': supervisor_filter,
         },
     })
 
