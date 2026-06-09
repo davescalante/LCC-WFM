@@ -270,6 +270,7 @@ function addFive9Row() {
             </button>
         </td>`;
     tbody.appendChild(tr);
+    tr.querySelectorAll('input[type="password"]').forEach(applyPwToggle);
 }
 
 function removeFive9(pk) {
@@ -378,7 +379,35 @@ function removePeriod(pk) {
         document.getElementById('no-login-notice').style.display = eligible ? 'none' : '';
     }
 
+    var EYE_OPEN  = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+    var EYE_SHUT = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+    function applyPwToggle(inp) {
+        if (inp.dataset.pwToggled) return;
+        inp.dataset.pwToggled = '1';
+        inp.style.paddingRight = '32px';
+        var inTable = !!inp.closest('td');
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'position:relative;' + (inTable ? 'display:inline-block;' : 'display:block;margin-bottom:14px;');
+        inp.parentNode.insertBefore(wrap, inp);
+        wrap.appendChild(inp);
+        if (!inTable) inp.style.marginBottom = '0';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('aria-label', 'Show password');
+        btn.style.cssText = 'position:absolute;right:7px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:#888;line-height:0;';
+        btn.innerHTML = EYE_OPEN;
+        btn.onmouseenter = function() { btn.style.color='#1a3a5c'; };
+        btn.onmouseleave = function() { btn.style.color='#888'; };
+        btn.onclick = function() {
+            if (inp.type === 'password') { inp.type = 'text';     btn.innerHTML = EYE_SHUT; }
+            else                         { inp.type = 'password'; btn.innerHTML = EYE_OPEN; }
+        };
+        wrap.appendChild(btn);
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('input[type="password"]').forEach(applyPwToggle);
         updateRoleTypes();
         document.getElementById('id_role').addEventListener('change', updateRoleTypes);
         document.getElementById('id_role_type').addEventListener('change', updateLoginAccess);
