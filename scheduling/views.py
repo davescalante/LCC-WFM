@@ -2529,8 +2529,6 @@ def request_detail(request, pk):
         viewer = request.user.agent
         if viewer.role == 'agent':
             return redirect('agent_my_requests')
-        if viewer.role_type == 'supervisor' and ar.agent.supervisor != viewer:
-            return redirect('requests_list')
     except Exception:
         pass
     return render(request, 'scheduling/request_detail.html', {
