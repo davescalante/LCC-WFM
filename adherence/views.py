@@ -414,7 +414,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             # Scheduled hours only apply when a shift is set up
             if is_scheduled_day:
-                if status in ('VTO', 'LOA'):
+                if status in ('VTO', 'LOA', 'V'):
                     effective_sched = Decimal('0')
                 elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
                     effective_sched = min(actual_hrs, cal_sched)
@@ -975,7 +975,7 @@ def payroll_export(request):
                     raw_sched = base_sched + ot_hrs
                     status = record.status if record else ''
                     actual_hrs = record.actual_hours if record else None
-                    if status in ('VTO', 'LOA'):
+                    if status in ('VTO', 'LOA', 'V'):
                         effective_sched = Decimal('0')
                     elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
                         effective_sched = min(actual_hrs, raw_sched)
@@ -1485,13 +1485,13 @@ def agent_my_adherence(request):
         record = records.get(d)
         is_off = src.is_off if src else False
 
-        if src and not is_off and getattr(src, 'start_time', None) and getattr(src, 'end_time', None):
+        status = record.status if record else ''
+
+        if src and not is_off and getattr(src, 'start_time', None) and getattr(src, 'end_time', None) and status not in ('VTO', 'LOA', 'V'):
             sched_hrs = _scheduled_hours(src)
             sched_total += sched_hrs
         else:
             sched_hrs = None
-
-        status = record.status if record else ''
         actual_hrs = record.actual_hours if record else None
         coded_hrs = codings_per_day.get(d) or None
 

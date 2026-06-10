@@ -2628,7 +2628,33 @@ def request_approve(request, pk):
                     )
                     actions.append(f"ShiftTemplate: {_DAY_NAMES[ar.current_day_off]} set as working from {eff_mon}")
 
-    elif ar.request_type in ('loa', 'schedule_change'):
+    elif ar.request_type == 'loa' and ar.loa_start and ar.loa_end:
+        from adherence.models import AdherenceRecord
+        d = ar.loa_start
+        count = 0
+        while d <= ar.loa_end:
+            override = Shift.objects.filter(agent=agent, date=d).first()
+            if override:
+                day_is_off = override.is_off
+            else:
+                tmpl = ShiftTemplate.objects.filter(
+                    agent=agent,
+                    day_of_week=d.weekday(),
+                ).filter(
+                    Q(effective_from__isnull=True) | Q(effective_from__lte=d)
+                ).filter(
+                    Q(effective_until__isnull=True) | Q(effective_until__gte=d)
+                ).order_by(F('effective_from').desc(nulls_last=True)).first()
+                day_is_off = tmpl.is_off if tmpl else True
+            if not day_is_off:
+                AdherenceRecord.objects.update_or_create(
+                    agent=agent, date=d, defaults={'status': 'LOA'}
+                )
+                count += 1
+            d += timedelta(days=1)
+        actions.append(f"Set LOA status for {count} scheduled working day(s): {ar.loa_start} – {ar.loa_end}")
+
+    elif ar.request_type == 'schedule_change':
         actions.append("Manual action required: please update the agent's records in the system.")
 
     ar.status = 'approved'
@@ -2641,7 +2667,7 @@ def request_approve(request, pk):
     log_action(request.user, f'Approved agent request: {ar.get_request_type_display()}',
                ar.summary(), agent=agent)
 
-    if ar.request_type in ('loa', 'schedule_change'):
+    if ar.request_type == 'schedule_change':
         messages.warning(request, "Request approved. Manual update required — please make the change in the system.")
     else:
         messages.success(request, "Request approved.")
