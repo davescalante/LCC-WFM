@@ -18,6 +18,7 @@ class AdherenceRecord(models.Model):
         ('P+VTO',   'P+VTO — Present then VTO'),
         ('T+VTO',   'T+VTO — Tardy then VTO'),
         ('I',       'I — Incomplete Shift'),
+        ('T+I',     'T+I — Tardy and Incomplete'),
         ('Quit',    'Quit'),
         ('Baja',    'Baja — Terminated'),
         ('V',       'V — Vacation'),

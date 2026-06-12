@@ -1802,7 +1802,7 @@ def agent_history(request, pk):
         bonus = True
         bonus_det = False
         BONUS_Q = {'P', 'OT', 'MUT', 'VTO', 'P+VTO'}
-        BONUS_DQ = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA', 'S'}
+        BONUS_DQ = {'Absent', 'NCNS', 'T', 'T+VTO', 'T+I', 'I', 'LOA', 'S'}
         for d in week_dates:
             r = record_map.get(d)
             c_hrs = coding_map.get(d, Decimal('0'))

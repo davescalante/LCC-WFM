@@ -18,7 +18,7 @@ from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, D
 
 
 BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO', 'V'}
-BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'I', 'LOA', 'S'}
+BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'T+I', 'I', 'LOA', 'S'}
 VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
 
 STATUS_COLORS = {
@@ -32,6 +32,7 @@ STATUS_COLORS = {
     'Absent':'#ffebee',
     'NCNS':  '#ffcdd2',
     'I':     '#fce4ec',
+    'T+I':   '#fde8d8',
     'Quit':  '#eeeeee',
     'Baja':  '#eeeeee',
     'V':     '#e3f2fd',
@@ -129,7 +130,7 @@ def _block_hours(start_time, end_time):
 
 # ── Cost of Schedule ──────────────────────────────────────────────────────────
 
-COS_INCLUDE_STATUSES = frozenset({'P', 'Absent', 'NCNS', 'IMSS', 'T', 'OT', 'MUT', 'S'})
+COS_INCLUDE_STATUSES = frozenset({'P', 'Absent', 'NCNS', 'IMSS', 'T', 'T+I', 'OT', 'MUT', 'S'})
 _DEFAULT_TARDY = Decimal('0.25')  # 15-minute default if no actual hours logged
 
 
@@ -182,7 +183,7 @@ def _calculate_cos(rows, week_dates):
             if status in ('Absent', 'NCNS', 'IMSS', 'S'):
                 raw_loss += sched_hrs
                 absent_count += 1
-            elif status == 'T':
+            elif status in ('T', 'T+I'):
                 lost = max(Decimal('0'), sched_hrs - actual_hrs) if actual_hrs > 0 else _DEFAULT_TARDY
                 raw_loss += lost
                 tardy_loss += lost
@@ -424,13 +425,13 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             # Present/A/T/I counts and bonus apply whenever a status is set
             if status:
-                if status in ('P', 'OT', 'MUT', 'VTO', 'P+VTO', 'T', 'T+VTO', 'I'):
+                if status in ('P', 'OT', 'MUT', 'VTO', 'P+VTO', 'T', 'T+VTO', 'T+I', 'I'):
                     total_present += 1
                 elif status in ('Absent', 'NCNS', 'S'):
                     total_absent += 1
-                if status in ('T', 'T+VTO'):
+                if status in ('T', 'T+VTO', 'T+I'):
                     total_tardy += 1
-                if status == 'I':
+                if status in ('I', 'T+I'):
                     total_incomplete += 1
 
                 if status in BONUS_DISQUALIFYING:

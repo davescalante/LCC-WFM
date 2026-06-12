@@ -492,7 +492,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 const STATUS_COLORS = {
     'P':'#e8f5e9','OT':'#c8e6c9','MUT':'#dcedc8','VTO':'#f1f8e9','P+VTO':'#e8f5e9',
     'T':'#fff3e0','T+VTO':'#fff8e1','Absent':'#ffebee','NCNS':'#ffcdd2','S':'#ffccbc',
-    'I':'#fce4ec','Quit':'#eeeeee','Baja':'#eeeeee','V':'#e3f2fd','IMSS':'#e0f2f1',
+    'I':'#fce4ec','T+I':'#fde8d8','Quit':'#eeeeee','Baja':'#eeeeee','V':'#e3f2fd','IMSS':'#e0f2f1',
 };
 
 function csrfToken() {
@@ -724,7 +724,7 @@ document.addEventListener('keydown', function(e) { if (e.key === 'Escape') close
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Cost of Schedule ──────────────────────────────────────────────────────────
-const _COS_INCLUDE = new Set(['P', 'Absent', 'NCNS', 'IMSS', 'T', 'OT', 'MUT', 'S']);
+const _COS_INCLUDE = new Set(['P', 'Absent', 'NCNS', 'IMSS', 'T', 'T+I', 'OT', 'MUT', 'S']);
 const _COS_DATES = [{% for d in week_dates %}'{{ d|date:"Y-m-d" }}'{% if not forloop.last %},{% endif %}{% endfor %}];
 const _DEFAULT_TARDY = 0.25;
 
@@ -758,7 +758,7 @@ function recomputeCoS() {
             sched += schedHrs;
             if (['Absent', 'NCNS', 'IMSS', 'S'].includes(status)) {
                 rawLoss += schedHrs; absent++;
-            } else if (status === 'T') {
+            } else if (status === 'T' || status === 'T+I') {
                 const lost = actualHrs > 0 ? Math.max(0, schedHrs - actualHrs) : _DEFAULT_TARDY;
                 rawLoss += lost; tardyHrs += lost; tardyCount++;
             } else if (['OT', 'MUT'].includes(status)) {
