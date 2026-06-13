@@ -17,6 +17,35 @@ from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlo
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 
 
+def _refresh_actual_hours(agent_id, coding_date):
+    """Recalculate AdherenceRecord.actual_hours after a coding change.
+
+    When codings are added or removed for a date that already has a daily
+    upload, the not-ready allowance (12.5% of login+codings) changes, so the
+    stored actual_hours must be recomputed to stay consistent with the Daily
+    Hours tab.
+    """
+    dah = DailyAgentHours.objects.filter(
+        upload__date=coding_date, agent_id=agent_id
+    ).first()
+    if not dah:
+        return
+    coded_secs = sum(
+        c.total_seconds_count()
+        for c in Coding.objects.filter(agent_id=agent_id, date=coding_date)
+    )
+    total_secs = dah.login_seconds + coded_secs
+    allowance_secs = int(total_secs * 0.125)
+    excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
+    login_final_secs = max(0, dah.login_seconds - excess_secs)
+    final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
+    AdherenceRecord.objects.update_or_create(
+        agent_id=agent_id,
+        date=coding_date,
+        defaults={'actual_hours': final_hours},
+    )
+
+
 BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO', 'V'}
 BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'T+I', 'I', 'LOA', 'S'}
 VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
@@ -683,6 +712,8 @@ def add_coding_ajax(request):
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=400)
 
+    _refresh_actual_hours(agent_id, coding.date)
+
     agent = get_object_or_404(Agent, pk=agent_id)
     log_action(request.user, 'Added coding',
                f'{agent} — {date_str}: {coding.start_time.strftime("%H:%M")}–{coding.end_time.strftime("%H:%M")}',
@@ -705,10 +736,13 @@ def delete_coding_ajax(request):
     coding_id = data.get('coding_id')
     coding = Coding.objects.filter(pk=coding_id).select_related('agent').first()
     if coding:
+        agent_id = coding.agent_id
+        coding_date = coding.date
         log_action(request.user, 'Deleted coding',
                    f'{coding.agent} — {coding.date}: {coding.start_time.strftime("%H:%M")}–{coding.end_time.strftime("%H:%M")}',
                    agent=coding.agent)
         coding.delete()
+        _refresh_actual_hours(agent_id, coding_date)
     return JsonResponse({'ok': True})
 
 
@@ -827,10 +861,15 @@ def codings_week(request):
                     end_time=end_time,
                     notes=notes,
                 )
+                _refresh_actual_hours(agent_id, coding_date)
 
         elif action == 'delete':
             coding_id = request.POST.get('coding_id')
-            Coding.objects.filter(pk=coding_id).delete()
+            coding = Coding.objects.filter(pk=coding_id).first()
+            if coding:
+                agent_id, coding_date = coding.agent_id, coding.date
+                coding.delete()
+                _refresh_actual_hours(agent_id, coding_date)
 
         return redirect(reverse('codings_week') + f'?week_start={week_start.isoformat()}')
 

@@ -2559,6 +2559,7 @@ def request_approve(request, pk):
 
     if ar.request_type == 'coding':
         from adherence.models import Coding
+        from adherence.views import _refresh_actual_hours
         Coding.objects.create(
             agent=agent,
             date=ar.coding_date,
@@ -2566,6 +2567,7 @@ def request_approve(request, pk):
             end_time=ar.coding_end_time,
             notes=ar.notes or '',
         )
+        _refresh_actual_hours(agent.pk, ar.coding_date)
         actions.append(f"Coding entry created: {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
 
     elif ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
