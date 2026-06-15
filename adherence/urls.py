@@ -9,6 +9,7 @@ urlpatterns = [
     path('save-cell/', views.save_adherence_cell, name='save_adherence_cell'),
     path('save-commission/', views.save_commission, name='save_commission'),
     path('add-coding/', views.add_coding_ajax, name='add_coding_ajax'),
+    path('edit-coding/', views.edit_coding_ajax, name='edit_coding_ajax'),
     path('delete-coding/', views.delete_coding_ajax, name='delete_coding_ajax'),
     path('daily/upload/', views.upload_daily_file, name='upload_daily_file'),
     path('daily/delete/', views.delete_daily_upload_ajax, name='delete_daily_upload'),

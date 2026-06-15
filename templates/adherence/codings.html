@@ -147,10 +147,12 @@ tbody td.col-today       { background: #dbeafe !important; box-shadow: inset 1px
 .coding-entry-time  { font-weight: 600; color: #333; white-space: nowrap; }
 .coding-entry-dur   { color: #888; font-family: monospace; font-size: 11px; }
 .coding-entry-notes { color: #555; font-size: 10px; margin-top: 1px; }
-.coding-entry-del   {
+.coding-entry-del, .coding-entry-edit {
     border: none; background: none; color: #ccc;
-    cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1;
+    cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1;
 }
+.coding-entry-edit:hover { color: #1a3a5c; }
+.coding-entry-del:hover  { color: #dc2626; }
 
 /* ── Cell total ─────────────────────────────────────────────────────────────── */
 .cell-total-line {
@@ -222,9 +224,8 @@ tbody tr.row-a:hover .fc { background: #dbeafe; }
 tbody tr.row-b:hover .fc { background: #dbeafe; }
 
 /* ── Button hover states ────────────────────────────────────────────────────── */
-.cod-add-btn:hover       { background: #eaf2ff; border-color: #93c5fd; color: #1e40af; }
-.coding-entry-del:hover  { color: #dc2626; }
-.cod-save-btn:hover      { background: #254e7a; }
+.cod-add-btn:hover  { background: #eaf2ff; border-color: #93c5fd; color: #1e40af; }
+.cod-save-btn:hover { background: #254e7a; }
 
 /* ── Today label ────────────────────────────────────────────────────────────── */
 .day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
@@ -289,15 +290,25 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
                 <!-- Existing entries -->
                 <div id="cell-entries-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}">
                 {% for entry in cell.entries %}
-                <div id="coding-entry-{{ entry.pk }}" class="coding-entry-card">
-                    <div>
-                        <div class="coding-entry-time">{{ entry.start_time|time:"H:i" }}–{{ entry.end_time|time:"H:i" }}</div>
-                        <div class="entry-duration coding-entry-dur">{{ entry.total_hhmmss }}</div>
-                        {% if entry.notes %}<div class="coding-entry-notes">{{ entry.notes|truncatechars:24 }}</div>{% endif %}
+                <div id="coding-entry-{{ entry.pk }}" class="coding-entry-card"
+                     data-start="{{ entry.start_time|time:'H:i:s' }}"
+                     data-end="{{ entry.end_time|time:'H:i:s' }}"
+                     data-notes="{{ entry.notes|escape }}">
+                    <div class="coding-entry-view">
+                        <div>
+                            <div class="coding-entry-time">{{ entry.start_time|time:"H:i" }}–{{ entry.end_time|time:"H:i" }}</div>
+                            <div class="entry-duration coding-entry-dur">{{ entry.total_hhmmss }}</div>
+                            {% if entry.notes %}<div class="coding-entry-notes">{{ entry.notes|truncatechars:24 }}</div>{% endif %}
+                        </div>
+                        <div style="display:flex;gap:2px;flex-shrink:0;">
+                            <button class="coding-entry-edit"
+                                onclick="editCoding({{ entry.pk }}, '{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                                title="Edit">&#9998;</button>
+                            <button class="coding-entry-del"
+                                onclick="deleteCoding({{ entry.pk }}, '{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
+                                title="Delete">&times;</button>
+                        </div>
                     </div>
-                    <button class="coding-entry-del"
-                        onclick="deleteCoding({{ entry.pk }}, '{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
-                        title="Delete">&times;</button>
                 </div>
                 {% endfor %}
                 </div>
@@ -475,14 +486,10 @@ async function submitCoding(agentId, dateStr) {
         const card = document.createElement('div');
         card.id = `coding-entry-${data.id}`;
         card.className = 'coding-entry-card';
-        card.innerHTML = `
-            <div>
-                <div class="coding-entry-time">${data.start}–${data.end}</div>
-                <div class="entry-duration coding-entry-dur">${data.hhmmss}</div>
-                ${data.notes ? `<div class="coding-entry-notes">${escHtml(data.notes).substring(0,24)}</div>` : ''}
-            </div>
-            <button class="coding-entry-del" onclick="deleteCoding(${data.id}, '${agentId}', '${dateStr}')" title="Delete">&times;</button>
-        `;
+        card.dataset.start = data.start_full || data.start + ':00';
+        card.dataset.end   = data.end_full   || data.end   + ':00';
+        card.dataset.notes = data.notes || '';
+        card.innerHTML = buildCardView(data.id, agentId, dateStr, data.start, data.end, data.hhmmss, data.notes);
         entriesDiv.appendChild(card);
 
         document.getElementById(`start-${agentId}-${dateStr}`).value = '';
@@ -527,6 +534,87 @@ async function deleteCoding(codingId, agentId, dateStr) {
 
 function escHtml(str) {
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function buildCardView(id, agentId, dateStr, start, end, hhmmss, notes) {
+    return `
+        <div class="coding-entry-view">
+            <div>
+                <div class="coding-entry-time">${escHtml(start)}–${escHtml(end)}</div>
+                <div class="entry-duration coding-entry-dur">${escHtml(hhmmss)}</div>
+                ${notes ? `<div class="coding-entry-notes">${escHtml(notes).substring(0,24)}</div>` : ''}
+            </div>
+            <div style="display:flex;gap:2px;flex-shrink:0;">
+                <button class="coding-entry-edit" onclick="editCoding(${id},'${agentId}','${dateStr}')" title="Edit">&#9998;</button>
+                <button class="coding-entry-del" onclick="deleteCoding(${id},'${agentId}','${dateStr}')" title="Delete">&times;</button>
+            </div>
+        </div>`;
+}
+
+function editCoding(codingId, agentId, dateStr) {
+    const card = document.getElementById(`coding-entry-${codingId}`);
+    if (!card) return;
+    const start = card.dataset.start || '';
+    const end   = card.dataset.end   || '';
+    const notes = card.dataset.notes || '';
+    card.innerHTML = `
+        <div style="width:100%;">
+            <div class="cod-add-inputs">
+                <input type="text" id="edit-start-${codingId}" value="${escHtml(start)}" placeholder="H:MM:SS" maxlength="8" class="cod-add-input">
+                <input type="text" id="edit-end-${codingId}"   value="${escHtml(end)}"   placeholder="H:MM:SS" maxlength="8" class="cod-add-input">
+            </div>
+            <input type="text" id="edit-notes-${codingId}" value="${escHtml(notes)}" placeholder="Notes" class="cod-notes-input">
+            <div class="cod-form-btns">
+                <button class="cod-save-btn" onclick="saveEditCoding(${codingId},'${agentId}','${dateStr}')">Save</button>
+                <button class="cod-cancel-btn" onclick="cancelEditCoding(${codingId},'${agentId}','${dateStr}')">&#10005;</button>
+            </div>
+        </div>`;
+}
+
+function cancelEditCoding(codingId, agentId, dateStr) {
+    const card = document.getElementById(`coding-entry-${codingId}`);
+    if (!card) return;
+    const start = card.dataset.start || '';
+    const end   = card.dataset.end   || '';
+    const hhmmss = '';
+    const displayStart = start.substring(0,5);
+    const displayEnd   = end.substring(0,5);
+    card.innerHTML = buildCardView(codingId, agentId, dateStr, displayStart, displayEnd, hhmmss, card.dataset.notes || '');
+}
+
+async function saveEditCoding(codingId, agentId, dateStr) {
+    const start = padTime(document.getElementById(`edit-start-${codingId}`).value.trim());
+    const end   = padTime(document.getElementById(`edit-end-${codingId}`).value.trim());
+    const notes = document.getElementById(`edit-notes-${codingId}`).value;
+
+    if (!start || !end) { alert('Please enter both a start and end time.'); return; }
+    if (parseHHMMSS(end) <= parseHHMMSS(start)) {
+        alert('End time must be after start time.'); return;
+    }
+
+    showStatus('Saving…', '#b45309', '#fef3c7');
+    try {
+        const resp = await fetch('/adherence/edit-coding/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({coding_id: codingId, start_time: start, end_time: end, notes}),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'error');
+
+        const card = document.getElementById(`coding-entry-${codingId}`);
+        card.dataset.start = data.start_full;
+        card.dataset.end   = data.end_full;
+        card.dataset.notes = data.notes || '';
+        card.innerHTML = buildCardView(codingId, agentId, dateStr, data.start, data.end, data.hhmmss, data.notes);
+
+        updateCellTotal(agentId, dateStr);
+        updateRowTotal(agentId);
+        showStatus('✓ Saved', '#166534', '#dcfce7');
+        setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2500);
+    } catch(e) {
+        showStatus('⚠ Save failed — ' + (e.message || 'check your connection'), '#991b1b', '#fee2e2');
+    }
 }
 </script>
 <script>

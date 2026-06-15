@@ -731,6 +731,60 @@ def add_coding_ajax(request):
 
 @login_required
 @require_POST
+def edit_coding_ajax(request):
+    data = json.loads(request.body)
+    coding_id = data.get('coding_id')
+    start_time = data.get('start_time', '').strip()
+    end_time   = data.get('end_time', '').strip()
+    notes      = data.get('notes', '')
+
+    coding = Coding.objects.filter(pk=coding_id).select_related('agent').first()
+    if not coding:
+        return JsonResponse({'ok': False, 'error': 'Not found'}, status=404)
+
+    def _pad(s):
+        parts = s.split(':')
+        if parts:
+            parts[0] = parts[0].zfill(2)
+        return ':'.join(parts)
+
+    start_time = _pad(start_time)
+    end_time   = _pad(end_time)
+
+    from datetime import time as time_cls
+    try:
+        start_t = time_cls.fromisoformat(start_time)
+        end_t   = time_cls.fromisoformat(end_time)
+    except ValueError:
+        return JsonResponse({'ok': False, 'error': 'Invalid time format. Use H:MM:SS (e.g. 8:00:00)'}, status=400)
+
+    if end_t <= start_t:
+        return JsonResponse({'ok': False, 'error': 'End time must be after start time.'}, status=400)
+
+    coding.start_time = start_t
+    coding.end_time   = end_t
+    coding.notes      = notes
+    coding.save()
+    _refresh_actual_hours(coding.agent_id, coding.date)
+
+    log_action(request.user, 'Edited coding',
+               f'{coding.agent} — {coding.date}: {coding.start_time.strftime("%H:%M")}–{coding.end_time.strftime("%H:%M")}',
+               agent=coding.agent)
+
+    return JsonResponse({
+        'ok': True,
+        'id': coding.pk,
+        'hhmmss': coding.total_hhmmss(),
+        'start': coding.start_time.strftime('%H:%M'),
+        'start_full': coding.start_time.strftime('%H:%M:%S'),
+        'end': coding.end_time.strftime('%H:%M'),
+        'end_full': coding.end_time.strftime('%H:%M:%S'),
+        'notes': coding.notes,
+    })
+
+
+@login_required
+@require_POST
 def delete_coding_ajax(request):
     data = json.loads(request.body)
     coding_id = data.get('coding_id')
