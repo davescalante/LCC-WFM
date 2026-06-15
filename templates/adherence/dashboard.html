@@ -359,8 +359,9 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
         {% empty %}
         <tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
         {% endfor %}
-
-        {% if show_cos %}
+    </tbody>
+    {% if show_cos %}
+    <tfoot>
         <tr style="background:#f0f4f8;border-top:2px solid #c8d4e0;">
             <td colspan="4" style="position:sticky;left:0;z-index:2;background:#f0f4f8;padding:6px 10px;font-size:11px;font-weight:700;color:#1a3a5c;white-space:nowrap;box-shadow:2px 0 0 #c8d4e0;">
                 Cost of Schedule
@@ -399,8 +400,8 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
                 {% endif %}
             </td>
         </tr>
-        {% endif %}
-    </tbody>
+    </tfoot>
+    {% endif %}
 </table>
 </div>
 
