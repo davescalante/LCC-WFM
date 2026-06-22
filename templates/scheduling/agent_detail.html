@@ -9,6 +9,8 @@
        style="padding:8px 20px;font-size:13px;font-weight:600;color:#888;text-decoration:none;">History</a>
 </div>
 
+{% if messages %}{% for msg in messages %}<div class="alert" {% if 'error' in msg.tags %}style="background:#fee2e2;color:#991b1b;"{% endif %}>{{ msg }}</div>{% endfor %}{% endif %}
+
 {% if agent.status == 'inactive' and agent.separation %}
 <div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:14px;">
     <span style="font-size:20px;line-height:1;">&#128683;</span>

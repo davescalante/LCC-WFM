@@ -2845,8 +2845,8 @@ def process_separation(request, pk):
     separation_type = request.POST.get('separation_type', '').strip()
     last_day_str    = request.POST.get('last_day_worked', '').strip()
     sep_date_str    = request.POST.get('separation_date', '').strip()
-    notes           = request.POST.get('separation_notes', '').strip()
-    confirmed       = request.POST.get('confirm_separation', '')
+    notes           = request.POST.get('notes', '').strip()
+    confirmed       = request.POST.get('confirm', '')
 
     # Validate
     errors = []
