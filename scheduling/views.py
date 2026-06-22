@@ -6,7 +6,8 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
-from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, log_action
+from django.views.decorators.http import require_POST
+from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
 
 
@@ -197,7 +198,12 @@ def agent_list(request):
     else:
         supervisor_id = request.session.get('supervisor_filter', '')
 
-    agents = Agent.objects.select_related('user', 'supervisor__user').order_by(
+    # Status filter — default to active so separated agents don't clutter daily view
+    status_filter = request.GET.get('status_filter', 'active')
+    if status_filter not in ('active', 'inactive', 'all'):
+        status_filter = 'active'
+
+    agents = Agent.objects.select_related('user', 'supervisor__user').prefetch_related('separation').order_by(
         'user__last_name', 'user__first_name'
     )
     if supervisor_id:
@@ -206,10 +212,17 @@ def agent_list(request):
         except (ValueError, TypeError):
             pass
 
+    if status_filter == 'active':
+        agents = agents.filter(status='active')
+    elif status_filter == 'inactive':
+        agents = agents.filter(status='inactive')
+    # 'all' — no status filter
+
     return render(request, 'scheduling/agent_list.html', {
         'agents': agents,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'status_filter': status_filter,
     })
 
 
@@ -233,6 +246,7 @@ def agent_detail(request, pk):
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'day_choices': ShiftTemplate.DAY_CHOICES,
         'supervisors': supervisors,
+        'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
     })
 
 
@@ -2804,3 +2818,200 @@ def request_mark_done(request, pk):
                ar.summary(), agent=ar.agent)
     messages.success(request, "Request marked as done.")
     return redirect('request_detail', pk=pk)
+
+
+# ── Agent Separation ──────────────────────────────────────────────────────────
+
+@login_required
+@require_POST
+def process_separation(request, pk):
+    from adherence.models import AdherenceRecord
+    agent = get_object_or_404(Agent, pk=pk)
+
+    # Only admins / supervisors / coordinators may separate
+    try:
+        viewer = request.user.agent
+        if viewer.role == 'agent':
+            messages.error(request, "Access denied.")
+            return redirect('agent_detail', pk=pk)
+    except Exception:
+        pass
+
+    # Already separated?
+    if hasattr(agent, 'separation'):
+        messages.error(request, "This agent has already been separated.")
+        return redirect('agent_detail', pk=pk)
+
+    separation_type = request.POST.get('separation_type', '').strip()
+    last_day_str    = request.POST.get('last_day_worked', '').strip()
+    sep_date_str    = request.POST.get('separation_date', '').strip()
+    notes           = request.POST.get('separation_notes', '').strip()
+    confirmed       = request.POST.get('confirm_separation', '')
+
+    # Validate
+    errors = []
+    if not separation_type:
+        errors.append("Separation type is required.")
+    if not last_day_str:
+        errors.append("Last Day Worked is required.")
+    if not sep_date_str:
+        errors.append("Separation Date is required.")
+    if not confirmed:
+        errors.append("Please check the confirmation checkbox.")
+
+    try:
+        last_day = date.fromisoformat(last_day_str)
+    except (ValueError, TypeError):
+        errors.append("Invalid Last Day Worked date.")
+        last_day = None
+
+    try:
+        sep_date = date.fromisoformat(sep_date_str)
+    except (ValueError, TypeError):
+        errors.append("Invalid Separation Date.")
+        sep_date = None
+
+    valid_types = [c[0] for c in AgentSeparation.SEPARATION_TYPE_CHOICES]
+    if separation_type and separation_type not in valid_types:
+        errors.append("Invalid separation type.")
+
+    if errors:
+        for e in errors:
+            messages.error(request, e)
+        return redirect('agent_detail', pk=pk)
+
+    # ── Create separation record ───────────────────────────────────────────
+    AgentSeparation.objects.create(
+        agent=agent,
+        separation_type=separation_type,
+        last_day_worked=last_day,
+        separation_date=sep_date,
+        notes=notes,
+        processed_by=request.user,
+    )
+
+    # ── Update agent fields ────────────────────────────────────────────────
+    agent.status = 'inactive'
+    agent.track_attendance = False
+    agent.termination_date = last_day
+    agent.save(update_fields=['status', 'track_attendance', 'termination_date'])
+
+    # ── Close current employment period ────────────────────────────────────
+    ep_reason = AgentSeparation._EP_REASON_MAP.get(separation_type, 'other')
+    ep = agent.employment_periods.filter(end_date__isnull=True).order_by('-start_date').first()
+    if ep:
+        ep.end_date = sep_date
+        ep.reason_ended = ep_reason
+        if notes and not ep.notes:
+            ep.notes = notes
+        ep.save()
+
+    # ── Cancel future pending OT shifts ────────────────────────────────────
+    cancelled_ot = OvertimeShift.objects.filter(
+        agent=agent, date__gte=sep_date, status='pending'
+    ).update(status='cancelled', cancellation_reason='Auto-cancelled due to agent separation')
+
+    # ── Reject pending agent requests ──────────────────────────────────────
+    rejected_reqs = AgentRequest.objects.filter(
+        agent=agent, status='pending'
+    ).update(
+        status='rejected',
+        rejection_reason='Auto-rejected due to agent separation',
+        reviewed_by=request.user,
+        reviewed_at=timezone.now(),
+    )
+
+    # ── Cancel future scheduled role changes ───────────────────────────────
+    ScheduledRoleChange.objects.filter(
+        agent=agent, effective_date__gte=sep_date, applied_at__isnull=True, cancelled_at__isnull=True
+    ).update(cancelled_at=timezone.now())
+
+    # ── Auto-code remaining days in separation week ────────────────────────
+    _auto_code_separation_week(agent, last_day, separation_type, request.user)
+
+    # ── Activity log ────────────────────────────────────────────────────────
+    sep_display = dict(AgentSeparation.SEPARATION_TYPE_CHOICES).get(separation_type, separation_type)
+    log_action(request.user, 'Processed agent separation',
+               f'{agent} — {sep_display} | Last day: {last_day} | Separation date: {sep_date}',
+               agent=agent)
+
+    messages.success(
+        request,
+        f"Separation processed for {agent}. "
+        f"{'Cancelled ' + str(cancelled_ot) + ' OT shift(s). ' if cancelled_ot else ''}"
+        f"{'Rejected ' + str(rejected_reqs) + ' pending request(s).' if rejected_reqs else ''}"
+    )
+    return redirect('agent_detail', pk=pk)
+
+
+def _auto_code_separation_week(agent, last_day, separation_type, user):
+    """Create AdherenceRecord entries for remaining days in the separation week."""
+    from adherence.models import AdherenceRecord
+
+    # Determine status to apply (None = skip)
+    status_map = {
+        'quit':       'Quit',
+        'terminated': 'Quit',   # spec: use Quit code, note Terminated
+        'abandonment':'NCNS',
+        # contract_end and resigned_notice: don't auto-code
+    }
+    status_code = status_map.get(separation_type)
+    if not status_code:
+        return
+
+    notes = 'Terminated' if separation_type == 'terminated' else ''
+
+    week_start = last_day - timedelta(days=last_day.weekday())
+    week_end   = week_start + timedelta(days=6)
+
+    # Only code days AFTER the last day worked, up to end of that week
+    days_to_code = [
+        week_start + timedelta(days=i)
+        for i in range(7)
+        if (week_start + timedelta(days=i)) > last_day
+    ]
+
+    for d in days_to_code:
+        AdherenceRecord.objects.update_or_create(
+            agent=agent,
+            date=d,
+            defaults={'status': status_code, 'notes': notes},
+        )
+
+
+@login_required
+def records_separations(request):
+    sep_type_f = request.GET.get('sep_type', '').strip()
+    date_from_str = request.GET.get('from', '').strip()
+    date_to_str   = request.GET.get('to', '').strip()
+
+    qs = AgentSeparation.objects.select_related(
+        'agent__user', 'agent__supervisor__user', 'processed_by'
+    ).order_by('-processed_at')
+
+    if sep_type_f:
+        qs = qs.filter(separation_type=sep_type_f)
+    if date_from_str:
+        try:
+            qs = qs.filter(last_day_worked__gte=date.fromisoformat(date_from_str))
+        except ValueError:
+            pass
+    if date_to_str:
+        try:
+            qs = qs.filter(last_day_worked__lte=date.fromisoformat(date_to_str))
+        except ValueError:
+            pass
+
+    return render(request, 'records/separations.html', {
+        'separations': list(qs),
+        'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
+        'selected_type': sep_type_f,
+        'date_from': date_from_str,
+        'date_to': date_to_str,
+    })
+
+
+def agent_inactive(request):
+    """Shown to inactive agents who try to log in to the agent portal."""
+    from django.contrib.auth import logout
+    return render(request, 'agent/inactive.html', {})

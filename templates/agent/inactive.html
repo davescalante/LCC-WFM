@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %} - Account Inactive{% endblock %}
+{% block content %}
+<div class="card" style="max-width:480px;margin:60px auto;text-align:center;padding:48px 40px;">
+    <div style="font-size:40px;margin-bottom:16px;">🔒</div>
+    <h1 style="margin-bottom:12px;color:#374151;">Account Inactive</h1>
+    <p style="color:#6b7280;font-size:14px;line-height:1.6;margin-bottom:24px;">
+        Your account is no longer active.<br>
+        Please contact your supervisor if you believe this is an error.
+    </p>
+    <a href="{% url 'logout' %}" class="btn" style="background:#e2e8f0;color:#374151;padding:8px 20px;font-size:14px;">Sign Out</a>
+</div>
+{% endblock %}

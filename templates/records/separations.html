@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% block title %} - Separation Records{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Separation Records</h1>
+    <div style="display:flex;gap:8px;">
+        <a href="{% url 'records_attendance' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Attendance</a>
+        <a href="{% url 'records_hours' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Hours</a>
+        <a href="{% url 'records_role_log' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Role Log</a>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="card" style="margin-bottom:20px;">
+    <form method="get" style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Separation Type</label>
+            <select name="sep_type" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All types</option>
+                {% for val, lbl in separation_type_choices %}
+                <option value="{{ val }}" {% if selected_type == val %}selected{% endif %}>{{ lbl }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Last Day From</label>
+            <input type="date" name="from" value="{{ date_from }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Last Day To</label>
+            <input type="date" name="to" value="{{ date_to }}"
+                   style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:6px 16px;font-size:13px;">Filter</button>
+        <a href="{% url 'records_separations' %}" class="btn" style="padding:6px 14px;font-size:13px;background:#e5e7eb;color:#333;">Reset</a>
+    </form>
+</div>
+
+<div class="card" style="overflow-x:auto;padding:0;">
+    <table>
+        <thead>
+            <tr>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Agent</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Separation Type</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Last Day Worked</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Separation Date</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Processed By</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Processed On</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Notes</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sep in separations %}
+            <tr>
+                <td style="font-weight:600;font-size:13px;">
+                    <a href="{% url 'agent_detail' sep.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ sep.agent }}</a>
+                </td>
+                <td style="font-size:13px;">
+                    {% if sep.separation_type == 'quit' %}
+                        <span class="badge" style="background:#fef3c7;color:#92400e;">Quit (Voluntary)</span>
+                    {% elif sep.separation_type == 'terminated' %}
+                        <span class="badge badge-red">Terminated</span>
+                    {% elif sep.separation_type == 'abandonment' %}
+                        <span class="badge badge-red">Job Abandonment</span>
+                    {% elif sep.separation_type == 'contract_end' %}
+                        <span class="badge" style="background:#e0f2fe;color:#0369a1;">End of Contract</span>
+                    {% elif sep.separation_type == 'resigned_notice' %}
+                        <span class="badge" style="background:#f0fdf4;color:#166534;">Resigned with Notice</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:13px;white-space:nowrap;">{{ sep.last_day_worked|date:"M d, Y" }}</td>
+                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.separation_date|date:"M d, Y" }}</td>
+                <td style="font-size:13px;">{{ sep.processed_by.get_full_name|default:sep.processed_by.username|default:"—" }}</td>
+                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.processed_at|date:"M d, Y" }}</td>
+                <td style="font-size:12px;color:#6b7280;max-width:200px;">{{ sep.notes|truncatechars:60|default:"—" }}</td>
+                <td><a href="{% url 'agent_history' sep.agent.pk %}" class="btn" style="padding:4px 10px;font-size:12px;background:#f0f4f8;color:#1a3a5c;">History</a></td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="8" style="padding:40px;text-align:center;color:#9ca3af;font-size:14px;">
+                    No separation records found.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div style="margin-top:8px;font-size:12px;color:#9ca3af;">{{ separations|length }} record{% if separations|length != 1 %}s{% endif %}</div>
+
+{% endblock %}

@@ -8,11 +8,45 @@
     <a href="{% url 'agent_history' agent.pk %}"
        style="padding:8px 20px;font-size:13px;font-weight:600;color:#888;text-decoration:none;">History</a>
 </div>
+
+{% if agent.status == 'inactive' and agent.separation %}
+<div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:14px;">
+    <span style="font-size:20px;line-height:1;">&#128683;</span>
+    <div style="flex:1;">
+        <div style="font-weight:600;font-size:14px;color:#9f1239;margin-bottom:4px;">Agent Separated</div>
+        <div style="font-size:13px;color:#6b7280;line-height:1.6;">
+            <strong>Type:</strong>
+            {% if agent.separation.separation_type == 'quit' %}Quit (Voluntary)
+            {% elif agent.separation.separation_type == 'terminated' %}Terminated (Involuntary)
+            {% elif agent.separation.separation_type == 'abandonment' %}Job Abandonment
+            {% elif agent.separation.separation_type == 'contract_end' %}End of Contract
+            {% elif agent.separation.separation_type == 'resigned_notice' %}Resigned with Notice
+            {% endif %}
+            &nbsp;&middot;&nbsp;
+            <strong>Last Day Worked:</strong> {{ agent.separation.last_day_worked|date:"M d, Y" }}
+            &nbsp;&middot;&nbsp;
+            <strong>Processed by:</strong> {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username|default:"—" }}
+            on {{ agent.separation.processed_at|date:"M d, Y" }}
+        </div>
+        {% if agent.separation.notes %}
+        <div style="font-size:12px;color:#9ca3af;margin-top:4px;font-style:italic;">{{ agent.separation.notes }}</div>
+        {% endif %}
+    </div>
+    <a href="{% url 'agent_history' agent.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#ffe4e6;color:#9f1239;white-space:nowrap;">View History</a>
+</div>
+{% endif %}
+
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>{{ agent.user.get_full_name }}</h1>
-    <div>
+    <div style="display:flex;gap:8px;align-items:center;">
         <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-primary">Edit User</a>
-        <a href="{% url 'agent_delete' agent.pk %}" class="btn" style="background:#c0392b;color:white;margin-left:8px;">Delete</a>
+        {% if agent.status == 'active' %}
+        <button onclick="document.getElementById('separation-modal').style.display='flex'"
+            style="padding:7px 14px;border:1px solid #fca5a5;border-radius:4px;background:#fff1f2;color:#b91c1c;font-size:13px;cursor:pointer;font-weight:500;">
+            Process Separation
+        </button>
+        {% endif %}
+        <a href="{% url 'agent_delete' agent.pk %}" class="btn" style="background:#c0392b;color:white;">Delete</a>
     </div>
 </div>
 
@@ -214,4 +248,99 @@
     });
 })();
 </script>
+
+<!-- Process Separation Modal -->
+{% if agent.status == 'active' %}
+<div id="separation-modal"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:10px;padding:28px 32px;width:100%;max-width:500px;box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+            <h3 style="margin:0;font-size:16px;color:#9f1239;">Process Separation — {{ agent }}</h3>
+            <button onclick="document.getElementById('separation-modal').style.display='none'"
+                style="background:none;border:none;font-size:22px;color:#aaa;cursor:pointer;line-height:1;">×</button>
+        </div>
+        <form method="post" action="{% url 'process_separation' agent.pk %}" id="sep-form">
+            {% csrf_token %}
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Separation Type</label>
+                <select name="separation_type" id="sep-type" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    <option value="">— Select type —</option>
+                    {% for val, lbl in separation_type_choices %}
+                    <option value="{{ val }}">{{ lbl }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Last Day Worked</label>
+                <input type="date" name="last_day_worked" id="sep-last-day" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">The last date the agent actually worked or was on shift.</div>
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Separation Date</label>
+                <input type="date" name="separation_date" id="sep-date" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">First day the agent no longer appears on Adherence. Auto-set to Monday after last day worked.</div>
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Notes <span style="font-weight:400;text-transform:none;color:#9ca3af;letter-spacing:0;">(optional)</span></label>
+                <textarea name="notes" rows="3"
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;resize:vertical;"
+                    placeholder="Reason, context, or additional information..."></textarea>
+            </div>
+            <div style="margin-bottom:20px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:12px 14px;">
+                <div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:6px;">This will automatically:</div>
+                <ul style="margin:0;padding-left:18px;font-size:12px;color:#78350f;line-height:1.7;">
+                    <li>Mark the agent as Inactive and stop attendance tracking</li>
+                    <li>Close their current Employment Period</li>
+                    <li>Cancel all pending OT shifts after last day</li>
+                    <li>Reject all pending schedule requests</li>
+                    <li>Cancel any scheduled role changes</li>
+                </ul>
+            </div>
+            <div style="margin-bottom:20px;">
+                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+                    <input type="checkbox" name="confirm" id="sep-confirm" required
+                        style="margin-top:2px;flex-shrink:0;">
+                    <span style="font-size:13px;color:#374151;line-height:1.5;">
+                        I confirm that I want to process this separation. This action cannot be undone.
+                    </span>
+                </label>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+                <button type="button" onclick="document.getElementById('separation-modal').style.display='none'"
+                    style="padding:8px 18px;border:1px solid #ddd;border-radius:4px;background:white;font-size:14px;cursor:pointer;color:#555;">
+                    Cancel
+                </button>
+                <button type="submit" class="btn" style="padding:8px 22px;font-size:14px;background:#b91c1c;color:white;">
+                    Process Separation
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+(function() {
+    var lastDay = document.getElementById('sep-last-day');
+    var sepDate = document.getElementById('sep-date');
+    if (lastDay && sepDate) {
+        lastDay.addEventListener('change', function() {
+            if (!this.value) return;
+            var d = new Date(this.value + 'T00:00:00');
+            var day = d.getDay(); // 0=Sun,1=Mon,...,6=Sat
+            var daysUntilMon = day === 0 ? 1 : (8 - day);
+            d.setDate(d.getDate() + daysUntilMon);
+            sepDate.value = d.toISOString().slice(0, 10);
+        });
+    }
+    var modal = document.getElementById('separation-modal');
+    if (modal) {
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
+        });
+    }
+})();
+</script>
+{% endif %}
 {% endblock %}

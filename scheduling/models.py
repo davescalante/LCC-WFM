@@ -512,3 +512,40 @@ class AgentRequest(models.Model):
         if self.request_type == 'schedule_change':
             return (self.requested_schedule_desc or '')[:80]
         return (self.notes or '')[:60]
+
+
+class AgentSeparation(models.Model):
+    SEPARATION_TYPE_CHOICES = [
+        ('quit', 'Quit (Voluntary)'),
+        ('terminated', 'Terminated (Involuntary)'),
+        ('abandonment', 'Job Abandonment'),
+        ('contract_end', 'End of Contract'),
+        ('resigned_notice', 'Resigned with Notice'),
+    ]
+    # Maps separation type to EmploymentPeriod.reason_ended
+    _EP_REASON_MAP = {
+        'quit': 'resigned',
+        'terminated': 'terminated',
+        'abandonment': 'terminated',
+        'contract_end': 'contract_end',
+        'resigned_notice': 'resigned',
+    }
+
+    agent = models.OneToOneField(
+        Agent, on_delete=models.CASCADE, related_name='separation'
+    )
+    separation_type = models.CharField(max_length=20, choices=SEPARATION_TYPE_CHOICES)
+    last_day_worked = models.DateField()
+    separation_date = models.DateField(help_text="First day agent no longer appears on Adherence")
+    notes = models.TextField(blank=True)
+    processed_by = models.ForeignKey(
+        'auth.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='separations_processed'
+    )
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-processed_at']
+
+    def __str__(self):
+        return f"{self.agent} — {self.get_separation_type_display()} (last day {self.last_day_worked})"

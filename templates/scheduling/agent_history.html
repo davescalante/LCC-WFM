@@ -35,6 +35,57 @@
     </form>
 </div>
 
+{% if agent.separation %}
+<!-- ── Separation Record ── -->
+<details open style="margin-bottom:16px;">
+    <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#9f1239;padding:12px 16px;background:#fff1f2;border-radius:8px;border:1px solid #fecdd3;list-style:none;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;">&#9660;</span> Separation Record
+    </summary>
+    <div class="card" style="border-radius:0 0 8px 8px;margin-top:0;border-top:none;">
+        <table>
+            <tr>
+                <td style="font-size:13px;width:160px;"><strong>Separation Type</strong></td>
+                <td style="font-size:13px;">
+                    {% if agent.separation.separation_type == 'quit' %}
+                        <span class="badge" style="background:#fef3c7;color:#92400e;">Quit (Voluntary)</span>
+                    {% elif agent.separation.separation_type == 'terminated' %}
+                        <span class="badge badge-red">Terminated</span>
+                    {% elif agent.separation.separation_type == 'abandonment' %}
+                        <span class="badge badge-red">Job Abandonment</span>
+                    {% elif agent.separation.separation_type == 'contract_end' %}
+                        <span class="badge" style="background:#e0f2fe;color:#0369a1;">End of Contract</span>
+                    {% elif agent.separation.separation_type == 'resigned_notice' %}
+                        <span class="badge" style="background:#f0fdf4;color:#166534;">Resigned with Notice</span>
+                    {% endif %}
+                </td>
+            </tr>
+            <tr>
+                <td style="font-size:13px;"><strong>Last Day Worked</strong></td>
+                <td style="font-size:13px;">{{ agent.separation.last_day_worked|date:"M d, Y" }}</td>
+            </tr>
+            <tr>
+                <td style="font-size:13px;"><strong>Separation Date</strong></td>
+                <td style="font-size:13px;color:#6b7280;">{{ agent.separation.separation_date|date:"M d, Y" }}</td>
+            </tr>
+            <tr>
+                <td style="font-size:13px;"><strong>Processed By</strong></td>
+                <td style="font-size:13px;">{{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username|default:"—" }}</td>
+            </tr>
+            <tr>
+                <td style="font-size:13px;"><strong>Processed On</strong></td>
+                <td style="font-size:13px;color:#6b7280;">{{ agent.separation.processed_at|date:"M d, Y" }}</td>
+            </tr>
+            {% if agent.separation.notes %}
+            <tr>
+                <td style="font-size:13px;"><strong>Notes</strong></td>
+                <td style="font-size:13px;color:#555;">{{ agent.separation.notes }}</td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+</details>
+{% endif %}
+
 <!-- ── Role History ── -->
 <details open style="margin-bottom:16px;">
     <summary style="cursor:pointer;font-size:16px;font-weight:600;color:#1a3a5c;padding:12px 16px;background:white;border-radius:8px;border:1px solid #e5e7eb;list-style:none;display:flex;align-items:center;gap:8px;">

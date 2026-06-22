@@ -7,6 +7,7 @@ ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 
 # URL path prefixes agents are allowed to access
 _AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
+_INACTIVE_ALLOWED = ('/agent/inactive/', '/accounts/', '/static/', '/favicon')
 
 
 class SessionTimeoutMiddleware:
@@ -61,6 +62,11 @@ class AgentAccessMiddleware:
             try:
                 profile = request.user.agent
                 if profile.role == 'agent':
+                    # Inactive agents see a "no longer active" page
+                    if profile.status == 'inactive':
+                        if not any(request.path.startswith(p) for p in _INACTIVE_ALLOWED):
+                            return redirect('agent_inactive')
+                        return self.get_response(request)
                     request.is_agent = True
                     if not any(request.path.startswith(p) for p in _AGENT_ALLOWED):
                         return redirect('agent_my_shifts')

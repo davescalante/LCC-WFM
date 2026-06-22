@@ -78,6 +78,7 @@
         <a href="{% url 'erlang_reports' %}">Reports</a>
         <a href="{% url 'requests_list' %}" style="position:relative;">Requests{% if request.supervisor_request_badge %}<span class="nav-badge">{{ request.supervisor_request_badge }}</span>{% endif %}</a>
         <a href="{% url 'records_attendance' %}">Records</a>
+        <a href="{% url 'records_separations' %}">Separations</a>
         <a href="{% url 'activity_log' %}">Activity</a>
         {% endif %}
         {% if request.user.is_authenticated %}
