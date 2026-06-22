@@ -14,7 +14,7 @@ from .calculator import (
     parse_aht, calculate_staffing, format_aht,
 )
 from .models import ErlangReport, ErlangActualStaff, ErlangCallRow, ErlangWeekParams
-from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift, Agent
+from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift, Agent, log_action
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -322,6 +322,8 @@ def erlang_calculator(request):
                         for r in rows
                     ])
                     csv_uploaded_now = True
+                    log_action(request.user, 'Uploaded Erlang CSV',
+                               f'{request.FILES["csv_file"].name} for week of {week_start} — {len(rows)} rows')
             except Exception as e:
                 error = f"Error reading file: {e}"
 
@@ -611,6 +613,7 @@ def erlang_save_report(request):
         occupancy=avg_occ,
     )
 
+    log_action(request.user, 'Saved Erlang report', f'"{name}"')
     from django.contrib import messages
     from django.urls import reverse
     messages.success(request, f'Report "{name}" saved.')
@@ -622,7 +625,9 @@ def erlang_save_report(request):
 def erlang_delete_report(request, pk):
     from django.shortcuts import get_object_or_404
     report = get_object_or_404(ErlangReport, pk=pk)
+    name = report.name
     report.delete()
+    log_action(request.user, 'Deleted Erlang report', f'"{name}"')
     from django.contrib import messages
     messages.success(request, 'Report deleted.')
     return redirect('erlang_reports')

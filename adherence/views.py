@@ -1365,6 +1365,9 @@ def upload_daily_file(request):
     matched_agent_ids = {dah.agent_id for dah in dah_objects if dah.agent_id}
     _zero_missing_scheduled(upload_date, matched_agent_ids)
 
+    log_action(request.user, 'Uploaded daily login file',
+               f'{csv_file.name} for {upload_date} — {len(dah_objects)} rows matched, {unmatched} unmatched')
+
     return JsonResponse({
         'ok': True,
         'row_count': len(dah_objects),
@@ -1442,6 +1445,7 @@ def delete_daily_upload_ajax(request):
         DailyUpload.objects.filter(date=date.fromisoformat(date_str)).delete()
     except (ValueError, TypeError):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
+    log_action(request.user, 'Deleted daily upload', f'Deleted upload for {date_str}')
     return JsonResponse({'ok': True})
 
 
