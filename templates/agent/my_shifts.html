@@ -1,7 +1,21 @@
 {% extends 'base.html' %}
 {% block title %} - My Shifts{% endblock %}
 {% block content %}
-<h1>My Shifts</h1>
+
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1 style="margin:0;">Hello, {{ agent.user.first_name|default:agent.user.username }}</h1>
+        <div style="font-size:13px;color:#888;margin-top:4px;">{{ today|date:"l, F j, Y" }}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a href="{% url 'agent_my_requests' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;padding:7px 14px;font-size:13px;position:relative;">
+            My Requests
+            {% if request.agent_request_badge %}<span class="nav-badge" style="position:absolute;top:-4px;right:-4px;">{{ request.agent_request_badge }}</span>{% endif %}
+        </a>
+        <a href="{% url 'agent_my_adherence' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;padding:7px 14px;font-size:13px;">My Adherence</a>
+        <a href="{% url 'agent_my_ot_shifts' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;padding:7px 14px;font-size:13px;">My OT Shifts</a>
+    </div>
+</div>
 
 <div class="card">
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;">

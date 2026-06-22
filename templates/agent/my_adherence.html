@@ -3,6 +3,32 @@
 {% block content %}
 <h1>My Adherence</h1>
 
+<!-- Week summary -->
+<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+    <div class="card" style="flex:1;min-width:120px;padding:14px 18px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:#1a3a5c;">{{ adjusted_total }}</div>
+        <div style="font-size:12px;color:#888;margin-top:2px;">Total Hours</div>
+    </div>
+    <div class="card" style="flex:1;min-width:120px;padding:14px 18px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:#1a3a5c;">{{ logged_total }}</div>
+        <div style="font-size:12px;color:#888;margin-top:2px;">Logged In</div>
+    </div>
+    <div class="card" style="flex:1;min-width:120px;padding:14px 18px;text-align:center;">
+        <div style="font-size:22px;font-weight:700;color:#1a3a5c;">{{ coded_total }}</div>
+        <div style="font-size:12px;color:#888;margin-top:2px;">Coded</div>
+    </div>
+    <div class="card" style="flex:1;min-width:120px;padding:14px 18px;text-align:center;">
+        {% if bonus == 'Yes' %}
+            <div style="font-size:18px;font-weight:700;color:#16a34a;">Qualified</div>
+        {% elif bonus == 'No' %}
+            <div style="font-size:18px;font-weight:700;color:#dc2626;">Disqualified</div>
+        {% else %}
+            <div style="font-size:18px;font-weight:700;color:#9ca3af;">Pending</div>
+        {% endif %}
+        <div style="font-size:12px;color:#888;margin-top:2px;">Adherence Bonus</div>
+    </div>
+</div>
+
 <div class="card" style="padding:0;">
     <div style="padding:16px 20px 12px;">
         <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
