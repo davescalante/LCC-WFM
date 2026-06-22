@@ -457,6 +457,10 @@ class AgentRequest(models.Model):
     # Schedule Change
     current_schedule_desc = models.TextField(blank=True)
     requested_schedule_desc = models.TextField(blank=True)
+    schedule_new_start_time = models.TimeField(null=True, blank=True)
+    schedule_new_end_time = models.TimeField(null=True, blank=True)
+    schedule_change_days = models.JSONField(null=True, blank=True)  # list of int 0–6 (Mon–Sun)
+    schedule_effective_date = models.DateField(null=True, blank=True)
 
     # Review
     reviewed_by = models.ForeignKey(

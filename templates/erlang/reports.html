@@ -1,31 +1,43 @@
 {% extends 'base.html' %}
 {% block title %} - Erlang Reports{% endblock %}
 {% block content %}
-<h1>Erlang Reports</h1>
+
+{% if messages %}
+{% for msg in messages %}
+<div class="alert {% if 'error' in msg.tags %}badge-red{% endif %}" style="margin-bottom:16px;">{{ msg }}</div>
+{% endfor %}
+{% endif %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1>Saved Erlang Reports</h1>
+    <a href="{% url 'erlang_calculator' %}" class="btn btn-primary">← Back to Calculator</a>
+</div>
+
 <div class="card" style="overflow-x:auto;padding:0;">
     <table style="min-width:900px;">
         <thead>
             <tr>
                 <th>Name</th>
-                <th>Date</th>
-                <th>Calls/hr</th>
+                <th>Saved</th>
+                <th>Peak Calls/hr</th>
                 <th>AHT (s)</th>
                 <th>Target SL</th>
                 <th>Shrinkage</th>
-                <th>Agents Req.</th>
-                <th>To Schedule</th>
-                <th>SL Achieved</th>
-                <th>Occupancy</th>
+                <th>Peak Req.</th>
+                <th>w/ Shrinkage</th>
+                <th>Avg SL</th>
+                <th>Avg Occ.</th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
             {% for report in reports %}
             <tr>
-                <td>{{ report.name }}</td>
-                <td style="white-space:nowrap;">{{ report.created_at|date:"Y-m-d H:i" }}</td>
+                <td style="font-weight:600;">{{ report.name }}</td>
+                <td style="white-space:nowrap;color:#6b7280;font-size:13px;">{{ report.created_at|date:"M j, Y" }}</td>
                 <td>{{ report.calls_per_hour }}</td>
-                <td>{{ report.avg_handle_time }}</td>
-                <td>{{ report.target_service_level }}% in {{ report.target_answer_time }}s</td>
+                <td>{{ report.avg_handle_time|floatformat:0 }}</td>
+                <td style="white-space:nowrap;">{{ report.target_service_level|floatformat:0 }}% in {{ report.target_answer_time }}s</td>
                 <td>
                     {% if report.shrinkage > 0 %}
                     <span class="badge badge-yellow">{{ report.shrinkage }}%</span>
@@ -33,7 +45,7 @@
                     <span style="color:#aaa;font-size:12px;">—</span>
                     {% endif %}
                 </td>
-                <td style="text-align:center;"><strong>{{ report.agents_required }}</strong></td>
+                <td style="text-align:center;font-weight:700;">{{ report.agents_required }}</td>
                 <td style="text-align:center;">
                     {% if report.agents_scheduled and report.agents_scheduled != report.agents_required %}
                     <strong style="color:#1a7a40;">{{ report.agents_scheduled }}</strong>
@@ -55,9 +67,21 @@
                     <span class="badge badge-yellow">{{ report.occupancy }}%</span>
                     {% endif %}
                 </td>
+                <td style="text-align:right;white-space:nowrap;">
+                    <form method="post" action="{% url 'erlang_delete_report' pk=report.pk %}" style="display:inline;"
+                          onsubmit="return confirm('Delete this report?');">
+                        {% csrf_token %}
+                        <button type="submit" class="btn" style="padding:4px 10px;font-size:12px;background:#fee2e2;color:#dc2626;border:none;">Delete</button>
+                    </form>
+                </td>
             </tr>
             {% empty %}
-            <tr><td colspan="10" style="color:#888;">No reports yet. <a href="{% url 'erlang_calculator' %}">Run a calculation.</a></td></tr>
+            <tr>
+                <td colspan="11" style="padding:40px;text-align:center;color:#9ca3af;font-size:14px;">
+                    No reports saved yet. Run a calculation and click <strong>Save Report</strong>.
+                    <br><a href="{% url 'erlang_calculator' %}" style="color:#1a3a5c;margin-top:8px;display:inline-block;">Go to Calculator →</a>
+                </td>
+            </tr>
             {% endfor %}
         </tbody>
     </table>

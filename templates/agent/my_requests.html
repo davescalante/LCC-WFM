@@ -91,10 +91,33 @@
         </div>
 
         <div class="req-section" id="sec-schedule_change">
-            <label>My Current Schedule</label>
+            <label>My Current Schedule <span style="color:#888;font-weight:400;">(describe briefly)</span></label>
             <textarea name="current_schedule_desc" rows="2" placeholder="e.g. Mon–Fri 9:00–17:00, Sat–Sun off"></textarea>
-            <label>Schedule I'm Requesting</label>
-            <textarea name="requested_schedule_desc" rows="2" placeholder="e.g. Mon–Thu 8:00–18:00, Fri–Sun off"></textarea>
+            <label style="margin-top:10px;">Requested New Shift Times</label>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                <div>
+                    <span style="font-size:12px;color:#666;">Start</span><br>
+                    <input type="time" name="schedule_new_start_time" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                </div>
+                <div>
+                    <span style="font-size:12px;color:#666;">End</span><br>
+                    <input type="time" name="schedule_new_end_time" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                </div>
+                <div>
+                    <span style="font-size:12px;color:#666;">Effective From</span><br>
+                    <input type="date" name="schedule_effective_date" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                </div>
+            </div>
+            <label style="margin-top:10px;">Working Days</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="0" style="width:14px;height:14px;"> Mon</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="1" style="width:14px;height:14px;"> Tue</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="2" style="width:14px;height:14px;"> Wed</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="3" style="width:14px;height:14px;"> Thu</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="4" style="width:14px;height:14px;"> Fri</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="5" style="width:14px;height:14px;"> Sat</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:13px;font-weight:400;cursor:pointer;"><input type="checkbox" name="schedule_change_days" value="6" style="width:14px;height:14px;"> Sun</label>
+            </div>
         </div>
 
         <div id="notes-section" style="display:none;">

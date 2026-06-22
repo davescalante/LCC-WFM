@@ -554,6 +554,81 @@ def erlang_download(request):
 
 
 @login_required
+@require_POST
+def erlang_save_report(request):
+    week_start_str = request.POST.get('week_start', '')
+    name = request.POST.get('report_name', '').strip()
+    try:
+        week_start = date.fromisoformat(week_start_str)
+    except (ValueError, TypeError):
+        from django.contrib import messages
+        messages.error(request, 'Invalid week.')
+        return redirect('erlang_calculator')
+
+    _wp = ErlangWeekParams.objects.filter(week_start=week_start).first()
+    if not _wp:
+        from django.contrib import messages
+        messages.error(request, 'No calculation data found for this week.')
+        return redirect('erlang_calculator')
+
+    _weeks_by_day = (_wp.weeks_by_day or {d: 3 for d in DAYS_ORDER})
+    raw_rows = [
+        {
+            'day': r.day,
+            'hour': r.hour,
+            'total_calls': r.total_calls,
+            'avg_calls': round(r.total_calls / _weeks_by_day.get(r.day, _wp.weeks), 1),
+        }
+        for r in ErlangCallRow.objects.filter(week_start=week_start)
+    ]
+    if not raw_rows:
+        from django.contrib import messages
+        messages.error(request, 'No call data found for this week.')
+        return redirect('erlang_calculator')
+
+    calculated = calculate_staffing(
+        raw_rows, _wp.target_sl, _wp.target_seconds, _wp.shrinkage, _wp.aht_seconds,
+    )
+
+    peak = max(calculated, key=lambda r: r['agents_shrinkage'])
+    avg_sl = round(sum(r['service_level_achieved'] for r in calculated) / len(calculated), 1)
+    avg_occ = round(sum(r['occupancy'] for r in calculated if r['occupancy']) / max(1, sum(1 for r in calculated if r['occupancy'])), 1)
+
+    if not name:
+        week_end = week_start + timedelta(days=6)
+        name = f"Week of {week_start.strftime('%b %-d')}–{week_end.strftime('%b %-d, %Y')}"
+
+    ErlangReport.objects.create(
+        name=name,
+        calls_per_hour=peak['avg_calls'],
+        avg_handle_time=_wp.aht_seconds,
+        target_service_level=_wp.target_sl,
+        target_answer_time=_wp.target_seconds,
+        shrinkage=_wp.shrinkage,
+        agents_required=peak['agents_required'],
+        agents_scheduled=peak['agents_shrinkage'],
+        service_level_achieved=avg_sl,
+        occupancy=avg_occ,
+    )
+
+    from django.contrib import messages
+    from django.urls import reverse
+    messages.success(request, f'Report "{name}" saved.')
+    return redirect(f"{reverse('erlang_calculator')}?week_start={week_start_str}")
+
+
+@login_required
+@require_POST
+def erlang_delete_report(request, pk):
+    from django.shortcuts import get_object_or_404
+    report = get_object_or_404(ErlangReport, pk=pk)
+    report.delete()
+    from django.contrib import messages
+    messages.success(request, 'Report deleted.')
+    return redirect('erlang_reports')
+
+
+@login_required
 def erlang_reports(request):
     reports = ErlangReport.objects.all()
     return render(request, 'erlang/reports.html', {'reports': reports})

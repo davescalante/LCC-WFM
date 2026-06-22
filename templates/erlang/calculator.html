@@ -305,14 +305,35 @@
 </div>
 {% endfor %}
 
-<!-- ── Download ────────────────────────────────────────────────────────── -->
-<form method="post" action="{% url 'erlang_download' %}" id="download-form" style="margin-top:4px;">
-    {% csrf_token %}
-    <button type="button" onclick="submitDownload()"
-        class="btn" style="background:#1a3a5c;color:white;padding:8px 20px;">
-        ↓ Download Staffing Plan (CSV)
-    </button>
-</form>
+<!-- ── Download + Save Report ──────────────────────────────────────────── -->
+<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;margin-top:4px;">
+    <form method="post" action="{% url 'erlang_download' %}" id="download-form">
+        {% csrf_token %}
+        <button type="button" onclick="submitDownload()"
+            class="btn" style="background:#1a3a5c;color:white;padding:8px 20px;">
+            ↓ Download Staffing Plan (CSV)
+        </button>
+    </form>
+
+    <div>
+        <button type="button" onclick="toggleSaveReport()"
+            class="btn" style="background:#f0f4f8;color:#374151;padding:8px 20px;border:1px solid #cbd5e1;">
+            Save Report
+        </button>
+        <div id="save-report-panel" style="display:none;margin-top:8px;">
+            <form method="post" action="{% url 'erlang_save_report' %}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                {% csrf_token %}
+                <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+                <input type="text" name="report_name"
+                    value="Week of {{ week_start|date:'M j' }}–{{ week_end|date:'M j, Y' }}"
+                    style="width:280px;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+                <button type="submit" class="btn btn-primary" style="padding:7px 16px;font-size:13px;">Save</button>
+                <button type="button" onclick="toggleSaveReport()"
+                    class="btn" style="background:#e2e8f0;color:#374151;padding:7px 12px;font-size:13px;">Cancel</button>
+            </form>
+        </div>
+    </div>
+</div>
 
 {% else %}
 <div class="card" style="text-align:center;padding:48px;color:#aaa;">
@@ -454,6 +475,11 @@ function saveActual(input) {
 
 function submitDownload() {
     document.getElementById('download-form').submit();
+}
+
+function toggleSaveReport() {
+    const panel = document.getElementById('save-report-panel');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
 }
 
 function toggleAdvancedWeeks() {

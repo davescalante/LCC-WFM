@@ -2422,6 +2422,15 @@ def agent_my_requests(request):
         elif req_type == 'schedule_change':
             ar.current_schedule_desc = request.POST.get('current_schedule_desc', '').strip()
             ar.requested_schedule_desc = request.POST.get('requested_schedule_desc', '').strip()
+            ar.schedule_new_start_time = request.POST.get('schedule_new_start_time') or None
+            ar.schedule_new_end_time = request.POST.get('schedule_new_end_time') or None
+            ar.schedule_effective_date = request.POST.get('schedule_effective_date') or None
+            days_raw = request.POST.getlist('schedule_change_days')
+            if days_raw:
+                try:
+                    ar.schedule_change_days = [int(d) for d in days_raw]
+                except (ValueError, TypeError):
+                    pass
 
         ar.save()
         log_action(request.user, f'Submitted agent request: {ar.get_request_type_display()}',
@@ -2657,7 +2666,21 @@ def request_approve(request, pk):
         actions.append(f"Set LOA status for {count} scheduled working day(s): {ar.loa_start} – {ar.loa_end}")
 
     elif ar.request_type == 'schedule_change':
-        actions.append("Manual action required: please update the agent's records in the system.")
+        if (ar.schedule_new_start_time and ar.schedule_new_end_time
+                and ar.schedule_change_days and ar.schedule_effective_date):
+            start_str = ar.schedule_new_start_time.strftime('%H:%M')
+            end_str = ar.schedule_new_end_time.strftime('%H:%M')
+            for dow in ar.schedule_change_days:
+                _save_shift_template(
+                    agent, dow, ar.schedule_effective_date, False, start_str, end_str, ''
+                )
+            day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            days_label = ', '.join(day_names[d] for d in sorted(ar.schedule_change_days))
+            actions.append(
+                f"Schedule updated: {days_label} {start_str}–{end_str} from {ar.schedule_effective_date}"
+            )
+        else:
+            actions.append("Manual action required: please update the agent's schedule in the system.")
 
     ar.status = 'approved'
     ar.reviewed_by = request.user
@@ -2669,8 +2692,8 @@ def request_approve(request, pk):
     log_action(request.user, f'Approved agent request: {ar.get_request_type_display()}',
                ar.summary(), agent=agent)
 
-    if ar.request_type == 'schedule_change':
-        messages.warning(request, "Request approved. Manual update required — please make the change in the system.")
+    if ar.request_type == 'schedule_change' and 'Manual action required' in ar.auto_action_log:
+        messages.warning(request, "Request approved. Manual update required — please update the agent's schedule.")
     else:
         messages.success(request, "Request approved.")
     return redirect('request_detail', pk=pk)

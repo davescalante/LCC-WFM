@@ -72,10 +72,21 @@
             </div>
         {% elif ar.request_type == 'schedule_change' %}
             <div style="font-size:13px;color:#555;line-height:1.8;">
-                <div><strong>Current Schedule:</strong></div>
-                <div style="background:#f8fafc;padding:8px 12px;border-radius:4px;margin:4px 0 12px;white-space:pre-wrap;">{{ ar.current_schedule_desc }}</div>
-                <div><strong>Requested Schedule:</strong></div>
-                <div style="background:#f8fafc;padding:8px 12px;border-radius:4px;margin:4px 0;white-space:pre-wrap;">{{ ar.requested_schedule_desc }}</div>
+                {% if ar.schedule_new_start_time %}
+                <div><strong>New Shift:</strong> {{ ar.schedule_new_start_time|time:"g:i A" }} – {{ ar.schedule_new_end_time|time:"g:i A" }}</div>
+                {% endif %}
+                {% if ar.schedule_change_days %}
+                <div><strong>Working Days:</strong>
+                    {% for d in ar.schedule_change_days %}{% for name in DAY_NAMES %}{% if forloop.counter0 == d %}{{ name }}{% if not forloop.parentloop.last %}, {% endif %}{% endif %}{% endfor %}{% endfor %}
+                </div>
+                {% endif %}
+                {% if ar.schedule_effective_date %}
+                <div><strong>Effective From:</strong> {{ ar.schedule_effective_date }}</div>
+                {% endif %}
+                {% if ar.current_schedule_desc %}
+                <div style="margin-top:8px;"><strong>Current Schedule:</strong></div>
+                <div style="background:#f8fafc;padding:8px 12px;border-radius:4px;margin:4px 0;white-space:pre-wrap;">{{ ar.current_schedule_desc }}</div>
+                {% endif %}
             </div>
         {% endif %}
 
@@ -133,7 +144,7 @@
         </div>
         {% endif %}
 
-        {% if ar.status == 'approved' and ar.request_type == 'loa' or ar.status == 'approved' and ar.request_type == 'schedule_change' %}
+        {% if ar.status == 'approved' and ar.request_type == 'loa' or ar.status == 'approved' and ar.request_type == 'schedule_change' and ar.auto_action_log and 'Manual action required' in ar.auto_action_log %}
         <div class="card" style="border-left:4px solid #f59e0b;background:#fffbeb;">
             <div style="font-size:13px;color:#92400e;">
                 <strong>Manual action required.</strong> Please update the agent's records in the system, then mark this request as done.
