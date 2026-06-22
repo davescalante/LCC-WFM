@@ -26,9 +26,24 @@ def _refresh_actual_hours(agent_id, coding_date):
     stored actual_hours must be recomputed to stay consistent with the Daily
     Hours tab.
     """
-    dah = DailyAgentHours.objects.filter(
-        upload__date=coding_date, agent_id=agent_id
-    ).first()
+    billable_usernames = list(
+        Five9Profile.objects.filter(agent_id=agent_id, billable=True)
+        .values_list('five9_username', flat=True)
+    )
+    if billable_usernames:
+        dah = DailyAgentHours.objects.filter(
+            upload__date=coding_date, agent_id=agent_id,
+            five9_username__in=billable_usernames
+        ).first()
+        if not dah:
+            # Fall back to any profile (handles edge case with no billable profiles)
+            dah = DailyAgentHours.objects.filter(
+                upload__date=coding_date, agent_id=agent_id
+            ).first()
+    else:
+        dah = DailyAgentHours.objects.filter(
+            upload__date=coding_date, agent_id=agent_id
+        ).first()
     if not dah:
         return
     coded_secs = sum(
@@ -367,8 +382,30 @@ def _build_maps(agents, week_dates):
 
 
 def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None):
+    from scheduling.models import Five9Profile as _Five9Profile
+    from finance.models import BillingSettings as _BS
+
     rows = []
     week_dates_set = set(week_dates)
+
+    # Pre-compute weekly NR seconds from billable DailyAgentHours
+    _agent_ids = [a.pk for a in agents]
+    _billable_map = {}  # agent_id -> set of usernames (lowercase)
+    for _p in _Five9Profile.objects.filter(agent__in=_agent_ids, billable=True).values('agent_id', 'five9_username'):
+        _billable_map.setdefault(_p['agent_id'], set()).add(_p['five9_username'].strip().lower())
+
+    _weekly_nr_map = {}  # agent_id -> total NR seconds
+    for _row in DailyAgentHours.objects.filter(
+        upload__date__in=week_dates, agent__in=_agent_ids
+    ).values('agent_id', 'five9_username', 'not_ready_seconds'):
+        _aid = _row['agent_id']
+        if _aid is None:
+            continue
+        _bnames = _billable_map.get(_aid)
+        if _bnames is None or _row['five9_username'].strip().lower() in _bnames:
+            _weekly_nr_map[_aid] = _weekly_nr_map.get(_aid, 0) + _row['not_ready_seconds']
+
+    _billing_settings = _BS.get()
 
     def _effective_template(agent_id, d):
         dow = d.weekday()
@@ -546,6 +583,13 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         coded = sum(coded_map.get((agent.pk, d), Decimal('0')) for d in week_dates)
         adjusted = actual_total + coded
 
+        # Weekly NR cap adjustment
+        _nr_secs = _weekly_nr_map.get(agent.pk, 0)
+        _nr_hrs = Decimal(str(_nr_secs)) / Decimal('3600')
+        _nr_cap = _billing_settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team' else _billing_settings.nr_cap_regular_hours
+        _nr_cap_adj = max(Decimal('0'), _nr_hrs - _nr_cap)
+        final_adjusted = max(Decimal('0'), adjusted - _nr_cap_adj)
+
         if bonus is False:
             bonus_display = 'No'
         elif bonus_determined:
@@ -564,6 +608,8 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             'actual_hours': actual_total,
             'coded_hours': coded,
             'adjusted_total': adjusted,
+            'nr_cap_adj': _nr_cap_adj,
+            'final_adjusted': final_adjusted,
             'bonus': bonus_display,
             'bonus_reasons': bonus_reasons,
         })
@@ -1352,9 +1398,21 @@ def upload_daily_file(request):
     upload.unmatched_count = unmatched
     upload.save()
 
+    billable_usernames_cache = {}
     for dah in dah_objects:
         if not dah.agent_id:
             continue
+        # Only update actual_hours from billable profiles
+        agent_id = dah.agent_id
+        if agent_id not in billable_usernames_cache:
+            billable_usernames_cache[agent_id] = set(
+                Five9Profile.objects.filter(agent_id=agent_id, billable=True)
+                .values_list('five9_username', flat=True)
+            )
+        billable_names = billable_usernames_cache[agent_id]
+        if billable_names and dah.five9_username not in billable_names:
+            continue  # Skip non-billable profile rows
+
         coded_secs = sum(
             c.total_seconds_count()
             for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
@@ -1408,6 +1466,7 @@ def rematch_daily_upload(request):
     }
 
     newly_matched = 0
+    billable_usernames_cache = {}
     for dah in DailyAgentHours.objects.filter(upload=upload, agent__isnull=True):
         agent = agent_map.get(dah.five9_username.strip().lower())
         if not agent:
@@ -1415,6 +1474,16 @@ def rematch_daily_upload(request):
         dah.agent = agent
         dah.save(update_fields=['agent'])
         newly_matched += 1
+
+        # Only update actual_hours from billable profiles
+        if agent.pk not in billable_usernames_cache:
+            billable_usernames_cache[agent.pk] = set(
+                Five9Profile.objects.filter(agent=agent, billable=True)
+                .values_list('five9_username', flat=True)
+            )
+        billable_names = billable_usernames_cache[agent.pk]
+        if billable_names and dah.five9_username not in billable_names:
+            continue  # Skip non-billable profile rows
 
         coded_secs = sum(
             c.total_seconds_count()

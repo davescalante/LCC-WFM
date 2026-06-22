@@ -211,11 +211,12 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
         <col style="width:58px;">
         <!-- Day columns (7) -->
         {% for d in week_dates %}<col style="width:98px;">{% endfor %}
-        <!-- Summary columns: P A T I SchHrs LogHrs CodHrs TotHrs Bon ComDed -->
+        <!-- Summary columns: P A T I SchHrs LogHrs CodHrs NRCap TotHrs Bon ComDed -->
         <col style="width:46px;">
         <col style="width:46px;">
         <col style="width:46px;">
         <col style="width:46px;">
+        <col style="width:62px;">
         <col style="width:62px;">
         <col style="width:62px;">
         <col style="width:62px;">
@@ -243,6 +244,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="th-sum th-hrs">Sch<br>Hrs</th>
             <th class="th-sum th-hrs">Log<br>Hrs</th>
             <th class="th-sum th-hrs">Cod<br>Hrs</th>
+            <th class="th-sum th-hrs" style="font-size:11px;min-width:62px;text-align:right;white-space:nowrap;">NR Cap</th>
             <th class="th-sum th-hrs">Tot<br>Hrs</th>
             <th class="th-sum th-bon">Bon</th>
             <th class="th-sum th-com">Com<br>Ded.</th>
@@ -250,7 +252,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
     </thead>
     <tbody id="adh-tbody">
         <tr id="adh-loading-row">
-            <td colspan="21" style="padding:48px;text-align:center;color:#999;font-size:13px;">
+            <td colspan="22" style="padding:48px;text-align:center;color:#999;font-size:13px;">
                 <span style="display:inline-flex;align-items:center;gap:10px;">
                     <span id="adh-spinner" style="display:inline-block;width:18px;height:18px;border:2px solid #ddd;border-top-color:#1a3a5c;border-radius:50%;animation:adh-spin .7s linear infinite;"></span>
                     Loading attendance data…
@@ -358,7 +360,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
         })
         .catch(() => {
             document.getElementById('adh-tbody').innerHTML =
-                '<tr><td colspan="21" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
+                '<tr><td colspan="22" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
         });
 })();
 

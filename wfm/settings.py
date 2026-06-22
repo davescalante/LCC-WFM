@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'scheduling',
     'adherence',
     'erlang',
+    'finance',
 ]
 
 MIDDLEWARE = [

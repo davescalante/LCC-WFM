@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %} - Finance Dashboard{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <div>
+        <h1 style="margin:0;">Finance Dashboard</h1>
+        <div style="font-size:13px;color:#888;margin-top:4px;">
+            Week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }}
+        </div>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="grid-3" style="margin-bottom:20px;">
+
+    <div class="card stat">
+        <div class="number">{{ total_hrs|floatformat:2 }}</div>
+        <div class="label">Total Hrs Worked</div>
+        <div style="margin-top:6px;font-size:12px;color:#9ca3af;">across {{ agent_count }} employees</div>
+    </div>
+
+    <div class="card stat">
+        <div class="number" style="font-size:28px;">${{ total_billing_usd|floatformat:2 }}</div>
+        <div class="label">Est. Billing to LCC</div>
+        <div style="margin-top:6px;font-size:12px;color:#9ca3af;">USD</div>
+    </div>
+
+    <div class="card stat">
+        <div class="number" style="font-size:28px;">${{ total_payroll_mxn|floatformat:2 }}</div>
+        <div class="label">Est. Payroll Cost</div>
+        <div style="margin-top:6px;font-size:12px;color:#9ca3af;">MXN &nbsp;/&nbsp; ${{ total_payroll_usd|floatformat:2 }} USD equiv.</div>
+    </div>
+
+    <div class="card stat">
+        <div class="number" style="color:#27ae60;">{{ bonus_count }}</div>
+        <div class="label">Adherence Bonus</div>
+        <div style="margin-top:6px;font-size:12px;color:#9ca3af;">employees qualify</div>
+    </div>
+
+    <div class="card stat">
+        <div class="number" style="font-size:28px;color:#f59e0b;">${{ power_usd|floatformat:2 }}</div>
+        <div class="label">Power Hour Spiff</div>
+        <div style="margin-top:6px;font-size:12px;color:#9ca3af;">USD</div>
+    </div>
+
+    <div class="card stat">
+        <div class="number" style="font-size:28px;color:#1a3a5c;">{{ settings.usd_to_mxn }}</div>
+        <div class="label">Exchange Rate</div>
+        <div style="margin-top:6px;font-size:12px;color:#9ca3af;">
+            MXN/USD &nbsp;&middot;&nbsp; Last updated: {{ settings.usd_to_mxn_updated|date:"M d, Y"|default:"Not set" }}
+        </div>
+    </div>
+
+</div>
+
+<!-- Quick Links -->
+<div class="card" style="margin-bottom:20px;">
+    <h2 style="margin-bottom:14px;">Quick Links</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <a href="{% url 'billing_report' %}" class="btn btn-primary">Billing Report</a>
+        <a href="{% url 'payroll_report' %}" class="btn btn-primary">Payroll Report</a>
+        <a href="{% url 'finance_settings' %}" class="btn" style="background:#e5e7eb;color:#374151;">Settings</a>
+    </div>
+</div>
+
+<div style="font-size:12px;color:#9ca3af;margin-top:4px;">
+    Data shown is for the current week to date and may be incomplete. Final reports are available after the week closes.
+</div>
+
+{% endblock %}

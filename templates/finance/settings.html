@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+{% block title %} - Billing &amp; Payroll Settings{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Billing &amp; Payroll Settings</h1>
+</div>
+
+{% if messages %}
+    {% for message in messages %}
+    <div class="alert" {% if 'error' in message.tags %}style="background:#fee2e2;color:#991b1b;"{% endif %}>
+        {{ message }}
+    </div>
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2 style="margin-bottom:20px;">Billing and Payroll</h2>
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid-2">
+            <div>
+                <label for="id_billing_rate_usd">Infinity Billing Rate to LCC</label>
+                <input type="number" id="id_billing_rate_usd" name="billing_rate_usd"
+                    step="0.01" placeholder="14.00"
+                    value="{{ settings.billing_rate_usd|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">USD per worked hour charged to LCC</p>
+            </div>
+
+            <div>
+                <label for="id_usd_to_mxn">USD &rarr; MXN Exchange Rate</label>
+                <input type="number" id="id_usd_to_mxn" name="usd_to_mxn"
+                    step="0.0001"
+                    value="{{ settings.usd_to_mxn|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Manually update this when the rate changes</p>
+            </div>
+
+            <div>
+                <label for="id_usd_to_mxn_updated">Exchange Rate Last Updated</label>
+                <input type="date" id="id_usd_to_mxn_updated" name="usd_to_mxn_updated"
+                    value="{{ settings.usd_to_mxn_updated|date:'Y-m-d'|default:'' }}">
+            </div>
+
+            <div>
+                <label for="id_adherence_bonus_mxn">Adherence Bonus</label>
+                <input type="number" id="id_adherence_bonus_mxn" name="adherence_bonus_mxn"
+                    step="0.01"
+                    value="{{ settings.adherence_bonus_mxn|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Amount paid in MXN to agents who qualify for the weekly bonus</p>
+            </div>
+
+            <div>
+                <label for="id_nr_cap_regular_hours">NR Cap &mdash; Regular Agents</label>
+                <input type="number" id="id_nr_cap_regular_hours" name="nr_cap_regular_hours"
+                    step="0.5"
+                    value="{{ settings.nr_cap_regular_hours|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Weekly not-ready cap in hours (default 6)</p>
+            </div>
+
+            <div>
+                <label for="id_nr_cap_kill_team_hours">NR Cap &mdash; Kill Team</label>
+                <input type="number" id="id_nr_cap_kill_team_hours" name="nr_cap_kill_team_hours"
+                    step="0.5"
+                    value="{{ settings.nr_cap_kill_team_hours|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Weekly not-ready cap in hours (default 7)</p>
+            </div>
+        </div>
+
+        <div style="margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

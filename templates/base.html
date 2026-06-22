@@ -80,6 +80,9 @@
         <a href="{% url 'records_attendance' %}">Records</a>
         <a href="{% url 'records_separations' %}">Separations</a>
         <a href="{% url 'activity_log' %}">Activity</a>
+        {% if request.has_finance_access %}
+        <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
+        {% endif %}
         {% endif %}
         {% if request.user.is_authenticated %}
         <div class="nav-user">

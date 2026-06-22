@@ -278,6 +278,8 @@ def agent_detail(request, pk):
 
 def _save_five9_profiles(request, agent):
     """Process Five9Profile rows from POST: update existing, delete flagged, create new."""
+    primary_pk = request.POST.get('five9_primary', '')
+
     for profile in list(agent.five9_profiles.all()):
         if request.POST.get(f'five9_{profile.pk}_delete'):
             profile.delete()
@@ -288,6 +290,8 @@ def _save_five9_profiles(request, agent):
             profile.five9_username = username
             profile.five9_password = request.POST.get(f'five9_{profile.pk}_password', '').strip()
             profile.role_type = request.POST.get(f'five9_{profile.pk}_role_type', '')
+            profile.billable = bool(request.POST.get(f'five9_{profile.pk}_billable'))
+            profile.is_primary = (str(profile.pk) == primary_pk)
             profile.save()
 
     i = 0
@@ -300,6 +304,8 @@ def _save_five9_profiles(request, agent):
                 five9_username=username,
                 five9_password=request.POST.get(f'new_five9_{i}_password', '').strip(),
                 role_type=request.POST.get(f'new_five9_{i}_role_type', ''),
+                billable=bool(request.POST.get(f'new_five9_{i}_billable')),
+                is_primary=(primary_pk == f'new_{i}'),
             )
         i += 1
 

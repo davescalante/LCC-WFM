@@ -70,8 +70,10 @@
             <h2>Teams</h2>
             <label>Teams Password</label>
             {{ agent_form.teams_password }}
-            <label>Hourly Rate ($)</label>
+            <label>Hourly Rate (MXN)</label>
             {{ agent_form.hourly_rate }}
+            <label style="margin-top:12px;">Billing Rate (USD) <span style="font-weight:400;font-size:12px;color:#888;">— Leave blank to use global rate</span></label>
+            {{ agent_form.billing_rate_usd }}
         </div>
     </div>
 
@@ -91,6 +93,8 @@
                     <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">Five9 Username</th>
                     <th style="padding:8px 10px;border-bottom:2px solid #ddd;white-space:nowrap;">Five9 Password</th>
                     <th style="padding:8px 10px;border-bottom:2px solid #ddd;">Role Type</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;white-space:nowrap;" title="Hours from this user count toward billing and payroll">Billable</th>
+                    <th style="padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;white-space:nowrap;" title="Primary user for attendance tracking">Primary</th>
                     <th style="padding:8px 10px;border-bottom:2px solid #ddd;width:60px;"></th>
                 </tr>
             </thead>
@@ -122,6 +126,16 @@
                         </select>
                     </td>
                     <td style="padding:6px 8px;text-align:center;">
+                        <input type="checkbox" name="five9_{{ profile.pk }}_billable" value="1"
+                            {% if profile.billable %}checked{% endif %}
+                            title="Check to count hours toward billing and payroll">
+                    </td>
+                    <td style="padding:6px 8px;text-align:center;">
+                        <input type="radio" name="five9_primary" value="{{ profile.pk }}"
+                            {% if profile.is_primary %}checked{% endif %}
+                            title="Primary user for attendance tracking">
+                    </td>
+                    <td style="padding:6px 8px;text-align:center;">
                         <button type="button" onclick="removeFive9('{{ profile.pk }}')"
                             style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;">
                             Remove
@@ -130,7 +144,7 @@
                 </tr>
                 {% empty %}
                 <tr id="no-five9-row">
-                    <td colspan="5" style="padding:20px;text-align:center;color:#aaa;">
+                    <td colspan="7" style="padding:20px;text-align:center;color:#aaa;">
                         No Five9 accounts. Click "+ Add Account" to add one.
                     </td>
                 </tr>
@@ -262,6 +276,12 @@ function addFive9Row() {
         </td>
         <td style="padding:6px 8px;">
             <select name="new_five9_${i}_role_type" style="margin-bottom:0;width:160px;">${ROLE_TYPE_OPTIONS}</select>
+        </td>
+        <td style="padding:6px 8px;text-align:center;">
+            <input type="checkbox" name="new_five9_${i}_billable" value="1" checked title="Count toward billing">
+        </td>
+        <td style="padding:6px 8px;text-align:center;">
+            <input type="radio" name="five9_primary" value="new_${i}" title="Set as primary">
         </td>
         <td style="padding:6px 8px;text-align:center;">
             <button type="button" onclick="this.closest('tr').remove()"

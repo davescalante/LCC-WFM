@@ -7,5 +7,6 @@ urlpatterns = [
     path('scheduling/', include('scheduling.urls')),
     path('adherence/', include('adherence.urls')),
     path('erlang/', include('erlang.urls')),
+    path('finance/', include('finance.urls')),
     path('', include('scheduling.urls')),
 ]

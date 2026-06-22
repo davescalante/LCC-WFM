@@ -1,0 +1,160 @@
+{% extends 'base.html' %}
+{% block title %} - Payroll Report{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Payroll Report</h1>
+    <a href="{% url 'payroll_export' %}?week={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Download Payroll</a>
+</div>
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; {{ prev_week }}</a>
+        <strong style="font-size:16px;">Week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }}</strong>
+        <a href="?week={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">{{ next_week }} &#8594;</a>
+    </div>
+</div>
+
+<!-- Infinity Employees -->
+<div id="payroll-inf-wrap" class="card" style="overflow-x:auto;padding:0;margin-bottom:20px;">
+<table>
+    <thead>
+        <tr style="position:sticky;top:0;z-index:1;background:#f0f4f8;">
+            <th colspan="15" style="padding:8px 14px;font-size:12px;font-weight:700;color:white;letter-spacing:.5px;text-transform:uppercase;background:#1a3a5c;border:none;">
+                Infinity Employees
+            </th>
+        </tr>
+        <tr style="position:sticky;top:37px;z-index:1;background:#f0f4f8;">
+            <th style="white-space:nowrap;">Agent Name</th>
+            <th style="white-space:nowrap;">Legal Name</th>
+            <th style="white-space:nowrap;">Employee ID</th>
+            <th style="white-space:nowrap;">Supervisor</th>
+            <th style="white-space:nowrap;">Agent Type</th>
+            <th style="white-space:nowrap;text-align:right;">Worked Hrs</th>
+            <th style="white-space:nowrap;text-align:right;">Rate (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Base Pay (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Bonus (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">OT Reg (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">OT 1.5x (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Power Hr (USD)</th>
+            <th style="white-space:nowrap;text-align:right;">Comm. Ded. (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Total (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Total (USD)</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in infinity_rows %}
+        <tr>
+            <td style="font-size:13px;">
+                <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;font-weight:600;text-decoration:none;">
+                    {{ row.agent.agent_name|default:row.agent.user.get_full_name }}
+                </a>
+            </td>
+            <td style="font-size:13px;">{{ row.agent.user.get_full_name }}</td>
+            <td style="font-size:13px;">{{ row.agent.employee_id|default:"—" }}</td>
+            <td style="font-size:13px;">{{ row.agent.supervisor|default:"—" }}</td>
+            <td style="font-size:13px;">{{ row.agent.get_role_type_display|default:"—" }}</td>
+            <td style="font-size:13px;text-align:right;">{{ row.final_hrs|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;">${{ row.hourly_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;">${{ row.base_pay_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.bonus_mxn %}<span style="color:#15803d;">${{ row.bonus_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ot_regular_mxn %}<span style="color:#7c3aed;">${{ row.ot_regular_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ot_1_5_mxn %}<span style="color:#7c3aed;">${{ row.ot_1_5_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.power_hour_usd %}<span style="color:#f59e0b;">${{ row.power_hour_usd|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.commission_deduction_mxn %}<span style="color:#c0392b;">-${{ row.commission_deduction_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_usd|floatformat:2 }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="15" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No Infinity employees found for this week.</td></tr>
+        {% endfor %}
+    </tbody>
+    <tfoot>
+        {% if infinity_totals %}
+        <tr style="background:#dbeafe;border-top:2px solid #93c5fd;">
+            <td colspan="5" style="padding:10px 14px;font-size:13px;font-weight:700;color:#1e3a8a;">Infinity Totals</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{{ infinity_totals.final_hrs|floatformat:2 }}</td>
+            <td></td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">${{ infinity_totals.base_pay_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.bonus_mxn %}${{ infinity_totals.bonus_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.ot_regular_mxn %}${{ infinity_totals.ot_regular_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.ot_1_5_mxn %}${{ infinity_totals.ot_1_5_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.power_hour_usd %}${{ infinity_totals.power_hour_usd|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.commission_deduction_mxn %}-${{ infinity_totals.commission_deduction_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">${{ infinity_totals.total_pay_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">${{ infinity_totals.total_pay_usd|floatformat:2 }}</td>
+        </tr>
+        {% endif %}
+    </tfoot>
+</table>
+</div>
+
+<!-- LCC Direct Employees -->
+<div id="payroll-lcc-wrap" class="card" style="overflow-x:auto;padding:0;margin-bottom:12px;">
+<table>
+    <thead>
+        <tr style="position:sticky;top:0;z-index:1;background:#f0f4f8;">
+            <th colspan="15" style="padding:8px 14px;font-size:12px;font-weight:700;color:#92400e;letter-spacing:.5px;text-transform:uppercase;background:#fef3c7;border:none;">
+                LCC Direct Employees
+            </th>
+        </tr>
+        <tr style="position:sticky;top:37px;z-index:1;background:#f0f4f8;">
+            <th style="white-space:nowrap;">Agent Name</th>
+            <th style="white-space:nowrap;">Legal Name</th>
+            <th style="white-space:nowrap;">Employee ID</th>
+            <th style="white-space:nowrap;">Supervisor</th>
+            <th style="white-space:nowrap;">Agent Type</th>
+            <th style="white-space:nowrap;text-align:right;">Worked Hrs</th>
+            <th style="white-space:nowrap;text-align:right;">Rate (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Base Pay (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Bonus (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">OT Reg (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">OT 1.5x (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Power Hr (USD)</th>
+            <th style="white-space:nowrap;text-align:right;">Comm. Ded. (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Total (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;">Total (USD)</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in lcc_rows %}
+        <tr>
+            <td style="font-size:13px;">
+                <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;font-weight:600;text-decoration:none;">
+                    {{ row.agent.agent_name|default:row.agent.user.get_full_name }}
+                </a>
+            </td>
+            <td style="font-size:13px;">{{ row.agent.user.get_full_name }}</td>
+            <td style="font-size:13px;">{{ row.agent.employee_id|default:"—" }}</td>
+            <td style="font-size:13px;">{{ row.agent.supervisor|default:"—" }}</td>
+            <td style="font-size:13px;">{{ row.agent.get_role_type_display|default:"—" }}</td>
+            <td style="font-size:13px;text-align:right;">{{ row.final_hrs|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;">${{ row.hourly_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;">${{ row.base_pay_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.bonus_mxn %}<span style="color:#15803d;">${{ row.bonus_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ot_regular_mxn %}<span style="color:#7c3aed;">${{ row.ot_regular_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ot_1_5_mxn %}<span style="color:#7c3aed;">${{ row.ot_1_5_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.power_hour_usd %}<span style="color:#f59e0b;">${{ row.power_hour_usd|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.commission_deduction_mxn %}<span style="color:#c0392b;">-${{ row.commission_deduction_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_mxn|floatformat:2 }}</td>
+            <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_usd|floatformat:2 }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="15" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No LCC Direct employees found for this week.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div style="font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:20px;">
+    LCC Direct Employees are employed by LCC. Payroll handled separately.
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    _initStickyHeader(document.getElementById('payroll-inf-wrap'));
+    _initStickyHeader(document.getElementById('payroll-lcc-wrap'));
+});
+</script>
+{% endblock %}

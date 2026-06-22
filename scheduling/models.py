@@ -58,7 +58,8 @@ class Agent(models.Model):
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_reports'
     )
-    hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Agent pay rate in MXN")
+    billing_rate_usd = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Override billing rate in USD (uses global rate if blank)")
     notes = models.TextField(blank=True)
 
     @property
@@ -79,6 +80,8 @@ class Five9Profile(models.Model):
     five9_username = models.CharField(max_length=150)
     five9_password = models.CharField(max_length=150, blank=True)
     role_type = models.CharField(max_length=20, choices=ROLE_TYPE_CHOICES, blank=True)
+    billable = models.BooleanField(default=True, help_text="Hours from this user count toward billing and payroll")
+    is_primary = models.BooleanField(default=False, help_text="Used for attendance tracking and CSV matching display")
 
     class Meta:
         ordering = ['id']

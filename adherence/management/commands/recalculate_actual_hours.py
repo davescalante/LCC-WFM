@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.core.management.base import BaseCommand
 from adherence.models import DailyAgentHours, Coding, AdherenceRecord
+from scheduling.models import Five9Profile
 
 
 class Command(BaseCommand):
@@ -17,12 +18,26 @@ class Command(BaseCommand):
         total = dahs.count()
         corrected = 0
         unchanged = 0
+        skipped = 0
 
         self.stdout.write(f'Processing {total} agent-day upload records...')
+
+        billable_usernames_cache = {}
 
         for dah in dahs:
             agent_id = dah.agent_id
             upload_date = dah.upload.date
+
+            # Only update actual_hours from billable profiles
+            if agent_id not in billable_usernames_cache:
+                billable_usernames_cache[agent_id] = set(
+                    Five9Profile.objects.filter(agent_id=agent_id, billable=True)
+                    .values_list('five9_username', flat=True)
+                )
+            billable_names = billable_usernames_cache[agent_id]
+            if billable_names and dah.five9_username not in billable_names:
+                skipped += 1
+                continue  # Skip non-billable profile rows
 
             coded_secs = sum(
                 c.total_seconds_count()
@@ -53,5 +68,5 @@ class Command(BaseCommand):
                 unchanged += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f'\nDone. {corrected} record(s) corrected, {unchanged} already correct.'
+            f'\nDone. {corrected} record(s) corrected, {unchanged} already correct, {skipped} non-billable rows skipped.'
         ))
