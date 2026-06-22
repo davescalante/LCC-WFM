@@ -1907,7 +1907,11 @@ def records_attendance(request):
     date_from = max(date_from, five_years_ago)
     date_to   = min(date_to, today)
 
-    supervisor_id = request.GET.get('supervisor', '')
+    if 'supervisor' in request.GET:
+        supervisor_id = request.GET.get('supervisor', '')
+        request.session['attendance_supervisor_filter'] = supervisor_id
+    else:
+        supervisor_id = request.session.get('attendance_supervisor_filter', '')
     role_type_f   = request.GET.get('role_type', '')
     employer_f    = request.GET.get('employer', '')
     status_f      = request.GET.get('status', '')
@@ -1989,7 +1993,11 @@ def records_hours(request):
     date_from = max(date_from, five_years_ago)
     date_to   = min(date_to, today)
 
-    supervisor_id = request.GET.get('supervisor', '')
+    if 'supervisor' in request.GET:
+        supervisor_id = request.GET.get('supervisor', '')
+        request.session['hours_supervisor_filter'] = supervisor_id
+    else:
+        supervisor_id = request.session.get('hours_supervisor_filter', '')
     role_type_f   = request.GET.get('role_type', '')
     employer_f    = request.GET.get('employer', '')
     billing_f     = request.GET.get('billing', '')
@@ -2472,7 +2480,11 @@ def requests_list(request):
     status_filter = request.GET.get('status', '').strip()
     date_from = request.GET.get('date_from', '').strip()
     date_to = request.GET.get('date_to', '').strip()
-    supervisor_filter = request.GET.get('supervisor', '').strip()
+    if 'supervisor' in request.GET:
+        supervisor_filter = request.GET.get('supervisor', '').strip()
+        request.session['requests_supervisor_filter'] = supervisor_filter
+    else:
+        supervisor_filter = request.session.get('requests_supervisor_filter', '')
 
     if supervisor_filter:
         try:

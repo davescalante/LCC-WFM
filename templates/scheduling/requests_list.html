@@ -54,7 +54,13 @@
         <span style="background:#f59e0b;color:white;border-radius:10px;font-size:11px;font-weight:700;padding:1px 8px;">{{ pending|length }}</span>
     </div>
     <table>
-        <thead><tr><th>Agent</th><th>Type</th><th>Submitted</th><th>Details</th><th></th></tr></thead>
+        <thead><tr>
+            <th style="position:sticky;top:0;z-index:1;background:#fef9c3;">Agent</th>
+            <th style="position:sticky;top:0;z-index:1;background:#fef9c3;">Type</th>
+            <th style="position:sticky;top:0;z-index:1;background:#fef9c3;">Submitted</th>
+            <th style="position:sticky;top:0;z-index:1;background:#fef9c3;">Details</th>
+            <th style="position:sticky;top:0;z-index:1;background:#fef9c3;"></th>
+        </tr></thead>
         <tbody>
         {% for req in pending %}
         <tr>
