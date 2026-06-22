@@ -1,0 +1,113 @@
+{% load adherence_filters %}
+{% for row in rows %}
+
+{% if not selected_supervisor %}
+{% ifchanged row.agent.supervisor_id %}
+<tr class="group-hdr">
+    <td colspan="21">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
+</tr>
+{% endifchanged %}
+{% endif %}
+
+<tr class="agent-row {% if forloop.counter|divisibleby:2 %}row-b{% else %}row-a{% endif %}">
+    <td class="ai-cell sup-col  fc fc-1">{{ row.agent.supervisor|default:"—" }}</td>
+    <td class="ai-cell name-col fc fc-2">{{ row.agent }}</td>
+    <td class="ai-cell five9-col fc fc-3">{% with p=row.agent.five9_profiles.all.0 %}{% if p %}{{ p.five9_username }}{% else %}—{% endif %}{% endwith %}</td>
+    <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
+
+    {% for cell in row.cells %}
+    <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
+        class="day-cell {% if cell.date == today %}col-today{% endif %}{% if cell.is_off and not cell.status %} cell-off-day{% endif %}"
+        data-agent="{{ row.agent.pk }}"
+        data-date="{{ cell.date|date:'Y-m-d' }}"
+        data-sched-hrs="{{ cell.sched_hrs|default:'0' }}"
+        data-actual-hrs="{{ cell.display_hrs|default:'0' }}"
+        style="background:{{ cell.color|default:'#f5f5f5' }};">
+        {% if cell.scheduled %}
+        <div class="sched-cell-wrap">
+            <div class="cell-sched">
+                {% if cell.is_off %}<span class="cell-off-label">OFF</span>
+                {% else %}{{ cell.scheduled }}
+                {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
+                {% endif %}
+            </div>
+            {% if not cell.is_off and cell.shift_start %}
+            <button class="quick-edit-btn"
+                data-agent="{{ row.agent.pk }}"
+                data-agent-name="{{ row.agent }}"
+                data-date="{{ cell.date|date:'Y-m-d' }}"
+                data-start="{{ cell.shift_start }}"
+                data-end="{{ cell.shift_end }}"
+                data-blocks="{{ cell.split_block_labels|join:'|' }}"
+                onclick="openQuickEdit(this)"
+                title="Quick-edit this day's schedule">✏</button>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% for ot_t in cell.ot_times %}
+        <div class="cell-ot">OT {{ ot_t }}</div>
+        {% endfor %}
+        {% if cell.spill_label %}
+        <div class="cell-ot">&#8627; {{ cell.spill_label }}</div>
+        {% endif %}
+        {% if cell.sched_hrs %}
+        <div class="cell-hrs"{% if cell.split_block_labels %} style="cursor:help;" title="Split: {{ cell.scheduled }} + {{ cell.split_block_labels|join:', ' }}"{% endif %}>
+            {{ cell.sched_hrs|to_hhmm }}h{% if cell.split_block_labels %} &#8853;{% endif %}
+        </div>
+        {% endif %}
+        <select onchange="onStatusChange(this)" class="cell-status">
+            <option value="">—</option>
+            {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{% if val == 'Absent' %}A{% else %}{{ val }}{% endif %}</option>
+            {% endfor %}
+        </select>
+        <div class="cell-log">{{ cell.display_hrs|to_hhmmss }}</div>
+        {% if cell.missing_hrs %}
+        <div class="cell-missing">&#8722;{{ cell.missing_hrs|to_hhmmss }}</div>
+        {% endif %}
+        <button class="note-btn"
+            data-agent="{{ row.agent.pk }}"
+            data-agent-name="{{ row.agent }}"
+            data-date="{{ cell.date|date:'Y-m-d' }}"
+            onclick="openNotes(this)"
+            title="{% if cell.note_count %}{{ cell.note_count }} note{% if cell.note_count != 1 %}s{% endif %}{% else %}Add note{% endif %}"
+            style="color:{% if cell.note_count %}#2563eb{% else %}#d1d5db{% endif %};">
+            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>{% if cell.note_count %}<span class="note-count-badge">{% if cell.note_count > 9 %}9+{% else %}{{ cell.note_count }}{% endif %}</span>{% endif %}
+        </button>
+    </td>
+    {% endfor %}
+
+    <td class="sum-cell border-l" style="font-weight:700;color:#27ae60;">{{ row.total_present }}</td>
+    <td class="sum-cell" style="font-weight:700;{% if row.total_absent > 0 %}color:#c0392b;{% else %}color:#ddd;{% endif %}">{{ row.total_absent }}</td>
+    <td class="sum-cell" style="font-weight:700;{% if row.total_tardy > 0 %}color:#e67e22;{% else %}color:#ddd;{% endif %}">{{ row.total_tardy }}</td>
+    <td class="sum-cell" style="font-weight:700;{% if row.total_incomplete > 0 %}color:#e74c3c;{% else %}color:#ddd;{% endif %}">{{ row.total_incomplete }}</td>
+    <td class="sum-cell mono">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
+    <td class="sum-cell mono" style="{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:700;{% else %}color:#e67e22;font-weight:700;{% endif %}{% endif %}">{{ row.actual_hours|to_hhmmss|default:"—" }}</td>
+    <td class="sum-cell mono">{{ row.coded_hours|to_hhmmss|default:"—" }}</td>
+    <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#c0392b;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
+    <td class="sum-cell">
+        {% if row.bonus == 'Yes' %}<span class="badge badge-green" style="font-size:10px;padding:1px 5px;">Yes</span>
+        {% elif row.bonus == 'No' %}
+        <span class="badge badge-red" style="font-size:10px;padding:1px 5px;{% if row.bonus_reasons %}cursor:help;{% endif %}"
+            {% if row.bonus_reasons %}
+            onmouseenter="showBonusTooltip(event, this)"
+            onmouseleave="hideBonusTooltip()"
+            data-reasons="{{ row.bonus_reasons|join:'|' }}"
+            {% endif %}>No</span>
+        {% else %}<span style="color:#ddd;font-size:11px;">—</span>{% endif %}
+    </td>
+    <td class="sum-cell">
+        <div style="display:flex;align-items:center;justify-content:center;gap:1px;">
+            <input type="number" min="0" max="100" step="0.1"
+                value="{% if row.commission_deduction %}{{ row.commission_deduction }}{% endif %}"
+                placeholder="0"
+                onblur="saveCommission('{{ row.agent.pk }}', '{{ week_start|date:'Y-m-d' }}', this)"
+                style="width:46px;text-align:center;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:4px;">
+            <span style="font-size:10px;color:#999;">%</span>
+        </div>
+    </td>
+</tr>
+
+{% empty %}
+<tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+{% endfor %}

@@ -197,6 +197,8 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 .th-sortable { cursor:pointer; user-select:none; }
 .th-sortable:hover { filter:brightness(.93); }
 .sort-arrow { font-size:9px; color:#888; margin-left:2px; }
+
+@keyframes adh-spin { to { transform: rotate(360deg); } }
 </style>
 
 <div id="tbl-card-adh" class="card" style="overflow-x:auto;padding:0;">
@@ -246,162 +248,17 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="th-sum th-com">Com<br>Ded.</th>
         </tr>
     </thead>
-    <tbody>
-        {% for row in rows %}
-
-        {% if not selected_supervisor %}
-        {% ifchanged row.agent.supervisor_id %}
-        <tr class="group-hdr">
-            <td colspan="21">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
-        </tr>
-        {% endifchanged %}
-        {% endif %}
-
-        <tr class="agent-row {% if forloop.counter|divisibleby:2 %}row-b{% else %}row-a{% endif %}">
-            <td class="ai-cell sup-col  fc fc-1">{{ row.agent.supervisor|default:"—" }}</td>
-            <td class="ai-cell name-col fc fc-2">{{ row.agent }}</td>
-            <td class="ai-cell five9-col fc fc-3">{% with p=row.agent.five9_profiles.all.0 %}{% if p %}{{ p.five9_username }}{% else %}—{% endif %}{% endwith %}</td>
-            <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
-
-            {% for cell in row.cells %}
-            <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
-                class="day-cell {% if cell.date == today %}col-today{% endif %}{% if cell.is_off and not cell.status %} cell-off-day{% endif %}"
-                data-agent="{{ row.agent.pk }}"
-                data-date="{{ cell.date|date:'Y-m-d' }}"
-                data-sched-hrs="{{ cell.sched_hrs|default:'0' }}"
-                data-actual-hrs="{{ cell.display_hrs|default:'0' }}"
-                style="background:{{ cell.color|default:'#f5f5f5' }};">
-                {% if cell.scheduled %}
-                <div class="sched-cell-wrap">
-                    <div class="cell-sched">
-                        {% if cell.is_off %}<span class="cell-off-label">OFF</span>
-                        {% else %}{{ cell.scheduled }}
-                        {% for lbl in cell.split_block_labels %}<span style="color:#aaa;"> / {{ lbl }}</span>{% endfor %}
-                        {% endif %}
-                    </div>
-                    {% if not cell.is_off and cell.shift_start %}
-                    <button class="quick-edit-btn"
-                        data-agent="{{ row.agent.pk }}"
-                        data-agent-name="{{ row.agent }}"
-                        data-date="{{ cell.date|date:'Y-m-d' }}"
-                        data-start="{{ cell.shift_start }}"
-                        data-end="{{ cell.shift_end }}"
-                        data-blocks="{{ cell.split_block_labels|join:'|' }}"
-                        onclick="openQuickEdit(this)"
-                        title="Quick-edit this day's schedule">✏</button>
-                    {% endif %}
-                </div>
-                {% endif %}
-                {% for ot_t in cell.ot_times %}
-                <div class="cell-ot">OT {{ ot_t }}</div>
-                {% endfor %}
-                {% if cell.spill_label %}
-                <div class="cell-ot">&#8627; {{ cell.spill_label }}</div>
-                {% endif %}
-                {% if cell.sched_hrs %}
-                <div class="cell-hrs"{% if cell.split_block_labels %} style="cursor:help;" title="Split: {{ cell.scheduled }} + {{ cell.split_block_labels|join:', ' }}"{% endif %}>
-                    {{ cell.sched_hrs|to_hhmm }}h{% if cell.split_block_labels %} &#8853;{% endif %}
-                </div>
-                {% endif %}
-                <select onchange="onStatusChange(this)" class="cell-status">
-                    <option value="">—</option>
-                    {% for val, label in status_choices %}
-                    <option value="{{ val }}" {% if cell.status == val %}selected{% endif %}>{% if val == 'Absent' %}A{% else %}{{ val }}{% endif %}</option>
-                    {% endfor %}
-                </select>
-                <div class="cell-log">{{ cell.display_hrs|to_hhmmss }}</div>
-                {% if cell.missing_hrs %}
-                <div class="cell-missing">&#8722;{{ cell.missing_hrs|to_hhmmss }}</div>
-                {% endif %}
-                <button class="note-btn"
-                    data-agent="{{ row.agent.pk }}"
-                    data-agent-name="{{ row.agent }}"
-                    data-date="{{ cell.date|date:'Y-m-d' }}"
-                    onclick="openNotes(this)"
-                    title="{% if cell.note_count %}{{ cell.note_count }} note{% if cell.note_count != 1 %}s{% endif %}{% else %}Add note{% endif %}"
-                    style="color:{% if cell.note_count %}#2563eb{% else %}#d1d5db{% endif %};">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>{% if cell.note_count %}<span class="note-count-badge">{% if cell.note_count > 9 %}9+{% else %}{{ cell.note_count }}{% endif %}</span>{% endif %}
-                </button>
-            </td>
-            {% endfor %}
-
-            <td class="sum-cell border-l" style="font-weight:700;color:#27ae60;">{{ row.total_present }}</td>
-            <td class="sum-cell" style="font-weight:700;{% if row.total_absent > 0 %}color:#c0392b;{% else %}color:#ddd;{% endif %}">{{ row.total_absent }}</td>
-            <td class="sum-cell" style="font-weight:700;{% if row.total_tardy > 0 %}color:#e67e22;{% else %}color:#ddd;{% endif %}">{{ row.total_tardy }}</td>
-            <td class="sum-cell" style="font-weight:700;{% if row.total_incomplete > 0 %}color:#e74c3c;{% else %}color:#ddd;{% endif %}">{{ row.total_incomplete }}</td>
-            <td class="sum-cell mono">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
-            <td class="sum-cell mono" style="{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:700;{% else %}color:#e67e22;font-weight:700;{% endif %}{% endif %}">{{ row.actual_hours|to_hhmmss|default:"—" }}</td>
-            <td class="sum-cell mono">{{ row.coded_hours|to_hhmmss|default:"—" }}</td>
-            <td class="sum-cell mono" style="font-weight:700;{% if row.adjusted_total and row.sched_hours %}{% if row.adjusted_total >= row.sched_hours %}color:#27ae60;{% else %}color:#c0392b;{% endif %}{% else %}color:#555;{% endif %}">{{ row.adjusted_total|to_hhmmss|default:"—" }}</td>
-            <td class="sum-cell">
-                {% if row.bonus == 'Yes' %}<span class="badge badge-green" style="font-size:10px;padding:1px 5px;">Yes</span>
-                {% elif row.bonus == 'No' %}
-                <span class="badge badge-red" style="font-size:10px;padding:1px 5px;{% if row.bonus_reasons %}cursor:help;{% endif %}"
-                    {% if row.bonus_reasons %}
-                    onmouseenter="showBonusTooltip(event, this)"
-                    onmouseleave="hideBonusTooltip()"
-                    data-reasons="{{ row.bonus_reasons|join:'|' }}"
-                    {% endif %}>No</span>
-                {% else %}<span style="color:#ddd;font-size:11px;">—</span>{% endif %}
-            </td>
-            <td class="sum-cell">
-                <div style="display:flex;align-items:center;justify-content:center;gap:1px;">
-                    <input type="number" min="0" max="100" step="0.1"
-                        value="{% if row.commission_deduction %}{{ row.commission_deduction }}{% endif %}"
-                        placeholder="0"
-                        onblur="saveCommission('{{ row.agent.pk }}', '{{ week_start|date:'Y-m-d' }}', this)"
-                        style="width:46px;text-align:center;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:4px;">
-                    <span style="font-size:10px;color:#999;">%</span>
-                </div>
+    <tbody id="adh-tbody">
+        <tr id="adh-loading-row">
+            <td colspan="21" style="padding:48px;text-align:center;color:#999;font-size:13px;">
+                <span style="display:inline-flex;align-items:center;gap:10px;">
+                    <span id="adh-spinner" style="display:inline-block;width:18px;height:18px;border:2px solid #ddd;border-top-color:#1a3a5c;border-radius:50%;animation:adh-spin .7s linear infinite;"></span>
+                    Loading attendance data…
+                </span>
             </td>
         </tr>
-
-        {% empty %}
-        <tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
-        {% endfor %}
     </tbody>
-    {% if show_cos %}
-    <tfoot>
-        <tr style="background:#f0f4f8;border-top:2px solid #c8d4e0;">
-            <td colspan="4" style="position:sticky;left:0;z-index:2;background:#f0f4f8;padding:6px 10px;font-size:11px;font-weight:700;color:#1a3a5c;white-space:nowrap;box-shadow:2px 0 0 #c8d4e0;">
-                Cost of Schedule
-            </td>
-            {% for day in cos_days %}
-            <td id="cos-day-{{ forloop.counter0 }}"
-                data-cos-absent="{{ day.absent_count }}"
-                data-cos-tardy-count="{{ day.tardy_count }}"
-                data-cos-tardy-hrs="{{ day.tardy_loss }}"
-                data-cos-offset="{{ day.ot_offset }}"
-                data-cos-loss="{{ day.net_loss }}"
-                data-cos-sched="{{ day.sched_hours }}"
-                style="padding:6px 4px;text-align:center;cursor:help;"
-                onmouseenter="showCosTooltip(event,this)" onmouseleave="hideCosTooltip()">
-                {% if day.has_data %}
-                <span class="cos-pct" style="font-size:11px;font-weight:700;color:{{ day.cos_color }};">{{ day.cos_pct }}%</span>
-                {% else %}
-                <span class="cos-pct" style="font-size:11px;color:#aaa;">—</span>
-                {% endif %}
-            </td>
-            {% endfor %}
-            <td id="cos-week" colspan="10"
-                data-cos-absent="{{ cos_week.absent_count }}"
-                data-cos-tardy-count="{{ cos_week.tardy_count }}"
-                data-cos-tardy-hrs="{{ cos_week.tardy_loss }}"
-                data-cos-offset="{{ cos_week.ot_offset }}"
-                data-cos-loss="{{ cos_week.net_loss }}"
-                data-cos-sched="{{ cos_week.sched_hours }}"
-                style="padding:6px 4px;text-align:center;border-left:2px solid #c8d4e0;cursor:help;"
-                onmouseenter="showCosTooltip(event,this)" onmouseleave="hideCosTooltip()">
-                <span style="font-size:10px;color:#888;margin-right:4px;">Week</span>
-                {% if cos_week.has_data %}
-                <span class="cos-pct" style="font-size:11px;font-weight:700;color:{{ cos_week.cos_color }};">{{ cos_week.cos_pct }}%</span>
-                {% else %}
-                <span class="cos-pct" style="font-size:11px;color:#aaa;">—</span>
-                {% endif %}
-            </td>
-        </tr>
-    </tfoot>
-    {% endif %}
+    <tfoot id="adh-tfoot"></tfoot>
 </table>
 </div>
 
@@ -490,6 +347,21 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 </div>
 
 <script>
+(function loadAdhRows() {
+    const params = new URLSearchParams(window.location.search);
+    const url = '/adherence/rows/?' + params.toString();
+    fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(data => {
+            document.getElementById('adh-tbody').innerHTML = data.tbody_html;
+            document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
+        })
+        .catch(() => {
+            document.getElementById('adh-tbody').innerHTML =
+                '<tr><td colspan="21" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
+        });
+})();
+
 const STATUS_COLORS = {
     'P':'#e8f5e9','OT':'#c8e6c9','MUT':'#dcedc8','VTO':'#f1f8e9','P+VTO':'#e8f5e9',
     'T':'#fff3e0','T+VTO':'#fff8e1','Absent':'#ffebee','NCNS':'#ffcdd2','S':'#ffccbc',

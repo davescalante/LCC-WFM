@@ -128,6 +128,10 @@ class ShiftTemplate(models.Model):
 
     class Meta:
         ordering = ['day_of_week', 'effective_from']
+        indexes = [
+            models.Index(fields=['agent', 'day_of_week']),
+            models.Index(fields=['agent', 'day_of_week', 'effective_from']),
+        ]
 
     def __str__(self):
         day = self.get_day_of_week_display()
@@ -160,6 +164,10 @@ class Shift(models.Model):
 
     class Meta:
         ordering = ['date', 'start_time']
+        indexes = [
+            models.Index(fields=['agent', 'date']),
+            models.Index(fields=['date']),
+        ]
 
     def __str__(self):
         return f"{self.agent} - {self.date} {self.start_time}-{self.end_time}"
@@ -204,6 +212,10 @@ class OvertimeShift(models.Model):
 
     class Meta:
         ordering = ['date']
+        indexes = [
+            models.Index(fields=['agent', 'date']),
+            models.Index(fields=['date']),
+        ]
 
     def __str__(self):
         return f"{self.agent} — OT {self.date} {self.start_time}–{self.end_time}"

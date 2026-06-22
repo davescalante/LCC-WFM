@@ -35,6 +35,10 @@ class AdherenceRecord(models.Model):
     class Meta:
         unique_together = ('agent', 'date')
         ordering = ['date', 'agent']
+        indexes = [
+            models.Index(fields=['date']),
+            models.Index(fields=['agent', 'date']),
+        ]
 
     def __str__(self):
         return f"{self.agent} — {self.date} — {self.status}"
@@ -50,6 +54,10 @@ class Coding(models.Model):
 
     class Meta:
         ordering = ['date', 'agent', 'start_time']
+        indexes = [
+            models.Index(fields=['agent', 'date']),
+            models.Index(fields=['date']),
+        ]
 
     def total_seconds_count(self):
         start = datetime.combine(date_type.today(), self.start_time)

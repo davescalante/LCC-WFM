@@ -1,0 +1,40 @@
+{% if show_cos %}
+<tr style="background:#f0f4f8;border-top:2px solid #c8d4e0;">
+    <td colspan="4" style="position:sticky;left:0;z-index:2;background:#f0f4f8;padding:6px 10px;font-size:11px;font-weight:700;color:#1a3a5c;white-space:nowrap;box-shadow:2px 0 0 #c8d4e0;">
+        Cost of Schedule
+    </td>
+    {% for day in cos_days %}
+    <td id="cos-day-{{ forloop.counter0 }}"
+        data-cos-absent="{{ day.absent_count }}"
+        data-cos-tardy-count="{{ day.tardy_count }}"
+        data-cos-tardy-hrs="{{ day.tardy_loss }}"
+        data-cos-offset="{{ day.ot_offset }}"
+        data-cos-loss="{{ day.net_loss }}"
+        data-cos-sched="{{ day.sched_hours }}"
+        style="padding:6px 4px;text-align:center;cursor:help;"
+        onmouseenter="showCosTooltip(event,this)" onmouseleave="hideCosTooltip()">
+        {% if day.has_data %}
+        <span class="cos-pct" style="font-size:11px;font-weight:700;color:{{ day.cos_color }};">{{ day.cos_pct }}%</span>
+        {% else %}
+        <span class="cos-pct" style="font-size:11px;color:#aaa;">—</span>
+        {% endif %}
+    </td>
+    {% endfor %}
+    <td id="cos-week" colspan="10"
+        data-cos-absent="{{ cos_week.absent_count }}"
+        data-cos-tardy-count="{{ cos_week.tardy_count }}"
+        data-cos-tardy-hrs="{{ cos_week.tardy_loss }}"
+        data-cos-offset="{{ cos_week.ot_offset }}"
+        data-cos-loss="{{ cos_week.net_loss }}"
+        data-cos-sched="{{ cos_week.sched_hours }}"
+        style="padding:6px 4px;text-align:center;border-left:2px solid #c8d4e0;cursor:help;"
+        onmouseenter="showCosTooltip(event,this)" onmouseleave="hideCosTooltip()">
+        <span style="font-size:10px;color:#888;margin-right:4px;">Week</span>
+        {% if cos_week.has_data %}
+        <span class="cos-pct" style="font-size:11px;font-weight:700;color:{{ cos_week.cos_color }};">{{ cos_week.cos_pct }}%</span>
+        {% else %}
+        <span class="cos-pct" style="font-size:11px;color:#aaa;">—</span>
+        {% endif %}
+    </td>
+</tr>
+{% endif %}

@@ -17,6 +17,7 @@ urlpatterns = [
     path('notes/', views.adherence_notes, name='adherence_notes'),
     path('notes/edit/', views.edit_adherence_note, name='edit_adherence_note'),
     path('notes/delete/', views.delete_adherence_note, name='delete_adherence_note'),
+    path('rows/', views.adherence_rows_fragment, name='adherence_rows_fragment'),
     path('poll/', views.adherence_poll, name='adherence_poll'),
     path('my/', views.agent_my_adherence, name='agent_my_adherence'),
 ]

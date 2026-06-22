@@ -12,6 +12,7 @@ from django.views.decorators.http import require_POST
 from django.urls import reverse
 from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
+from django.template.loader import render_to_string
 
 from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
@@ -288,6 +289,11 @@ def _build_maps(agents, week_dates):
     # Must compare per-date (not just day-of-week) so mid-week schedule changes apply
     # correctly without touching prior days in the same week.
     all_templates = list(ShiftTemplate.objects.filter(agent__in=agents))
+    # Pre-index by (agent_id, day_of_week) so template lookup is O(k) not O(M) per cell.
+    tmpl_by_agent_dow = {}
+    for t in all_templates:
+        tmpl_by_agent_dow.setdefault((t.agent_id, t.day_of_week), []).append(t)
+
     agent_ids = [a.pk for a in agents]
     for day_date in week_dates:
         dow = day_date.weekday()
@@ -295,9 +301,7 @@ def _build_maps(agents, week_dates):
             if (agent_id, day_date) in shift_map:
                 continue
             best = None
-            for t in all_templates:
-                if t.agent_id != agent_id or t.day_of_week != dow:
-                    continue
+            for t in tmpl_by_agent_dow.get((agent_id, dow), []):
                 if t.effective_from is not None and t.effective_from > day_date:
                     continue
                 if t.effective_until is not None and t.effective_until < day_date:
@@ -359,21 +363,17 @@ def _build_maps(agents, week_dates):
         if labels:
             split_labels_map[(agent_id, day_date)] = labels
 
-    return shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map
+    return shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow
 
 
-def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None):
+def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None):
     rows = []
     week_dates_set = set(week_dates)
-    # Effective-date-aware template lookup for cross-week spillover (e.g. Monday's Sunday prev-day)
-    _spill_tmpl = list(ShiftTemplate.objects.filter(agent__in=agents))
 
     def _effective_template(agent_id, d):
         dow = d.weekday()
         best = None
-        for t in _spill_tmpl:
-            if t.agent_id != agent_id or t.day_of_week != dow:
-                continue
+        for t in (tmpl_by_agent_dow or {}).get((agent_id, dow), []):
             if t.effective_from is not None and t.effective_from > d:
                 continue
             if t.effective_until is not None and t.effective_until < d:
@@ -809,19 +809,19 @@ def adherence_week(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active', track_attendance=True).select_related('user', 'supervisor__user').order_by(
-        'supervisor__user__last_name', 'supervisor__user__first_name',
-        'user__last_name', 'user__first_name'
-    )
-    agents = _apply_supervisor_filter(agents, supervisor_id)
-    agents = agents.filter(
-        Q(shifts__date__in=week_dates) |
-        Q(overtime_shifts__date__in=week_dates) |
-        Q(shift_templates__isnull=False) |
-        Q(adherence_records__date__in=week_dates)
-    ).distinct()
 
     if request.method == 'POST':
+        agents = Agent.objects.filter(status='active', track_attendance=True).select_related('user', 'supervisor__user').order_by(
+            'supervisor__user__last_name', 'supervisor__user__first_name',
+            'user__last_name', 'user__first_name'
+        )
+        agents = _apply_supervisor_filter(agents, supervisor_id)
+        agents = agents.filter(
+            Q(shifts__date__in=week_dates) |
+            Q(overtime_shifts__date__in=week_dates) |
+            Q(shift_templates__isnull=False) |
+            Q(adherence_records__date__in=week_dates)
+        ).distinct()
         shift_map, record_map, *_ = _build_maps(agents, week_dates)
         for agent in agents:
             for day_date in week_dates:
@@ -843,8 +843,45 @@ def adherence_week(request):
 
         return redirect(reverse('adherence_dashboard') + f'?week_start={week_start.isoformat()}')
 
-    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map)
+    # GET: return the page shell immediately; rows are fetched async via /adherence/rows/
+    return render(request, 'adherence/dashboard.html', {
+        'week_dates': week_dates,
+        'week_start': week_start,
+        'week_end': week_end,
+        'today': timezone.localdate(),
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'status_choices': AdherenceRecord.STATUS_CHOICES,
+        'supervisors': supervisors,
+        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+    })
+
+
+@login_required
+def adherence_rows_fragment(request):
+    """Return rendered tbody rows + COS tfoot as JSON for async loading."""
+    week_start = _get_week_start(request)
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+
+    supervisor_id, _ = _get_supervisor_filter(request)
+    agents = Agent.objects.filter(status='active', track_attendance=True).select_related(
+        'user', 'supervisor__user'
+    ).prefetch_related('five9_profiles').order_by(
+        'supervisor__user__last_name', 'supervisor__user__first_name',
+        'user__last_name', 'user__first_name'
+    )
+    agents = _apply_supervisor_filter(agents, supervisor_id)
+    agents = list(agents.filter(
+        Q(shifts__date__in=week_dates) |
+        Q(overtime_shifts__date__in=week_dates) |
+        Q(shift_templates__isnull=False) |
+        Q(adherence_records__date__in=week_dates)
+    ).distinct())
+
+    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
+                       extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
+                       tmpl_by_agent_dow=tmpl_by_agent_dow)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction
@@ -861,28 +898,24 @@ def adherence_week(request):
         for cell in row['cells']:
             cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
-    show_cos = True  # visible to all logged-in users for now
+    show_cos = True
+    cos_days, cos_week = _calculate_cos(rows, week_dates) if show_cos else ([], {})
 
-    if show_cos:
-        cos_days, cos_week = _calculate_cos(rows, week_dates)
-    else:
-        cos_days, cos_week = [], {}
-
-    return render(request, 'adherence/dashboard.html', {
+    ctx = {
         'rows': rows,
-        'week_dates': week_dates,
         'week_start': week_start,
-        'week_end': week_end,
         'today': timezone.localdate(),
-        'prev_week': (week_start - timedelta(days=7)).isoformat(),
-        'next_week': (week_start + timedelta(days=7)).isoformat(),
         'status_choices': AdherenceRecord.STATUS_CHOICES,
-        'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
         'show_cos': show_cos,
         'cos_days': cos_days,
         'cos_week': cos_week,
-    })
+    }
+
+    tbody_html = render_to_string('adherence/rows_tbody.html', ctx, request=request)
+    tfoot_html = render_to_string('adherence/rows_tfoot.html', ctx, request=request)
+
+    return JsonResponse({'tbody_html': tbody_html, 'tfoot_html': tfoot_html})
 
 
 @login_required
@@ -979,7 +1012,9 @@ def payroll_export(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active', track_attendance=True).select_related('user', 'supervisor__user').order_by(
+    agents = Agent.objects.filter(status='active', track_attendance=True).select_related(
+        'user', 'supervisor__user'
+    ).prefetch_related('five9_profiles').order_by(
         'user__last_name', 'user__first_name'
     )
     agents = _apply_supervisor_filter(agents, supervisor_id)
@@ -1002,6 +1037,7 @@ def payroll_export(request):
                 Coding.objects
                 .filter(date__in=week_dates, agent__in=agents)
                 .select_related('agent__user')
+                .prefetch_related('agent__five9_profiles')
                 .order_by('date', 'agent__user__last_name', 'agent__user__first_name', 'start_time')
             )
 
@@ -1116,8 +1152,8 @@ def payroll_export(request):
         return response
 
     # GET — show preview with editable deductions
-    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map)
+    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map, tmpl_by_agent_dow=tmpl_by_agent_dow)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction
