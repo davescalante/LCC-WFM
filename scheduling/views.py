@@ -138,13 +138,50 @@ def apply_due_role_changes(agent=None):
 
 @login_required
 def dashboard(request):
+    from adherence.models import AdherenceRecord
     today = timezone.localdate()
-    shifts_today = Shift.objects.filter(date=today).select_related('agent__user')
-    agents = Agent.objects.select_related('user').order_by('user__last_name')
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    # Pending requests
+    pending_count = AgentRequest.objects.filter(status='pending').count()
+    pending_unread = AgentRequest.objects.filter(status='pending', supervisor_read=False).count()
+
+    # Today's attendance from AdherenceRecord
+    today_records = list(AdherenceRecord.objects.filter(
+        date=today, agent__track_attendance=True
+    ).values_list('status', flat=True))
+    attendance_on_time = sum(1 for s in today_records if s == 'on_time')
+    attendance_tardy   = sum(1 for s in today_records if s in ('tardy', 'ti'))
+    attendance_absent  = sum(1 for s in today_records if s == 'absent')
+    attendance_vto     = sum(1 for s in today_records if s == 'vto')
+    attendance_total   = len(today_records)
+
+    # Missing time: tracked agents with no adherence record today
+    tracked_ids = set(Agent.objects.filter(
+        track_attendance=True, status='active'
+    ).values_list('pk', flat=True))
+    recorded_ids = set(AdherenceRecord.objects.filter(
+        date=today
+    ).values_list('agent_id', flat=True))
+    missing_count = len(tracked_ids - recorded_ids)
+
+    # Active agents (for context)
+    active_agents_count = Agent.objects.filter(status='active').count()
+
     return render(request, 'scheduling/dashboard.html', {
-        'shifts_today': shifts_today,
-        'agents': agents,
         'today': today,
+        'week_start': week_start,
+        'week_end': week_end,
+        'pending_count': pending_count,
+        'pending_unread': pending_unread,
+        'attendance_on_time': attendance_on_time,
+        'attendance_tardy': attendance_tardy,
+        'attendance_absent': attendance_absent,
+        'attendance_vto': attendance_vto,
+        'attendance_total': attendance_total,
+        'missing_count': missing_count,
+        'active_agents_count': active_agents_count,
     })
 
 

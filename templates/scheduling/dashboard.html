@@ -1,42 +1,105 @@
 {% extends 'base.html' %}
 {% block title %} - Dashboard{% endblock %}
 {% block content %}
-<h1>Dashboard — {{ today }}</h1>
-<div class="grid-3">
-    <div class="card stat">
-        <div class="number">{{ shifts_today.count }}</div>
-        <div class="label">Shifts Today</div>
-    </div>
-    <div class="card stat">
-        <div class="number">{{ agents.count }}</div>
-        <div class="label">Total Users</div>
-    </div>
-    <div class="card stat">
-        <div class="number">{{ shifts_today.count }}</div>
-        <div class="label">On Schedule</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <div>
+        <h1 style="margin:0;">Dashboard</h1>
+        <div style="font-size:13px;color:#888;margin-top:4px;">
+            {{ today|date:"l, F j, Y" }} &nbsp;·&nbsp;
+            Week of {{ week_start|date:"M j" }}–{{ week_end|date:"M j, Y" }}
+        </div>
     </div>
 </div>
-<div class="card">
-    <h2>Today's Shifts</h2>
-    {% if shifts_today %}
-    <table>
-        <thead>
-            <tr><th>Agent</th><th>Team</th><th>Start</th><th>End</th><th>Status</th></tr>
-        </thead>
-        <tbody>
-            {% for shift in shifts_today %}
-            <tr>
-                <td>{{ shift.agent.user.get_full_name }}</td>
-                <td>{{ shift.agent.team }}</td>
-                <td>{{ shift.start_time }}</td>
-                <td>{{ shift.end_time }}</td>
-                <td>{% if shift.is_off %}<span class="badge badge-red">Off</span>{% else %}<span class="badge badge-green">Scheduled</span>{% endif %}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p style="color:#888;">No shifts scheduled for today.</p>
-    {% endif %}
+
+<!-- Summary Cards -->
+<div class="grid-4" style="margin-bottom:20px;">
+
+    <!-- Pending Requests -->
+    <a href="{% url 'requests_list' %}?status=pending" style="text-decoration:none;">
+        <div class="card stat" style="cursor:pointer;transition:box-shadow .15s;position:relative;overflow:hidden;">
+            <div class="number" style="color:{% if pending_count > 0 %}#f59e0b{% else %}#1a3a5c{% endif %};">{{ pending_count }}</div>
+            <div class="label">Pending Requests</div>
+            {% if pending_unread > 0 %}
+            <div style="position:absolute;top:12px;right:12px;">
+                <span style="background:#ef4444;color:white;border-radius:10px;font-size:11px;font-weight:700;padding:2px 8px;">{{ pending_unread }} new</span>
+            </div>
+            {% endif %}
+        </div>
+    </a>
+
+    <!-- Today's Attendance -->
+    <a href="{% url 'records_attendance' %}" style="text-decoration:none;">
+        <div class="card stat" style="cursor:pointer;">
+            <div class="number" style="color:#1a3a5c;">{{ attendance_total }}</div>
+            <div class="label">Records Today</div>
+            {% if attendance_total > 0 %}
+            <div style="margin-top:8px;font-size:11px;color:#6b7280;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+                {% if attendance_on_time > 0 %}<span style="color:#16a34a;">✓ {{ attendance_on_time }} on time</span>{% endif %}
+                {% if attendance_tardy > 0 %}<span style="color:#d97706;">⚠ {{ attendance_tardy }} tardy</span>{% endif %}
+                {% if attendance_absent > 0 %}<span style="color:#dc2626;">✕ {{ attendance_absent }} absent</span>{% endif %}
+                {% if attendance_vto > 0 %}<span style="color:#7c3aed;">◌ {{ attendance_vto }} vto</span>{% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </a>
+
+    <!-- Missing Time -->
+    <a href="{% url 'records_attendance' %}" style="text-decoration:none;">
+        <div class="card stat" style="cursor:pointer;">
+            <div class="number" style="color:{% if missing_count > 0 %}#dc2626{% else %}#16a34a{% endif %};">{{ missing_count }}</div>
+            <div class="label">Missing Records Today</div>
+            <div style="margin-top:6px;font-size:11px;color:#9ca3af;">of {{ active_agents_count }} active agents tracked</div>
+        </div>
+    </a>
+
+    <!-- Active Agents -->
+    <a href="{% url 'agent_list' %}" style="text-decoration:none;">
+        <div class="card stat" style="cursor:pointer;">
+            <div class="number" style="color:#1a3a5c;">{{ active_agents_count }}</div>
+            <div class="label">Active Agents</div>
+        </div>
+    </a>
+
 </div>
+
+<!-- Quick Links -->
+<div class="grid-2">
+    <div class="card">
+        <h2 style="margin-bottom:12px;">Quick Links</h2>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+            <a href="{% url 'adherence_week' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Adherence Dashboard
+            </a>
+            <a href="{% url 'shift_list' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Schedule / Shifts
+            </a>
+            <a href="{% url 'overtime_list' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Overtime Shifts
+            </a>
+            <a href="{% url 'erlang_calculator' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Staffing Calculator (Erlang)
+            </a>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-bottom:12px;">Records</h2>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+            <a href="{% url 'records_attendance' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Attendance Records
+            </a>
+            <a href="{% url 'records_hours' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Hours Records
+            </a>
+            <a href="{% url 'records_role_log' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Role Log
+            </a>
+            <a href="{% url 'activity_log' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
+                Activity Log
+            </a>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
