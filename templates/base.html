@@ -8,11 +8,15 @@
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: Arial, sans-serif; background: #f4f6f9; color: #333; }
-        nav { background: #1a3a5c; color: white; padding: 0 24px; display: flex; align-items: center; height: 56px; }
-        nav .brand { font-size: 18px; font-weight: bold; margin-right: 32px; }
-        nav a { color: #cde; text-decoration: none; margin-right: 20px; font-size: 14px; }
+        nav { background: #1a3a5c; color: white; padding: 0 16px; display: flex; align-items: center; min-height: 56px; flex-wrap: wrap; gap: 0; }
+        nav .brand { font-size: 18px; font-weight: bold; margin-right: 24px; white-space: nowrap; }
+        nav a { color: #cde; text-decoration: none; margin-right: 16px; font-size: 13px; white-space: nowrap; }
         nav a:hover { color: white; }
-        .nav-user { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+        .nav-user { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        @media (max-width: 900px) {
+            nav a { margin-right: 10px; font-size: 12px; }
+            nav .brand { margin-right: 14px; font-size: 16px; }
+        }
         .nav-username { font-size: 13px; color: #9ab; }
         .nav-signout { padding: 5px 13px; font-size: 13px; background: rgba(255,255,255,.12); color: #cde; border: 1px solid rgba(255,255,255,.22); border-radius: 4px; cursor: pointer; font-family: inherit; }
         .nav-signout:hover { background: rgba(255,255,255,.22); color: white; }
@@ -44,6 +48,10 @@
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
         .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        @media (max-width: 768px) {
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+            .container { padding: 0 12px; }
+        }
         .stat { text-align: center; }
         .stat .number { font-size: 36px; font-weight: bold; color: #1a3a5c; }
         .stat .label { font-size: 13px; color: #888; margin-top: 4px; }

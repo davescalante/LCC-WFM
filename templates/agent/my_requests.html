@@ -194,12 +194,33 @@ function hideRequestForm() {
     document.getElementById('request-form-card').style.display = 'none';
     document.getElementById('show-form-btn').style.display = '';
 }
+var _REQ_REQUIRED = {
+    'coding': ['coding_date', 'coding_start_time', 'coding_end_time'],
+    'vacation': ['vacation_start', 'vacation_end'],
+    'day_off_change': ['effective_date'],
+    'vto': ['vto_date'],
+    'loa': ['loa_start'],
+    'schedule_change': ['schedule_new_start_time', 'schedule_new_end_time', 'schedule_effective_date'],
+};
+
 function updateReqForm() {
     var type = document.getElementById('req-type').value;
+    // Hide all sections and remove required from all optional fields
+    document.querySelectorAll('.req-section input, .req-section select').forEach(function(el) {
+        el.removeAttribute('required');
+    });
     document.querySelectorAll('.req-section').forEach(function(s) { s.style.display = 'none'; });
     if (type) {
         var sec = document.getElementById('sec-' + type);
-        if (sec) sec.style.display = 'block';
+        if (sec) {
+            sec.style.display = 'block';
+            // Add required to visible required fields
+            var fields = _REQ_REQUIRED[type] || [];
+            fields.forEach(function(name) {
+                var el = document.querySelector('[name="' + name + '"]');
+                if (el) el.setAttribute('required', '');
+            });
+        }
         document.getElementById('notes-section').style.display = 'block';
     } else {
         document.getElementById('notes-section').style.display = 'none';
