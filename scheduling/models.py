@@ -61,6 +61,12 @@ class Agent(models.Model):
     hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     notes = models.TextField(blank=True)
 
+    @property
+    def separation(self):
+        """Returns the current (latest non-cancelled) separation record, or None."""
+        seps = [s for s in self.separations.all() if s.status != 'cancelled']
+        return sorted(seps, key=lambda s: s.processed_at, reverse=True)[0] if seps else None
+
     def __str__(self):
         return self.agent_name or self.user.get_full_name() or self.user.username
 
@@ -522,6 +528,11 @@ class AgentSeparation(models.Model):
         ('contract_end', 'End of Contract'),
         ('resigned_notice', 'Resigned with Notice'),
     ]
+    STATUS_CHOICES = [
+        ('in_progress', 'In Progress'),
+        ('finalized', 'Finalized'),
+        ('cancelled', 'Cancelled'),
+    ]
     # Maps separation type to EmploymentPeriod.reason_ended
     _EP_REASON_MAP = {
         'quit': 'resigned',
@@ -531,18 +542,27 @@ class AgentSeparation(models.Model):
         'resigned_notice': 'resigned',
     }
 
-    agent = models.OneToOneField(
-        Agent, on_delete=models.CASCADE, related_name='separation'
+    agent = models.ForeignKey(
+        Agent, on_delete=models.CASCADE, related_name='separations'
     )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='finalized')
     separation_type = models.CharField(max_length=20, choices=SEPARATION_TYPE_CHOICES)
     last_day_worked = models.DateField()
-    separation_date = models.DateField(help_text="First day agent no longer appears on Adherence")
+    remove_from_adherence_date = models.DateField(
+        null=True, blank=True,
+        help_text="Monday of first week agent no longer appears on Adherence"
+    )
     notes = models.TextField(blank=True)
     processed_by = models.ForeignKey(
         'auth.User', null=True, blank=True, on_delete=models.SET_NULL,
         related_name='separations_processed'
     )
     processed_at = models.DateTimeField(auto_now_add=True)
+    finalized_by = models.ForeignKey(
+        'auth.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='separations_finalized'
+    )
+    finalized_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-processed_at']

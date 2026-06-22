@@ -200,10 +200,10 @@ def agent_list(request):
 
     # Status filter — default to active so separated agents don't clutter daily view
     status_filter = request.GET.get('status_filter', 'active')
-    if status_filter not in ('active', 'inactive', 'all'):
+    if status_filter not in ('active', 'inactive', 'in_progress', 'all'):
         status_filter = 'active'
 
-    agents = Agent.objects.select_related('user', 'supervisor__user').prefetch_related('separation').order_by(
+    agents = Agent.objects.select_related('user', 'supervisor__user').prefetch_related('separations').order_by(
         'user__last_name', 'user__first_name'
     )
     if supervisor_id:
@@ -216,6 +216,8 @@ def agent_list(request):
         agents = agents.filter(status='active')
     elif status_filter == 'inactive':
         agents = agents.filter(status='inactive')
+    elif status_filter == 'in_progress':
+        agents = agents.filter(separations__status='in_progress').distinct()
     # 'all' — no status filter
 
     return render(request, 'scheduling/agent_list.html', {
@@ -228,7 +230,7 @@ def agent_list(request):
 
 @login_required
 def agent_detail(request, pk):
-    agent = get_object_or_404(Agent, pk=pk)
+    agent = get_object_or_404(Agent.objects.prefetch_related('separations'), pk=pk)
     apply_due_role_changes(agent=agent)
     shifts = Shift.objects.filter(agent=agent).order_by('-date')[:30]
     pending_role_change = agent.scheduled_role_changes.filter(
@@ -239,6 +241,29 @@ def agent_detail(request, pk):
     supervisors = Agent.objects.filter(
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
+
+    agent_separation = agent.separation  # current separation (via property)
+
+    # Termination documentation tracker (for in_progress separations)
+    tracker_data = None
+    if agent_separation and agent_separation.status == 'in_progress':
+        from adherence.models import AdherenceRecord
+        today = date.today()
+        days_since = (today - agent_separation.last_day_worked).days
+        thirty_ago = today - timedelta(days=30)
+        ncns_count = AdherenceRecord.objects.filter(
+            agent=agent, status='NCNS', date__gte=thirty_ago
+        ).count()
+        absent_count = AdherenceRecord.objects.filter(
+            agent=agent, status='Absent', date__gte=thirty_ago
+        ).count()
+        tracker_data = {
+            'last_day': agent_separation.last_day_worked,
+            'days_since': days_since,
+            'ncns_count': ncns_count,
+            'absent_count': absent_count,
+        }
+
     return render(request, 'scheduling/agent_detail.html', {
         'agent': agent,
         'shifts': shifts,
@@ -247,6 +272,7 @@ def agent_detail(request, pk):
         'day_choices': ShiftTemplate.DAY_CHOICES,
         'supervisors': supervisors,
         'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
+        'tracker_data': tracker_data,
     })
 
 
@@ -2822,13 +2848,51 @@ def request_mark_done(request, pk):
 
 # ── Agent Separation ──────────────────────────────────────────────────────────
 
+def _finalize_separation(agent, sep, remove_date, last_day, separation_type, user):
+    """Apply all side-effects of a finalized separation."""
+    agent.status = 'inactive'
+    agent.track_attendance = False
+    agent.termination_date = last_day
+    agent.save(update_fields=['status', 'track_attendance', 'termination_date'])
+
+    # Update finalized_by/finalized_at on sep record
+    sep.finalized_by = user
+    sep.finalized_at = timezone.now()
+    sep.save(update_fields=['finalized_by', 'finalized_at'])
+
+    ep_reason = AgentSeparation._EP_REASON_MAP.get(separation_type, 'other')
+    ep = agent.employment_periods.filter(end_date__isnull=True).order_by('-start_date').first()
+    if ep:
+        ep.end_date = remove_date
+        ep.reason_ended = ep_reason
+        if sep.notes and not ep.notes:
+            ep.notes = sep.notes
+        ep.save()
+
+    OvertimeShift.objects.filter(
+        agent=agent, date__gte=remove_date, status='pending'
+    ).update(status='cancelled', cancellation_reason='Auto-cancelled due to agent separation')
+
+    AgentRequest.objects.filter(agent=agent, status='pending').update(
+        status='rejected',
+        rejection_reason='Auto-rejected due to agent separation',
+        reviewed_by=user,
+        reviewed_at=timezone.now(),
+    )
+
+    ScheduledRoleChange.objects.filter(
+        agent=agent, effective_date__gte=remove_date,
+        applied_at__isnull=True, cancelled_at__isnull=True
+    ).update(cancelled_at=timezone.now())
+
+    _auto_code_separation_week(agent, last_day, separation_type, user)
+
+
 @login_required
 @require_POST
 def process_separation(request, pk):
-    from adherence.models import AdherenceRecord
-    agent = get_object_or_404(Agent, pk=pk)
+    agent = get_object_or_404(Agent.objects.prefetch_related('separations'), pk=pk)
 
-    # Only admins / supervisors / coordinators may separate
     try:
         viewer = request.user.agent
         if viewer.role == 'agent':
@@ -2837,110 +2901,145 @@ def process_separation(request, pk):
     except Exception:
         pass
 
-    # Already separated?
-    if hasattr(agent, 'separation'):
-        messages.error(request, "This agent has already been separated.")
+    # Already has a non-cancelled separation?
+    existing = agent.separation  # uses property
+    if existing:
+        messages.error(request, "This agent already has an active separation. Use Update to modify it.")
         return redirect('agent_detail', pk=pk)
 
+    sep_status      = request.POST.get('separation_status', '').strip()
     separation_type = request.POST.get('separation_type', '').strip()
     last_day_str    = request.POST.get('last_day_worked', '').strip()
-    sep_date_str    = request.POST.get('separation_date', '').strip()
+    remove_str      = request.POST.get('remove_from_adherence_date', '').strip()
     notes           = request.POST.get('notes', '').strip()
     confirmed       = request.POST.get('confirm', '')
 
-    # Validate
     errors = []
+    if sep_status not in ('in_progress', 'finalized'):
+        errors.append("Separation Status is required.")
     if not separation_type:
         errors.append("Separation type is required.")
     if not last_day_str:
         errors.append("Last Day Worked is required.")
-    if not sep_date_str:
-        errors.append("Separation Date is required.")
+    if sep_status == 'finalized' and not remove_str:
+        errors.append("Remove from Adherence date is required when finalizing.")
     if not confirmed:
         errors.append("Please check the confirmation checkbox.")
-
-    try:
-        last_day = date.fromisoformat(last_day_str)
-    except (ValueError, TypeError):
-        errors.append("Invalid Last Day Worked date.")
-        last_day = None
-
-    try:
-        sep_date = date.fromisoformat(sep_date_str)
-    except (ValueError, TypeError):
-        errors.append("Invalid Separation Date.")
-        sep_date = None
 
     valid_types = [c[0] for c in AgentSeparation.SEPARATION_TYPE_CHOICES]
     if separation_type and separation_type not in valid_types:
         errors.append("Invalid separation type.")
+
+    last_day = None
+    if last_day_str:
+        try:
+            last_day = date.fromisoformat(last_day_str)
+        except ValueError:
+            errors.append("Invalid Last Day Worked date.")
+
+    remove_date = None
+    if remove_str:
+        try:
+            remove_date = date.fromisoformat(remove_str)
+        except ValueError:
+            errors.append("Invalid Remove from Adherence date.")
 
     if errors:
         for e in errors:
             messages.error(request, e)
         return redirect('agent_detail', pk=pk)
 
-    # ── Create separation record ───────────────────────────────────────────
-    AgentSeparation.objects.create(
+    sep = AgentSeparation.objects.create(
         agent=agent,
+        status=sep_status,
         separation_type=separation_type,
         last_day_worked=last_day,
-        separation_date=sep_date,
+        remove_from_adherence_date=remove_date,
         notes=notes,
         processed_by=request.user,
     )
 
-    # ── Update agent fields ────────────────────────────────────────────────
-    agent.status = 'inactive'
-    agent.track_attendance = False
-    agent.termination_date = last_day
-    agent.save(update_fields=['status', 'track_attendance', 'termination_date'])
-
-    # ── Close current employment period ────────────────────────────────────
-    ep_reason = AgentSeparation._EP_REASON_MAP.get(separation_type, 'other')
-    ep = agent.employment_periods.filter(end_date__isnull=True).order_by('-start_date').first()
-    if ep:
-        ep.end_date = sep_date
-        ep.reason_ended = ep_reason
-        if notes and not ep.notes:
-            ep.notes = notes
-        ep.save()
-
-    # ── Cancel future pending OT shifts ────────────────────────────────────
-    cancelled_ot = OvertimeShift.objects.filter(
-        agent=agent, date__gte=sep_date, status='pending'
-    ).update(status='cancelled', cancellation_reason='Auto-cancelled due to agent separation')
-
-    # ── Reject pending agent requests ──────────────────────────────────────
-    rejected_reqs = AgentRequest.objects.filter(
-        agent=agent, status='pending'
-    ).update(
-        status='rejected',
-        rejection_reason='Auto-rejected due to agent separation',
-        reviewed_by=request.user,
-        reviewed_at=timezone.now(),
-    )
-
-    # ── Cancel future scheduled role changes ───────────────────────────────
-    ScheduledRoleChange.objects.filter(
-        agent=agent, effective_date__gte=sep_date, applied_at__isnull=True, cancelled_at__isnull=True
-    ).update(cancelled_at=timezone.now())
-
-    # ── Auto-code remaining days in separation week ────────────────────────
-    _auto_code_separation_week(agent, last_day, separation_type, request.user)
-
-    # ── Activity log ────────────────────────────────────────────────────────
     sep_display = dict(AgentSeparation.SEPARATION_TYPE_CHOICES).get(separation_type, separation_type)
-    log_action(request.user, 'Processed agent separation',
-               f'{agent} — {sep_display} | Last day: {last_day} | Separation date: {sep_date}',
-               agent=agent)
 
-    messages.success(
-        request,
-        f"Separation processed for {agent}. "
-        f"{'Cancelled ' + str(cancelled_ot) + ' OT shift(s). ' if cancelled_ot else ''}"
-        f"{'Rejected ' + str(rejected_reqs) + ' pending request(s).' if rejected_reqs else ''}"
-    )
+    if sep_status == 'finalized':
+        _finalize_separation(agent, sep, remove_date, last_day, separation_type, request.user)
+        log_action(request.user, 'Processed agent separation (Finalized)',
+                   f'{agent} — {sep_display} | Last day: {last_day} | Remove from adherence: {remove_date}',
+                   agent=agent)
+        messages.success(request, f"Separation finalized for {agent}.")
+    else:
+        log_action(request.user, 'Opened separation (In Progress)',
+                   f'{agent} — {sep_display} | Last day: {last_day}',
+                   agent=agent)
+        messages.success(request, f"Separation marked In Progress for {agent}. Agent remains active for documentation.")
+
+    return redirect('agent_detail', pk=pk)
+
+
+@login_required
+@require_POST
+def update_separation(request, pk):
+    agent = get_object_or_404(Agent.objects.prefetch_related('separations'), pk=pk)
+
+    try:
+        viewer = request.user.agent
+        if viewer.role == 'agent':
+            messages.error(request, "Access denied.")
+            return redirect('agent_detail', pk=pk)
+    except Exception:
+        pass
+
+    sep = agent.separation
+    if not sep:
+        messages.error(request, "No active separation found.")
+        return redirect('agent_detail', pk=pk)
+
+    action = request.POST.get('action', '').strip()  # 'finalize' or 'cancel'
+
+    if action == 'cancel':
+        sep.status = 'cancelled'
+        sep.save(update_fields=['status'])
+        sep_display = sep.get_separation_type_display()
+        log_action(request.user, 'Cancelled separation (In Progress)',
+                   f'{agent} — {sep_display} separation cancelled', agent=agent)
+        messages.success(request, f"Separation for {agent} has been cancelled. Agent remains active.")
+        return redirect('agent_detail', pk=pk)
+
+    if action == 'finalize':
+        remove_str = request.POST.get('remove_from_adherence_date', '').strip()
+        confirmed  = request.POST.get('confirm', '')
+
+        errors = []
+        if not remove_str:
+            errors.append("Remove from Adherence date is required to finalize.")
+        if not confirmed:
+            errors.append("Please check the confirmation checkbox.")
+
+        remove_date = None
+        if remove_str:
+            try:
+                remove_date = date.fromisoformat(remove_str)
+            except ValueError:
+                errors.append("Invalid date.")
+
+        if errors:
+            for e in errors:
+                messages.error(request, e)
+            return redirect('agent_detail', pk=pk)
+
+        sep.status = 'finalized'
+        sep.remove_from_adherence_date = remove_date
+        sep.save(update_fields=['status', 'remove_from_adherence_date'])
+
+        _finalize_separation(agent, sep, remove_date, sep.last_day_worked, sep.separation_type, request.user)
+
+        sep_display = sep.get_separation_type_display()
+        log_action(request.user, 'Finalized agent separation',
+                   f'{agent} — {sep_display} | Remove from adherence: {remove_date}', agent=agent)
+        messages.success(request, f"Separation finalized for {agent}.")
+        return redirect('agent_detail', pk=pk)
+
+    messages.error(request, "Invalid action.")
     return redirect('agent_detail', pk=pk)
 
 
@@ -2981,16 +3080,19 @@ def _auto_code_separation_week(agent, last_day, separation_type, user):
 
 @login_required
 def records_separations(request):
-    sep_type_f = request.GET.get('sep_type', '').strip()
+    sep_type_f    = request.GET.get('sep_type', '').strip()
+    sep_status_f  = request.GET.get('sep_status', '').strip()
     date_from_str = request.GET.get('from', '').strip()
     date_to_str   = request.GET.get('to', '').strip()
 
     qs = AgentSeparation.objects.select_related(
-        'agent__user', 'agent__supervisor__user', 'processed_by'
+        'agent__user', 'agent__supervisor__user', 'processed_by', 'finalized_by'
     ).order_by('-processed_at')
 
     if sep_type_f:
         qs = qs.filter(separation_type=sep_type_f)
+    if sep_status_f:
+        qs = qs.filter(status=sep_status_f)
     if date_from_str:
         try:
             qs = qs.filter(last_day_worked__gte=date.fromisoformat(date_from_str))
@@ -3005,7 +3107,9 @@ def records_separations(request):
     return render(request, 'records/separations.html', {
         'separations': list(qs),
         'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
+        'separation_status_choices': AgentSeparation.STATUS_CHOICES,
         'selected_type': sep_type_f,
+        'selected_status': sep_status_f,
         'date_from': date_from_str,
         'date_to': date_to_str,
     })

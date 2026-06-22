@@ -33,6 +33,7 @@
             style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
             <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active</option>
             <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive</option>
+            <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>In Progress Separation</option>
             <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All</option>
         </select>
 

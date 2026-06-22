@@ -24,6 +24,15 @@
             </select>
         </div>
         <div>
+            <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Status</label>
+            <select name="sep_status" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
+                <option value="">All statuses</option>
+                {% for val, lbl in separation_status_choices %}
+                <option value="{{ val }}" {% if selected_status == val %}selected{% endif %}>{{ lbl }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
             <label style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px;display:block;">Last Day From</label>
             <input type="date" name="from" value="{{ date_from }}"
                    style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin-bottom:0;">
@@ -44,8 +53,9 @@
             <tr>
                 <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Agent</th>
                 <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Separation Type</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Status</th>
                 <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Last Day Worked</th>
-                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Separation Date</th>
+                <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Off Adherence From</th>
                 <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Processed By</th>
                 <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Processed On</th>
                 <th style="font-size:12px;position:sticky;top:0;z-index:1;background:#f0f4f8;">Notes</th>
@@ -71,16 +81,27 @@
                         <span class="badge" style="background:#f0fdf4;color:#166534;">Resigned with Notice</span>
                     {% endif %}
                 </td>
+                <td style="font-size:13px;">
+                    {% if sep.status == 'in_progress' %}
+                        <span class="badge" style="background:#fef3c7;color:#92400e;">In Progress</span>
+                    {% elif sep.status == 'finalized' %}
+                        <span class="badge" style="background:#f3f4f6;color:#6b7280;">Finalized</span>
+                    {% elif sep.status == 'cancelled' %}
+                        <span class="badge" style="background:#f3f4f6;color:#9ca3af;">Cancelled</span>
+                    {% else %}
+                        {{ sep.status }}
+                    {% endif %}
+                </td>
                 <td style="font-size:13px;white-space:nowrap;">{{ sep.last_day_worked|date:"M d, Y" }}</td>
-                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.separation_date|date:"M d, Y" }}</td>
-                <td style="font-size:13px;">{{ sep.processed_by.get_full_name|default:sep.processed_by.username|default:"—" }}</td>
+                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.remove_from_adherence_date|date:"M d, Y"|default:"&mdash;" }}</td>
+                <td style="font-size:13px;">{{ sep.processed_by.get_full_name|default:sep.processed_by.username|default:"&mdash;" }}</td>
                 <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.processed_at|date:"M d, Y" }}</td>
-                <td style="font-size:12px;color:#6b7280;max-width:200px;">{{ sep.notes|truncatechars:60|default:"—" }}</td>
+                <td style="font-size:12px;color:#6b7280;max-width:200px;">{{ sep.notes|truncatechars:60|default:"&mdash;" }}</td>
                 <td><a href="{% url 'agent_history' sep.agent.pk %}" class="btn" style="padding:4px 10px;font-size:12px;background:#f0f4f8;color:#1a3a5c;">History</a></td>
             </tr>
             {% empty %}
             <tr>
-                <td colspan="8" style="padding:40px;text-align:center;color:#9ca3af;font-size:14px;">
+                <td colspan="9" style="padding:40px;text-align:center;color:#9ca3af;font-size:14px;">
                     No separation records found.
                 </td>
             </tr>

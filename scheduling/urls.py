@@ -39,6 +39,7 @@ urlpatterns = [
     path('requests/<int:pk>/done/', views.request_mark_done, name='request_mark_done'),
     path('agent/my-requests/', views.agent_my_requests, name='agent_my_requests'),
     path('agents/<int:pk>/separate/', views.process_separation, name='process_separation'),
+    path('agents/<int:pk>/separation/update/', views.update_separation, name='update_separation'),
     path('records/separations/', views.records_separations, name='records_separations'),
     path('agent/inactive/', views.agent_inactive, name='agent_inactive'),
 ]

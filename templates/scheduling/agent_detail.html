@@ -11,30 +11,59 @@
 
 {% if messages %}{% for msg in messages %}<div class="alert" {% if 'error' in msg.tags %}style="background:#fee2e2;color:#991b1b;"{% endif %}>{{ msg }}</div>{% endfor %}{% endif %}
 
-{% if agent.status == 'inactive' and agent.separation %}
-<div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:14px;">
+{% if agent.separation and agent.separation.status == 'in_progress' %}
+<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:flex-start;gap:14px;">
+    <span style="font-size:20px;line-height:1;">&#9888;</span>
+    <div style="flex:1;">
+        <div style="font-weight:600;font-size:14px;color:#92400e;margin-bottom:2px;">Separation In Progress &mdash; {{ agent.separation.get_separation_type_display }}</div>
+        <div style="font-size:13px;color:#78350f;">Last Day Worked: {{ agent.separation.last_day_worked|date:"M d, Y" }} &middot; Opened by {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username }}</div>
+        {% if agent.separation.notes %}<div style="font-size:12px;color:#a16207;margin-top:3px;font-style:italic;">{{ agent.separation.notes }}</div>{% endif %}
+    </div>
+    <a href="{% url 'agent_history' agent.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#fef3c7;color:#92400e;white-space:nowrap;">View History</a>
+</div>
+{% elif agent.separation and agent.separation.status == 'finalized' %}
+<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:flex-start;gap:14px;">
     <span style="font-size:20px;line-height:1;">&#128683;</span>
     <div style="flex:1;">
-        <div style="font-weight:600;font-size:14px;color:#9f1239;margin-bottom:4px;">Agent Separated</div>
+        <div style="font-weight:600;font-size:14px;color:#374151;margin-bottom:4px;">Agent Separated</div>
         <div style="font-size:13px;color:#6b7280;line-height:1.6;">
-            <strong>Type:</strong>
-            {% if agent.separation.separation_type == 'quit' %}Quit (Voluntary)
-            {% elif agent.separation.separation_type == 'terminated' %}Terminated (Involuntary)
-            {% elif agent.separation.separation_type == 'abandonment' %}Job Abandonment
-            {% elif agent.separation.separation_type == 'contract_end' %}End of Contract
-            {% elif agent.separation.separation_type == 'resigned_notice' %}Resigned with Notice
-            {% endif %}
+            <strong>Type:</strong> {{ agent.separation.get_separation_type_display }}
             &nbsp;&middot;&nbsp;
             <strong>Last Day Worked:</strong> {{ agent.separation.last_day_worked|date:"M d, Y" }}
+            {% if agent.separation.remove_from_adherence_date %}
             &nbsp;&middot;&nbsp;
-            <strong>Processed by:</strong> {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username|default:"—" }}
+            <strong>Off Adherence From:</strong> {{ agent.separation.remove_from_adherence_date|date:"M d, Y" }}
+            {% endif %}
+            &nbsp;&middot;&nbsp;
+            <strong>Processed by:</strong> {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username|default:"&mdash;" }}
             on {{ agent.separation.processed_at|date:"M d, Y" }}
         </div>
         {% if agent.separation.notes %}
         <div style="font-size:12px;color:#9ca3af;margin-top:4px;font-style:italic;">{{ agent.separation.notes }}</div>
         {% endif %}
     </div>
-    <a href="{% url 'agent_history' agent.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#ffe4e6;color:#9f1239;white-space:nowrap;">View History</a>
+    <a href="{% url 'agent_history' agent.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#e5e7eb;color:#374151;white-space:nowrap;">View History</a>
+</div>
+{% endif %}
+
+{% if tracker_data %}
+<div class="card" style="margin-bottom:16px;background:#fffbeb;border-color:#fde68a;">
+    <div style="font-size:13px;font-weight:600;color:#78350f;margin-bottom:10px;">Termination Documentation Tracker</div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;">
+        <div style="text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#92400e;">{{ tracker_data.days_since }}</div>
+            <div style="font-size:11px;color:#a16207;">Days since<br>last day</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#b91c1c;">{{ tracker_data.ncns_count }}</div>
+            <div style="font-size:11px;color:#a16207;">NCNS in<br>last 30 days</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#b45309;">{{ tracker_data.absent_count }}</div>
+            <div style="font-size:11px;color:#a16207;">Absences in<br>last 30 days</div>
+        </div>
+    </div>
+    <div style="font-size:11px;color:#a16207;margin-top:8px;font-style:italic;">LCC threshold: 3 absences + 1 additional incident within 30 days. This is informational only &mdash; no action is automated.</div>
 </div>
 {% endif %}
 
@@ -42,11 +71,25 @@
     <h1>{{ agent.user.get_full_name }}</h1>
     <div style="display:flex;gap:8px;align-items:center;">
         <a href="{% url 'agent_edit' agent.pk %}" class="btn btn-primary">Edit User</a>
-        {% if agent.status == 'active' %}
+        {% if not agent.separation %}
         <button onclick="document.getElementById('separation-modal').style.display='flex'"
             style="padding:7px 14px;border:1px solid #fca5a5;border-radius:4px;background:#fff1f2;color:#b91c1c;font-size:13px;cursor:pointer;font-weight:500;">
             Process Separation
         </button>
+        {% endif %}
+        {% if agent.separation and agent.separation.status == 'in_progress' %}
+        <button onclick="document.getElementById('finalize-modal').style.display='flex'"
+            style="padding:7px 14px;border:1px solid #fcd34d;border-radius:4px;background:#fffbeb;color:#92400e;font-size:13px;cursor:pointer;font-weight:500;">
+            Finalize Separation
+        </button>
+        <button onclick="document.getElementById('cancel-sep-form').submit()"
+            style="padding:7px 14px;border:1px solid #d1d5db;border-radius:4px;background:#f9fafb;color:#6b7280;font-size:13px;cursor:pointer;font-weight:500;">
+            Cancel Separation
+        </button>
+        <form id="cancel-sep-form" method="post" action="{% url 'update_separation' agent.pk %}" style="display:none;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="cancel">
+        </form>
         {% endif %}
         <a href="{% url 'agent_delete' agent.pk %}" class="btn" style="background:#c0392b;color:white;">Delete</a>
     </div>
@@ -235,34 +278,29 @@
         </form>
     </div>
 </div>
-<script>
-(function() {
-    // Default effective date to tomorrow
-    var tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    var iso = tomorrow.toISOString().slice(0, 10);
-    var inp = document.getElementById('src-eff-date');
-    if (inp) { inp.value = iso; inp.min = iso; }
-
-    // Close modal on backdrop click
-    document.getElementById('role-change-modal').addEventListener('click', function(e) {
-        if (e.target === this) this.style.display = 'none';
-    });
-})();
-</script>
 
 <!-- Process Separation Modal -->
-{% if agent.status == 'active' %}
+{% if not agent.separation %}
 <div id="separation-modal"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;">
     <div style="background:white;border-radius:10px;padding:28px 32px;width:100%;max-width:500px;box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-            <h3 style="margin:0;font-size:16px;color:#9f1239;">Process Separation — {{ agent }}</h3>
+            <h3 style="margin:0;font-size:16px;color:#9f1239;">Process Separation &mdash; {{ agent }}</h3>
             <button onclick="document.getElementById('separation-modal').style.display='none'"
-                style="background:none;border:none;font-size:22px;color:#aaa;cursor:pointer;line-height:1;">×</button>
+                style="background:none;border:none;font-size:22px;color:#aaa;cursor:pointer;line-height:1;">&times;</button>
         </div>
         <form method="post" action="{% url 'process_separation' agent.pk %}" id="sep-form">
             {% csrf_token %}
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Separation Status</label>
+                <select name="separation_status" id="sep-status" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                    <option value="">— Select status —</option>
+                    <option value="in_progress">In Progress (documentation pending)</option>
+                    <option value="finalized">Finalized (complete)</option>
+                </select>
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">Choose "In Progress" to begin the process without immediately deactivating the agent. Choose "Finalized" to complete the separation now.</div>
+            </div>
             <div style="margin-bottom:16px;">
                 <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Separation Type</label>
                 <select name="separation_type" id="sep-type" required
@@ -279,11 +317,16 @@
                     style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
                 <div style="font-size:11px;color:#9ca3af;margin-top:4px;">The last date the agent actually worked or was on shift.</div>
             </div>
-            <div style="margin-bottom:16px;">
-                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Separation Date</label>
-                <input type="date" name="separation_date" id="sep-date" required
+            <div id="sep-remove-section" style="margin-bottom:16px;display:none;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Remove from Adherence Date</label>
+                <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                    <button type="button" id="sep-next-mon" style="padding:4px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;background:#f8fafc;color:#555;">Next Monday</button>
+                    <button type="button" id="sep-plus2" style="padding:4px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;background:#f8fafc;color:#555;">+2 Weeks</button>
+                    <button type="button" id="sep-plus3" style="padding:4px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;background:#f8fafc;color:#555;">+3 Weeks</button>
+                </div>
+                <input type="date" name="remove_from_adherence_date" id="sep-remove-date"
                     style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
-                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">First day the agent no longer appears on Adherence. Auto-set to Monday after last day worked.</div>
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">Monday of the first week the agent no longer appears on Adherence. Auto-set to Monday after last day.</div>
             </div>
             <div style="margin-bottom:16px;">
                 <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Notes <span style="font-weight:400;text-transform:none;color:#9ca3af;letter-spacing:0;">(optional)</span></label>
@@ -291,8 +334,8 @@
                     style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;resize:vertical;"
                     placeholder="Reason, context, or additional information..."></textarea>
             </div>
-            <div style="margin-bottom:20px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:12px 14px;">
-                <div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:6px;">This will automatically:</div>
+            <div id="sep-finalize-warning" style="display:none;margin-bottom:20px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:12px 14px;">
+                <div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:6px;">Finalizing will automatically:</div>
                 <ul style="margin:0;padding-left:18px;font-size:12px;color:#78350f;line-height:1.7;">
                     <li>Mark the agent as Inactive and stop attendance tracking</li>
                     <li>Close their current Employment Period</li>
@@ -306,7 +349,7 @@
                     <input type="checkbox" name="confirm" id="sep-confirm" required
                         style="margin-top:2px;flex-shrink:0;">
                     <span style="font-size:13px;color:#374151;line-height:1.5;">
-                        I confirm that I want to process this separation. This action cannot be undone.
+                        I confirm that I want to record this separation.
                     </span>
                 </label>
             </div>
@@ -322,27 +365,175 @@
         </form>
     </div>
 </div>
+{% endif %}
+
+<!-- Finalize Separation Modal -->
+{% if agent.separation and agent.separation.status == 'in_progress' %}
+<div id="finalize-modal"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:10px;padding:28px 32px;width:100%;max-width:480px;box-shadow:0 8px 40px rgba(0,0,0,.18);max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+            <h3 style="margin:0;font-size:16px;color:#92400e;">Finalize Separation &mdash; {{ agent }}</h3>
+            <button onclick="document.getElementById('finalize-modal').style.display='none'"
+                style="background:none;border:none;font-size:22px;color:#aaa;cursor:pointer;line-height:1;">&times;</button>
+        </div>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
+            Separation type: <strong>{{ agent.separation.get_separation_type_display }}</strong><br>
+            Last day worked: <strong>{{ agent.separation.last_day_worked|date:"M d, Y" }}</strong>
+        </p>
+        <form method="post" action="{% url 'update_separation' agent.pk %}" id="finalize-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="finalize">
+            <div style="margin-bottom:16px;">
+                <label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;">Remove from Adherence Date</label>
+                <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                    <button type="button" id="fin-next-mon" style="padding:4px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;background:#f8fafc;color:#555;">Next Monday</button>
+                    <button type="button" id="fin-plus2" style="padding:4px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;background:#f8fafc;color:#555;">+2 Weeks</button>
+                    <button type="button" id="fin-plus3" style="padding:4px 10px;border:1px solid #ddd;border-radius:4px;font-size:12px;cursor:pointer;background:#f8fafc;color:#555;">+3 Weeks</button>
+                </div>
+                <input type="date" name="remove_from_adherence_date" id="fin-remove-date" required
+                    style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;">
+                <div style="font-size:11px;color:#9ca3af;margin-top:4px;">Monday of the first week the agent no longer appears on Adherence.</div>
+            </div>
+            <div style="margin-bottom:20px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:12px 14px;">
+                <div style="font-size:12px;color:#92400e;font-weight:600;margin-bottom:6px;">This will automatically:</div>
+                <ul style="margin:0;padding-left:18px;font-size:12px;color:#78350f;line-height:1.7;">
+                    <li>Mark the agent as Inactive and stop attendance tracking</li>
+                    <li>Close their current Employment Period</li>
+                    <li>Cancel all pending OT shifts after last day</li>
+                    <li>Reject all pending schedule requests</li>
+                    <li>Cancel any scheduled role changes</li>
+                </ul>
+            </div>
+            <div style="margin-bottom:20px;">
+                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+                    <input type="checkbox" name="confirm" required style="margin-top:2px;flex-shrink:0;">
+                    <span style="font-size:13px;color:#374151;line-height:1.5;">
+                        I confirm that I want to finalize this separation. The agent will be deactivated.
+                    </span>
+                </label>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+                <button type="button" onclick="document.getElementById('finalize-modal').style.display='none'"
+                    style="padding:8px 18px;border:1px solid #ddd;border-radius:4px;background:white;font-size:14px;cursor:pointer;color:#555;">
+                    Cancel
+                </button>
+                <button type="submit" class="btn" style="padding:8px 22px;font-size:14px;background:#92400e;color:white;">
+                    Finalize Separation
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
 <script>
 (function() {
-    var lastDay = document.getElementById('sep-last-day');
-    var sepDate = document.getElementById('sep-date');
-    if (lastDay && sepDate) {
-        lastDay.addEventListener('change', function() {
+    // ── Separation modal (new process) ───────────────────────────────────
+    var statusSel  = document.getElementById('sep-status');
+    var lastDayInp = document.getElementById('sep-last-day');
+    var removeInp  = document.getElementById('sep-remove-date');
+    var removeSec  = document.getElementById('sep-remove-section');
+    var warnBox    = document.getElementById('sep-finalize-warning');
+
+    function nextMonday(fromDate) {
+        var d = new Date(fromDate + 'T00:00:00');
+        var day = d.getDay(); // 0=Sun
+        var daysUntilMon = day === 0 ? 1 : (8 - day);
+        d.setDate(d.getDate() + daysUntilMon);
+        return d.toISOString().slice(0, 10);
+    }
+    function addWeeks(isoDate, weeks) {
+        var d = new Date(isoDate + 'T00:00:00');
+        d.setDate(d.getDate() + weeks * 7);
+        return d.toISOString().slice(0, 10);
+    }
+
+    function onStatusChange() {
+        var val = statusSel ? statusSel.value : '';
+        if (removeSec) removeSec.style.display = (val === 'finalized') ? '' : 'none';
+        if (warnBox)   warnBox.style.display   = (val === 'finalized') ? '' : 'none';
+        if (removeInp) removeInp.required = (val === 'finalized');
+    }
+    if (statusSel) statusSel.addEventListener('change', onStatusChange);
+
+    // Auto-fill remove date when last day changes (only if finalized)
+    if (lastDayInp) {
+        lastDayInp.addEventListener('change', function() {
             if (!this.value) return;
-            var d = new Date(this.value + 'T00:00:00');
-            var day = d.getDay(); // 0=Sun,1=Mon,...,6=Sat
-            var daysUntilMon = day === 0 ? 1 : (8 - day);
-            d.setDate(d.getDate() + daysUntilMon);
-            sepDate.value = d.toISOString().slice(0, 10);
+            if (statusSel && statusSel.value === 'finalized' && removeInp) {
+                removeInp.value = nextMonday(this.value);
+            }
         });
     }
-    var modal = document.getElementById('separation-modal');
-    if (modal) {
-        modal.addEventListener('click', function(e) {
+
+    // Quick-select buttons in process modal
+    var sepNextMon = document.getElementById('sep-next-mon');
+    var sepPlus2   = document.getElementById('sep-plus2');
+    var sepPlus3   = document.getElementById('sep-plus3');
+    if (sepNextMon) sepNextMon.addEventListener('click', function() {
+        if (lastDayInp && lastDayInp.value && removeInp) removeInp.value = nextMonday(lastDayInp.value);
+    });
+    if (sepPlus2) sepPlus2.addEventListener('click', function() {
+        if (lastDayInp && lastDayInp.value && removeInp) removeInp.value = addWeeks(nextMonday(lastDayInp.value), 1);
+    });
+    if (sepPlus3) sepPlus3.addEventListener('click', function() {
+        if (lastDayInp && lastDayInp.value && removeInp) removeInp.value = addWeeks(nextMonday(lastDayInp.value), 2);
+    });
+
+    // Close separation modal on backdrop click
+    var sepModal = document.getElementById('separation-modal');
+    if (sepModal) {
+        sepModal.addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
+        });
+    }
+
+    // ── Finalize modal ───────────────────────────────────────────────────
+    var finRemoveInp = document.getElementById('fin-remove-date');
+    var finLastDay   = '{{ agent.separation.last_day_worked|date:"Y-m-d"|default:"" }}';
+
+    var finNextMon = document.getElementById('fin-next-mon');
+    var finPlus2   = document.getElementById('fin-plus2');
+    var finPlus3   = document.getElementById('fin-plus3');
+
+    if (finNextMon) finNextMon.addEventListener('click', function() {
+        if (finLastDay && finRemoveInp) finRemoveInp.value = nextMonday(finLastDay);
+    });
+    if (finPlus2) finPlus2.addEventListener('click', function() {
+        if (finLastDay && finRemoveInp) finRemoveInp.value = addWeeks(nextMonday(finLastDay), 1);
+    });
+    if (finPlus3) finPlus3.addEventListener('click', function() {
+        if (finLastDay && finRemoveInp) finRemoveInp.value = addWeeks(nextMonday(finLastDay), 2);
+    });
+
+    // Pre-fill finalize modal remove date
+    if (finLastDay && finRemoveInp) {
+        finRemoveInp.value = nextMonday(finLastDay);
+    }
+
+    // Close finalize modal on backdrop click
+    var finModal = document.getElementById('finalize-modal');
+    if (finModal) {
+        finModal.addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
+        });
+    }
+
+    // Default effective date for role-change modal to tomorrow
+    var tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    var iso = tomorrow.toISOString().slice(0, 10);
+    var inp = document.getElementById('src-eff-date');
+    if (inp) { inp.value = iso; inp.min = iso; }
+
+    // Close role-change modal on backdrop click
+    var rcModal = document.getElementById('role-change-modal');
+    if (rcModal) {
+        rcModal.addEventListener('click', function(e) {
             if (e.target === this) this.style.display = 'none';
         });
     }
 })();
 </script>
-{% endif %}
 {% endblock %}

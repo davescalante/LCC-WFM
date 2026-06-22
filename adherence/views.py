@@ -813,7 +813,7 @@ def adherence_week(request):
     if request.method == 'POST':
         agents = Agent.objects.filter(
             Q(status='active', track_attendance=True) |
-            Q(status='inactive', separation__separation_date__gt=week_start)
+            Q(status='inactive', separations__status='finalized', separations__remove_from_adherence_date__gt=week_start)
         ).select_related('user', 'supervisor__user').order_by(
             'supervisor__user__last_name', 'supervisor__user__first_name',
             'user__last_name', 'user__first_name'
@@ -868,11 +868,11 @@ def adherence_rows_fragment(request):
 
     week_end = week_dates[-1]
     supervisor_id, _ = _get_supervisor_filter(request)
-    # Include: active tracked agents + separated agents whose separation_date is
+    # Include: active tracked agents + separated agents whose remove_from_adherence_date is
     # after this week's start (so they appear in historical and separation weeks)
     agents = Agent.objects.filter(
         Q(status='active', track_attendance=True) |
-        Q(status='inactive', separation__separation_date__gt=week_start)
+        Q(status='inactive', separations__status='finalized', separations__remove_from_adherence_date__gt=week_start)
     ).select_related(
         'user', 'supervisor__user'
     ).prefetch_related('five9_profiles').order_by(
