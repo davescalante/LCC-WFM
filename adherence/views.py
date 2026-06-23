@@ -1659,7 +1659,8 @@ def agent_my_adherence(request):
         agent = request.user.agent
     except Exception:
         return redirect('agent_my_shifts')
-    if agent.role != 'agent':
+    _portal_types = frozenset({'cs', 'testing', 'sms_email'})
+    if not (agent.role == 'agent' or (agent.role == 'admin' and agent.role_type in _portal_types)):
         return redirect('adherence_dashboard')
 
     today = timezone.localdate()
@@ -1768,6 +1769,11 @@ def agent_my_adherence(request):
     else:
         bonus_display = '—'
 
+    status_legend = [
+        (code, label, STATUS_COLORS.get(code, '#f0f4f8'))
+        for code, label in AdherenceRecord.STATUS_CHOICES
+    ]
+
     return render(request, 'agent/my_adherence.html', {
         'agent': agent,
         'cells': cells,
@@ -1782,5 +1788,6 @@ def agent_my_adherence(request):
         'adjusted_total': _fmt(logged_total + coded_total),
         'bonus': bonus_display,
         'bonus_reasons': bonus_reasons,
+        'status_legend': status_legend,
     })
 

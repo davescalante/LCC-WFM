@@ -12,45 +12,48 @@
         <a href="?week_start={{ next_week }}" class="btn" style="background:#e2e8f0;color:#1a3a5c;">Next &rarr;</a>
     </div>
 
-    {% if ot_shifts %}
+    {% if ot_days %}
     <table>
         <thead>
             <tr>
-                <th>Day</th>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Incentive</th>
-                <th>Status</th>
+                <th style="width:130px;">Day</th>
+                <th>Shifts</th>
             </tr>
         </thead>
         <tbody>
-            {% for shift in ot_shifts %}
-            <tr {% if shift.date == today %}style="background:#dbeafe !important;"{% endif %}>
-                <td style="font-weight:600;color:#374151;">
-                    {{ shift.date|date:"l" }}
-                    {% if shift.date == today %}<span style="font-size:10px;font-weight:700;color:#2563eb;margin-left:6px;letter-spacing:.5px;">TODAY</span>{% endif %}
+            {% for day in ot_days %}
+            <tr {% if day.is_today %}style="background:#dbeafe !important;"{% endif %}>
+                <td style="font-weight:600;color:#374151;vertical-align:top;padding-top:14px;">
+                    {{ day.day_name }}
+                    {% if day.is_today %}<br><span style="font-size:10px;font-weight:700;color:#2563eb;letter-spacing:.5px;">TODAY</span>{% endif %}
+                    <div style="font-weight:400;font-size:12px;color:#9ca3af;margin-top:2px;">{{ day.date|date:"M j" }}</div>
                 </td>
-                <td style="color:#6b7280;">{{ shift.date|date:"M j" }}</td>
-                <td style="white-space:nowrap;">{{ shift.start_time|time:"H:i" }} &ndash; {{ shift.end_time|time:"H:i" }}</td>
-                <td>
-                    {% if shift.incentive_type == 'none' %}
-                        <span style="color:#9ca3af;">None</span>
-                    {% elif shift.incentive_type == 'time_and_a_half' %}
-                        Time &amp; a Half (1.5&times;)
-                    {% elif shift.incentive_type == 'power_hour' %}
-                        Power Hour (2&times;)
-                    {% endif %}
-                </td>
-                <td>
-                    {% if shift.status == 'completed' %}
-                        <span class="badge badge-green">Completed</span>
-                    {% elif shift.status == 'no_show' %}
-                        <span class="badge badge-red">No Show</span>
-                    {% elif shift.status == 'cancelled' %}
-                        <span class="badge" style="background:#e5e7eb;color:#6b7280;">Cancelled</span>
-                    {% else %}
-                        <span class="badge badge-yellow">Pending</span>
-                    {% endif %}
+                <td style="padding:8px 12px;">
+                    {% for shift in day.shifts %}
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;{% if not forloop.last %}margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #e5e7eb;{% endif %}">
+                        <span style="font-size:14px;font-weight:500;white-space:nowrap;">
+                            {{ shift.start_time|time:"H:i" }} &ndash; {{ shift.end_time|time:"H:i" }}
+                        </span>
+                        <span style="font-size:13px;color:#6b7280;">
+                            {% if shift.incentive_type == 'none' %}
+                                No incentive
+                            {% elif shift.incentive_type == 'time_and_a_half' %}
+                                Time &amp; a Half (1.5&times;)
+                            {% elif shift.incentive_type == 'power_hour' %}
+                                Power Hour (2&times;)
+                            {% endif %}
+                        </span>
+                        {% if shift.status == 'completed' %}
+                            <span class="badge badge-green">Completed</span>
+                        {% elif shift.status == 'no_show' %}
+                            <span class="badge badge-red">No Show</span>
+                        {% elif shift.status == 'cancelled' %}
+                            <span class="badge" style="background:#e5e7eb;color:#6b7280;">Cancelled</span>
+                        {% else %}
+                            <span class="badge badge-yellow">Pending</span>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
                 </td>
             </tr>
             {% endfor %}

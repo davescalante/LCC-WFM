@@ -337,7 +337,7 @@ def agent_create(request):
             changed_by=request.user,
         )
         _save_five9_profiles(request, agent)
-        if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator'):
+        if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'testing', 'sms_email'):
             user.set_unusable_password()
             user.save()
         start_date = request.POST.get('start_date', '').strip()
@@ -419,7 +419,7 @@ def agent_edit(request, pk):
                     billing_status=agent.billing_status,
                     effective_from=today, changed_by=request.user,
                 )
-            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator'):
+            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'testing', 'sms_email'):
                 user.set_unusable_password()
                 user.save()
 
@@ -2401,13 +2401,20 @@ def _best_shift_template(all_templates, agent_id, d):
     return best
 
 
+_PORTAL_ADMIN_TYPES = frozenset({'cs', 'testing', 'sms_email'})
+
+
+def _is_portal_user(agent):
+    return agent.role == 'agent' or (agent.role == 'admin' and agent.role_type in _PORTAL_ADMIN_TYPES)
+
+
 @login_required
 def agent_my_shifts(request):
     try:
         agent = request.user.agent
     except Exception:
         return redirect('dashboard')
-    if agent.role != 'agent':
+    if not _is_portal_user(agent):
         return redirect('dashboard')
 
     today = timezone.localdate()
@@ -2449,7 +2456,7 @@ def agent_my_ot_shifts(request):
         agent = request.user.agent
     except Exception:
         return redirect('dashboard')
-    if agent.role != 'agent':
+    if not _is_portal_user(agent):
         return redirect('dashboard')
 
     today = timezone.localdate()
@@ -2459,9 +2466,25 @@ def agent_my_ot_shifts(request):
         OvertimeShift.objects.filter(agent=agent, date__in=week_dates).order_by('date', 'start_time')
     )
 
+    # Group shifts by date
+    ot_days = []
+    from collections import defaultdict as _dd
+    by_date = _dd(list)
+    for s in ot_shifts:
+        by_date[s.date].append(s)
+    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    for d in week_dates:
+        if d in by_date:
+            ot_days.append({
+                'date': d,
+                'day_name': day_names[d.weekday()],
+                'is_today': d == today,
+                'shifts': by_date[d],
+            })
+
     return render(request, 'agent/my_ot_shifts.html', {
         'agent': agent,
-        'ot_shifts': ot_shifts,
+        'ot_days': ot_days,
         'week_start': week_start,
         'week_end': week_dates[-1],
         'today': today,
@@ -2478,7 +2501,7 @@ def agent_my_requests(request):
         agent = request.user.agent
     except Exception:
         return redirect('dashboard')
-    if agent.role != 'agent':
+    if not _is_portal_user(agent):
         return redirect('dashboard')
 
     if request.method == 'POST':

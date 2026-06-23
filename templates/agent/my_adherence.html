@@ -1,7 +1,50 @@
 {% extends 'base.html' %}
 {% block title %} - My Adherence{% endblock %}
 {% block content %}
-<h1>My Adherence</h1>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+    <h1 style="margin:0;">My Adherence</h1>
+    <button type="button" onclick="toggleLegend()" id="legend-btn"
+        style="background:#e8edf4;color:#1a3a5c;border:1px solid #c4cdd9;border-radius:4px;padding:6px 14px;font-size:13px;cursor:pointer;white-space:nowrap;">
+        What do these mean?
+    </button>
+</div>
+
+<!-- Status Legend (collapsible) -->
+<div id="status-legend" style="display:none;margin-bottom:16px;">
+    <div class="card" style="padding:14px 20px;">
+        <h3 style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;">Status Codes</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 20px;font-size:12px;color:#555;line-height:2;">
+            {% for code, label, color in status_legend %}
+            <span>
+                {% if code == 'S' %}<strong style="background:#E65100;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">S</strong>
+                {% else %}<strong style="background:{{ color }};padding:1px 6px;border-radius:3px;font-size:11px;border:1px solid rgba(0,0,0,.07);">{% if code == 'Absent' %}A{% else %}{{ code }}{% endif %}</strong>
+                {% endif %}&nbsp;{{ label }}
+            </span>
+            {% endfor %}
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:#888;border-top:1px solid #eee;padding-top:10px;">
+            <strong style="color:#27ae60;">Green</strong> = met scheduled hours &nbsp;|&nbsp;
+            <strong style="color:#e67e22;">Orange</strong> = short on hours &nbsp;|&nbsp;
+            <strong style="color:#c0392b;">Red</strong> = absence/NCNS &nbsp;|&nbsp;
+            Bonus qualifies when all scheduled days are P / OT / MUT / VTO / P+VTO
+        </div>
+    </div>
+</div>
+<script>
+function toggleLegend() {
+    var el = document.getElementById('status-legend');
+    var btn = document.getElementById('legend-btn');
+    if (el.style.display === 'none') {
+        el.style.display = '';
+        btn.style.background = '#1a3a5c';
+        btn.style.color = 'white';
+    } else {
+        el.style.display = 'none';
+        btn.style.background = '#e8edf4';
+        btn.style.color = '#1a3a5c';
+    }
+}
+</script>
 
 <!-- Week summary -->
 <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">

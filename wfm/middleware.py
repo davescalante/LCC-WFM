@@ -9,6 +9,9 @@ ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 _AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
 _INACTIVE_ALLOWED = ('/agent/inactive/', '/accounts/', '/static/', '/favicon')
 
+# Admin role_types that see the agent portal (not the supervisor dashboard)
+_PORTAL_ADMIN_TYPES = frozenset({'cs', 'testing', 'sms_email'})
+
 
 class SessionTimeoutMiddleware:
     def __init__(self, get_response):
@@ -62,8 +65,10 @@ class AgentAccessMiddleware:
         if request.user.is_authenticated:
             try:
                 profile = request.user.agent
-                if profile.role == 'agent':
-                    # Inactive agents see a "no longer active" page
+                is_portal = (profile.role == 'agent' or
+                             (profile.role == 'admin' and profile.role_type in _PORTAL_ADMIN_TYPES))
+                if is_portal:
+                    # Inactive portal users see a "no longer active" page
                     if profile.status == 'inactive':
                         if not any(request.path.startswith(p) for p in _INACTIVE_ALLOWED):
                             return redirect('agent_inactive')

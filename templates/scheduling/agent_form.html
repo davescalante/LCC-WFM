@@ -393,7 +393,7 @@ function removePeriod(pk) {
 
     const CURRENT_ROLE_TYPE = "{{ agent_form.instance.role_type }}";
 
-    const LOGIN_ELIGIBLE_TYPES = ['supervisor', 'coordinator'];
+    const LOGIN_ELIGIBLE_TYPES = ['supervisor', 'coordinator', 'cs', 'testing', 'sms_email'];
 
     function updateRoleTypes() {
         const role = document.getElementById('id_role').value;
