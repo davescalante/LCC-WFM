@@ -7,11 +7,11 @@ from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from .models import Agent, Shift, ShiftBlock, Break, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, log_action
-from .forms import AgentUserForm, AgentForm, ShiftForm, BreakForm
+from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, log_action
+from .forms import AgentUserForm, AgentForm, ShiftForm
 
 
-_ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'testing', 'sms_email', 'admin_training', 'coordinator'}
+_ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'testing', 'sms_email', 'coordinator'}
 
 
 def _sync_pending_schedule(src):

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Agent, Shift, Break
+from .models import Agent, Shift
 
 @admin.register(Agent)
 class AgentAdmin(admin.ModelAdmin):
@@ -11,7 +11,3 @@ class AgentAdmin(admin.ModelAdmin):
 class ShiftAdmin(admin.ModelAdmin):
     list_display = ['agent', 'date', 'start_time', 'end_time', 'is_off']
     list_filter = ['date', 'is_off']
-
-@admin.register(Break)
-class BreakAdmin(admin.ModelAdmin):
-    list_display = ['shift', 'break_type', 'start_time', 'end_time']

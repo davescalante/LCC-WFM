@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Agent, Shift, Break
+from .models import Agent, Shift
 
 
 class AgentUserForm(forms.ModelForm):
@@ -85,14 +85,4 @@ class ShiftForm(forms.ModelForm):
             'start_time': forms.TimeInput(attrs={'type': 'time'}),
             'end_time': forms.TimeInput(attrs={'type': 'time'}),
             'notes': forms.Textarea(attrs={'rows': 3}),
-        }
-
-
-class BreakForm(forms.ModelForm):
-    class Meta:
-        model = Break
-        fields = ['break_type', 'start_time', 'end_time']
-        widgets = {
-            'start_time': forms.TimeInput(attrs={'type': 'time'}),
-            'end_time': forms.TimeInput(attrs={'type': 'time'}),
         }

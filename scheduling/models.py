@@ -21,7 +21,6 @@ class Agent(models.Model):
         ('cs', 'CS'),
         ('testing', 'Testing'),
         ('sms_email', 'SMS/Email'),
-        ('admin_training', 'Training'),
         ('coordinator', 'Coordinator'),
     ]
     STATUS_CHOICES = [
@@ -346,22 +345,6 @@ class AuditLog(models.Model):
 def log_action(user, action, detail='', agent=None):
     AuditLog.objects.create(user=user, action=action, detail=detail, agent=agent)
 
-
-class Break(models.Model):
-    BREAK_TYPES = [
-        ('break', 'Break'),
-        ('lunch', 'Lunch'),
-        ('training', 'Training'),
-        ('meeting', 'Meeting'),
-        ('coaching', 'Coaching'),
-    ]
-    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name='breaks')
-    break_type = models.CharField(max_length=20, choices=BREAK_TYPES, default='break')
-    start_time = models.TimeField()
-    end_time = models.TimeField()
-
-    def __str__(self):
-        return f"{self.shift.agent} - {self.break_type} {self.start_time}-{self.end_time}"
 
 
 class ScheduledRoleChange(models.Model):
