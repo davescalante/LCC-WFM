@@ -44,6 +44,18 @@
                 {{ agent_form.track_attendance }}
                 <label for="{{ agent_form.track_attendance.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Track Attendance</label>
             </div>
+            {% if not request.is_agent %}
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                {{ agent_form.is_official_admin }}
+                <label for="{{ agent_form.is_official_admin.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Official Admin</label>
+                <span style="font-size:11px;color:#888;">Receives admin bonus instead of adherence bonus</span>
+            </div>
+            <div id="admin-bonus-row" style="margin-bottom:14px;{% if not agent.is_official_admin %}display:none;{% endif %}">
+                <label>Admin Bonus (MXN)</label>
+                {{ agent_form.admin_bonus_mxn }}
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:0;">Leave blank to use global default (${{ default_admin_bonus_mxn }} MXN)</p>
+            </div>
+            {% endif %}
             {% if not agent %}
             <label>Start Date</label>
             <input type="date" name="start_date" style="margin-bottom:14px;">
@@ -424,6 +436,21 @@ function removePeriod(pk) {
             else                         { inp.type = 'password'; btn.innerHTML = EYE_OPEN; }
         };
         wrap.appendChild(btn);
+    }
+
+    // Official Admin toggle
+    var officialAdminCb = document.getElementById('id_is_official_admin');
+    var adminBonusRow = document.getElementById('admin-bonus-row');
+    if (officialAdminCb && adminBonusRow) {
+        officialAdminCb.addEventListener('change', function() {
+            adminBonusRow.style.display = this.checked ? '' : 'none';
+            if (this.checked) {
+                var bonusInput = document.getElementById('id_admin_bonus_mxn');
+                if (bonusInput && !bonusInput.value) {
+                    bonusInput.value = '{{ default_admin_bonus_mxn }}';
+                }
+            }
+        });
     }
 
     document.addEventListener('DOMContentLoaded', function() {

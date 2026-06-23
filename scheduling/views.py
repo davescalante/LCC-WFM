@@ -347,6 +347,7 @@ def agent_create(request):
         log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
         messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
+    from finance.models import BillingSettings as _BS
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
@@ -354,6 +355,7 @@ def agent_create(request):
         'five9_profiles': [],
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'is_own_profile': False,
+        'default_admin_bonus_mxn': str(_BS.get().default_admin_bonus_mxn),
     })
 
 
@@ -456,6 +458,7 @@ def agent_edit(request, pk):
         user_form = AgentUserForm(instance=agent.user)
         agent_form = AgentForm(instance=agent)
 
+    from finance.models import BillingSettings as _BS
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
@@ -466,6 +469,7 @@ def agent_edit(request, pk):
         'five9_profiles': agent.five9_profiles.all(),
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'is_own_profile': (agent.user == request.user),
+        'default_admin_bonus_mxn': str(_BS.get().default_admin_bonus_mxn),
     })
 
 

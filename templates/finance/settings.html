@@ -43,6 +43,14 @@
             </div>
 
             <div>
+                <label for="id_default_admin_bonus_mxn">Default Admin Bonus (MXN)</label>
+                <input type="number" id="id_default_admin_bonus_mxn" name="default_admin_bonus_mxn"
+                    step="0.01"
+                    value="{{ settings.default_admin_bonus_mxn|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Default weekly bonus for Official Admins — overridable per-profile</p>
+            </div>
+
+            <div>
                 <label for="id_adherence_bonus_max_mxn">Adherence Bonus Maximum (MXN)</label>
                 <input type="number" id="id_adherence_bonus_max_mxn" name="adherence_bonus_max_mxn"
                     step="0.01"

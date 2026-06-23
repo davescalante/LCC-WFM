@@ -60,7 +60,12 @@
             {% for agent in agents %}
             <tr>
                 <td><a href="{% url 'agent_detail' agent.pk %}">{{ agent.agent_name|default:agent.user.get_full_name }}</a></td>
-                <td><span class="badge badge-blue">{{ agent.get_role_display }}</span></td>
+                <td>
+                    <span class="badge badge-blue">{{ agent.get_role_display }}</span>
+                    {% if agent.role == 'admin' and agent.is_official_admin %}
+                    <span style="font-size:10px;font-weight:600;color:#1d4ed8;background:#dbeafe;border-radius:10px;padding:1px 6px;margin-left:4px;vertical-align:middle;">Official</span>
+                    {% endif %}
+                </td>
                 <td>{{ agent.get_role_type_display|default:"—" }}</td>
                 <td style="color:#555;font-size:13px;">{{ agent.supervisor|default:"—" }}</td>
                 <td style="text-align:center;">

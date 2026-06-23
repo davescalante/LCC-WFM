@@ -190,7 +190,8 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         ot_1_5_pay = (ot_1_5 * hourly_mxn * Decimal('1.5')).quantize(Decimal('0.01'), ROUND_HALF_UP)
         power_usd = (ot_pow * billing_rate * Decimal('2')).quantize(Decimal('0.01'), ROUND_HALF_UP)
 
-        bonus_qualifies = bonus_map.get(aid) is True and aid in has_status
+        is_official_admin = getattr(agent, 'is_official_admin', False)
+        bonus_qualifies = (not is_official_admin) and bonus_map.get(aid) is True and aid in has_status
         if bonus_qualifies and settings.adherence_bonus_full_hours > 0:
             bonus_mxn = min(
                 settings.adherence_bonus_max_mxn,
@@ -199,9 +200,15 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         else:
             bonus_mxn = Decimal('0')
 
+        if is_official_admin:
+            admin_bonus = (agent.admin_bonus_mxn if agent.admin_bonus_mxn is not None
+                           else settings.default_admin_bonus_mxn)
+        else:
+            admin_bonus = Decimal('0')
+
         comm_pct = commission_map.get(aid, Decimal('0'))
 
-        total_pay_mxn = base_pay + ot_reg_pay + ot_1_5_pay + bonus_mxn
+        total_pay_mxn = base_pay + ot_reg_pay + ot_1_5_pay + bonus_mxn + admin_bonus
         total_pay_usd = (total_pay_mxn / usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if usd_to_mxn else Decimal('0')
 
         # Billing (what Infinity charges LCC)
@@ -226,7 +233,9 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             'ot_1_5_mxn': ot_1_5_pay,
             'power_hour_usd': power_usd,
             'bonus_qualifies': bonus_qualifies,
+            'is_official_admin': is_official_admin,
             'bonus_mxn': bonus_mxn,
+            'admin_bonus_mxn': admin_bonus,
             'commission_pct': comm_pct,
             'total_pay_mxn': total_pay_mxn,
             'total_pay_usd': total_pay_usd,
@@ -259,6 +268,7 @@ def finance_dashboard(request):
     total_payroll_usd = sum(d['total_pay_usd'] for d in data.values())
     bonus_count = sum(1 for d in data.values() if d['bonus_qualifies'])
     bonus_total_mxn = sum(d['bonus_mxn'] for d in data.values())
+    admin_bonus_total_mxn = sum(d['admin_bonus_mxn'] for d in data.values())
     power_usd = sum(d['power_hour_usd'] for d in data.values())
 
     return render(request, 'finance/dashboard.html', {
@@ -272,6 +282,7 @@ def finance_dashboard(request):
         'total_payroll_usd': total_payroll_usd,
         'bonus_count': bonus_count,
         'bonus_total_mxn': bonus_total_mxn,
+        'admin_bonus_total_mxn': admin_bonus_total_mxn,
         'power_usd': power_usd,
         'agent_count': len(data),
     })
@@ -531,6 +542,7 @@ def payroll_report(request):
         'ot_1_5_mxn': sum(r.get('ot_1_5_mxn', Decimal('0')) for r in infinity_rows),
         'power_hour_usd': sum(r.get('power_hour_usd', Decimal('0')) for r in infinity_rows),
         'bonus_mxn': sum(r.get('bonus_mxn', Decimal('0')) for r in infinity_rows),
+        'admin_bonus_mxn': sum(r.get('admin_bonus_mxn', Decimal('0')) for r in infinity_rows),
         'total_pay_mxn': sum(r.get('total_pay_mxn', Decimal('0')) for r in infinity_rows),
         'total_pay_usd': sum(r.get('total_pay_usd', Decimal('0')) for r in infinity_rows),
     }
@@ -586,7 +598,7 @@ def payroll_export(request):
     headers = [
         'Agent Name', 'Legal Name', 'Employee ID', 'Supervisor', 'Agent Type',
         'Worked Hrs', 'Hourly Rate (MXN)',
-        'Base Pay (MXN)', 'Adherence Bonus (MXN)',
+        'Base Pay (MXN)', 'Adh. Bonus (MXN)', 'Admin Bonus (MXN)',
         'OT Regular (MXN)', 'OT 1.5x (MXN)', 'Power Hour (USD)',
         'Comm. Ded. %', 'Comm. Earned (MXN)',
         'Total Pay (MXN)', 'Total Pay (USD equiv.)',
@@ -628,6 +640,7 @@ def payroll_export(request):
                 float(agent.hourly_rate or 0),
                 float(d.get('base_pay_mxn', 0)),
                 float(d.get('bonus_mxn', 0)),
+                float(d.get('admin_bonus_mxn', 0)),
                 float(d.get('ot_regular_mxn', 0)),
                 float(d.get('ot_1_5_mxn', 0)),
                 float(d.get('power_hour_usd', 0)),
@@ -638,7 +651,7 @@ def payroll_export(request):
             ])
             row_num += 1
 
-    col_widths = [22, 22, 14, 20, 18, 12, 18, 16, 18, 16, 14, 16, 14, 18, 16, 18]
+    col_widths = [22, 22, 14, 20, 18, 12, 18, 16, 16, 16, 16, 14, 16, 14, 18, 16, 18]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -665,6 +678,7 @@ def finance_settings(request):
                 settings.usd_to_mxn_updated = date.fromisoformat(usd_updated_str)
             settings.nr_cap_regular_hours = Decimal(request.POST.get('nr_cap_regular_hours', str(settings.nr_cap_regular_hours)))
             settings.nr_cap_kill_team_hours = Decimal(request.POST.get('nr_cap_kill_team_hours', str(settings.nr_cap_kill_team_hours)))
+            settings.default_admin_bonus_mxn = Decimal(request.POST.get('default_admin_bonus_mxn', str(settings.default_admin_bonus_mxn)))
             settings.adherence_bonus_max_mxn = Decimal(request.POST.get('adherence_bonus_max_mxn', str(settings.adherence_bonus_max_mxn)))
             settings.adherence_bonus_full_hours = Decimal(request.POST.get('adherence_bonus_full_hours', str(settings.adherence_bonus_full_hours)))
             settings.save()

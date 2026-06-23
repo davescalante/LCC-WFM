@@ -61,6 +61,8 @@ class Agent(models.Model):
     )
     hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, default=Decimal('62.50'), help_text="Agent pay rate in MXN")
     billing_rate_usd = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Override billing rate in USD (uses global rate if blank)")
+    is_official_admin = models.BooleanField(default=False, help_text="Genuine administrator — receives admin bonus instead of adherence bonus")
+    admin_bonus_mxn = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Individual admin bonus in MXN (uses global default if blank)")
     notes = models.TextField(blank=True)
 
     @property

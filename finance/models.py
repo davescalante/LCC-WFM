@@ -24,6 +24,10 @@ class BillingSettings(models.Model):
         max_digits=5, decimal_places=2, default=Decimal('7.00'),
         help_text="Weekly not-ready cap for Kill Team agents (hours)"
     )
+    default_admin_bonus_mxn = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal('500.00'),
+        help_text="Default admin bonus in MXN for Official Admins (overridable per-profile)"
+    )
     adherence_bonus_max_mxn = models.DecimalField(
         max_digits=8, decimal_places=2, default=Decimal('400.00'),
         help_text="Maximum adherence bonus in MXN (paid in full when hours >= threshold)"
