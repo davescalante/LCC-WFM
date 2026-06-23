@@ -12,4 +12,6 @@ urlpatterns = [
     path('add-admin-coding/', views.add_admin_coding_ajax, name='add_admin_coding_ajax'),
     path('edit-admin-coding/', views.edit_admin_coding_ajax, name='edit_admin_coding_ajax'),
     path('delete-admin-coding/', views.delete_admin_coding_ajax, name='delete_admin_coding_ajax'),
+    path('admin-adherence/', views.admin_adherence, name='admin_adherence'),
+    path('admin-adherence/export/', views.admin_adherence_export, name='admin_adherence_export'),
 ]

@@ -83,6 +83,7 @@
         {% if request.has_finance_access %}
         <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
         <a href="{% url 'admin_codings' %}" style="color:#0f766e;">Admin Codings</a>
+        <a href="{% url 'admin_adherence' %}" style="color:#0f766e;">Admin Adherence</a>
         {% endif %}
         {% endif %}
         {% if request.user.is_authenticated %}

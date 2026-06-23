@@ -712,11 +712,11 @@ def admin_codings(request):
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
 
-    # Admin-role users who have a billable Five9 profile
+    # Official Admins who have a billable Five9 profile
     agents = Agent.objects.filter(
         status='active',
         five9_profiles__billable=True,
-        role='admin',
+        is_official_admin=True,
     ).distinct().select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
@@ -880,3 +880,191 @@ def delete_admin_coding_ajax(request):
     coding_id = data.get('coding_id')
     Coding.objects.filter(pk=coding_id, is_admin_coding=True).delete()
     return JsonResponse({'ok': True})
+
+
+# ─── Admin Adherence ──────────────────────────────────────────────────────────
+
+@login_required
+@finance_access_required
+def admin_adherence(request):
+    """Adherence tab for Official Admins only — super admin access."""
+    from adherence.views import _build_maps, _build_rows
+    from adherence.models import AdherenceRecord, AdherenceNote, Coding as _Coding
+    from django.utils import timezone as _tz
+    from django.db.models import Count as _Count
+
+    week_start = _get_week_start(request)
+    week_dates = _week_dates(week_start)
+    week_end = week_dates[-1]
+
+    agents = Agent.objects.filter(
+        status='active',
+        is_official_admin=True,
+    ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles').order_by(
+        'user__last_name', 'user__first_name'
+    )
+    agents = list(agents)
+
+    # Shift/record/OT maps from adherence logic
+    shift_map, record_map, _, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
+
+    # Coded map uses admin codings, not regular codings
+    coded_map = {}
+    for c in _Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
+        coded_map[(c.agent_id, c.date)] = coded_map.get((c.agent_id, c.date), Decimal('0')) + Decimal(str(c.total_hours()))
+
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
+                       extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
+                       tmpl_by_agent_dow=tmpl_by_agent_dow)
+
+    # Replace adherence bonus with fixed admin bonus for each row
+    billing_settings = BillingSettings.get()
+    billable_five9_map = {}
+    for p in Five9Profile.objects.filter(
+        agent__in=[a.pk for a in agents], billable=True
+    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
+        if p['agent_id'] not in billable_five9_map:
+            billable_five9_map[p['agent_id']] = p['five9_username']
+
+    for row in rows:
+        agent = row['agent']
+        admin_bonus = (
+            agent.admin_bonus_mxn if agent.admin_bonus_mxn is not None
+            else billing_settings.default_admin_bonus_mxn
+        )
+        row['bonus'] = 'Admin'
+        row['bonus_mxn'] = admin_bonus
+        row['admin_bonus_mxn'] = admin_bonus
+        row['billable_five9_username'] = billable_five9_map.get(agent.pk, '')
+
+    # Note counts
+    note_count_map = {
+        (n['agent_id'], n['date']): n['count']
+        for n in AdherenceNote.objects.filter(
+            agent__in=agents, date__in=week_dates
+        ).values('agent_id', 'date').annotate(count=_Count('pk'))
+    }
+    for row in rows:
+        for cell in row['cells']:
+            cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
+
+    return render(request, 'finance/admin_adherence.html', {
+        'rows': rows,
+        'week_dates': week_dates,
+        'week_start': week_start,
+        'week_end': week_end,
+        'today': _tz.localdate(),
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'status_choices': AdherenceRecord.STATUS_CHOICES,
+    })
+
+
+@login_required
+@finance_access_required
+def admin_adherence_export(request):
+    """Export admin adherence payroll as Excel."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    from adherence.views import _build_maps, _build_rows
+    from adherence.models import Coding as _Coding
+
+    billing_settings = BillingSettings.get()
+    week_start = _get_week_start(request)
+    week_dates = _week_dates(week_start)
+    week_end = week_dates[-1]
+
+    agents = Agent.objects.filter(
+        status='active',
+        is_official_admin=True,
+    ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles').order_by(
+        'user__last_name', 'user__first_name'
+    )
+    agents = list(agents)
+
+    shift_map, record_map, _, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
+
+    coded_map = {}
+    for c in _Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
+        coded_map[(c.agent_id, c.date)] = coded_map.get((c.agent_id, c.date), Decimal('0')) + Decimal(str(c.total_hours()))
+
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
+                       extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
+                       tmpl_by_agent_dow=tmpl_by_agent_dow)
+
+    billable_five9_map = {}
+    for p in Five9Profile.objects.filter(
+        agent__in=[a.pk for a in agents], billable=True
+    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
+        if p['agent_id'] not in billable_five9_map:
+            billable_five9_map[p['agent_id']] = p['five9_username']
+
+    usd_to_mxn = billing_settings.usd_to_mxn
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Admin Payroll"
+
+    headers = [
+        'Agent Name', 'Legal Name', 'Employee ID', 'Five9 User',
+        'Sch Hrs', 'Login Hrs', 'Coded Hrs', 'NR Cap Adj', 'Total Hrs',
+        'Hourly Rate (MXN)', 'Base Pay (MXN)', 'Admin Bonus (MXN)',
+        'Total Pay (MXN)', 'Total Pay (USD)',
+    ]
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='1A3A5C')
+    center = Alignment(horizontal='center')
+
+    ws.append([f"Admin Payroll — Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}"])
+    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
+    ws['A1'].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(headers)
+    for col in range(1, len(headers) + 1):
+        c = ws.cell(row=3, column=col)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = center
+
+    for row in rows:
+        agent = row['agent']
+        admin_bonus = (
+            agent.admin_bonus_mxn if agent.admin_bonus_mxn is not None
+            else billing_settings.default_admin_bonus_mxn
+        )
+        hourly_mxn = agent.hourly_rate or Decimal('0')
+        final_hrs = row['final_adjusted']
+        base_pay = (final_hrs * hourly_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        total_pay_mxn = base_pay + admin_bonus
+        total_pay_usd = (total_pay_mxn / usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if usd_to_mxn else Decimal('0')
+
+        ws.append([
+            str(agent),
+            agent.user.get_full_name(),
+            agent.employee_id or '',
+            billable_five9_map.get(agent.pk, ''),
+            float(row['sched_hours'] or 0),
+            float(row['actual_hours'] or 0),
+            float(row['coded_hours'] or 0),
+            float(row.get('nr_cap_adj') or 0),
+            float(final_hrs or 0),
+            float(hourly_mxn),
+            float(base_pay),
+            float(admin_bonus),
+            float(total_pay_mxn),
+            float(total_pay_usd),
+        ])
+
+    col_widths = [22, 22, 14, 20, 10, 10, 10, 12, 10, 18, 16, 18, 16, 16]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="admin_payroll_{week_start.isoformat()}.xlsx"'
+    )
+    wb.save(response)
+    return response

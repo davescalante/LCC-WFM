@@ -867,7 +867,7 @@ def adherence_week(request):
 
     if request.method == 'POST':
         agents = Agent.objects.filter(
-            Q(status='active', track_attendance=True) |
+            Q(status='active', track_attendance=True, is_official_admin=False) |
             Q(status='inactive', separations__status='finalized', separations__remove_from_adherence_date__gt=week_start)
         ).select_related('user', 'supervisor__user').order_by(
             'supervisor__user__last_name', 'supervisor__user__first_name',
@@ -923,10 +923,9 @@ def adherence_rows_fragment(request):
 
     week_end = week_dates[-1]
     supervisor_id, _ = _get_supervisor_filter(request)
-    # Include: active tracked agents + separated agents whose remove_from_adherence_date is
-    # after this week's start (so they appear in historical and separation weeks)
+    # Include: active tracked agents (excluding Official Admins) + separated agents
     agents = Agent.objects.filter(
-        Q(status='active', track_attendance=True) |
+        Q(status='active', track_attendance=True, is_official_admin=False) |
         Q(status='inactive', separations__status='finalized', separations__remove_from_adherence_date__gt=week_start)
     ).select_related(
         'user', 'supervisor__user'
@@ -1086,7 +1085,7 @@ def payroll_export(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active', track_attendance=True).select_related(
+    agents = Agent.objects.filter(status='active', track_attendance=True, is_official_admin=False).select_related(
         'user', 'supervisor__user'
     ).prefetch_related('five9_profiles').order_by(
         'user__last_name', 'user__first_name'
