@@ -5,7 +5,7 @@ from django.db import models
 class BillingSettings(models.Model):
     """Singleton — always use BillingSettings.get() to access."""
     billing_rate_usd = models.DecimalField(
-        max_digits=8, decimal_places=2, default=Decimal('14.00'),
+        max_digits=8, decimal_places=2, default=Decimal('15.00'),
         help_text="Infinity billing rate to LCC (USD per hour, applies to all billable employees)"
     )
     usd_to_mxn = models.DecimalField(

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -58,7 +59,7 @@ class Agent(models.Model):
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_reports'
     )
-    hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Agent pay rate in MXN")
+    hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, default=Decimal('62.50'), help_text="Agent pay rate in MXN")
     billing_rate_usd = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Override billing rate in USD (uses global rate if blank)")
     notes = models.TextField(blank=True)
 
