@@ -85,7 +85,7 @@ def _get_billable_weekly_data(agents, week_dates, settings):
       nr_cap_hrs, nr_cap_adj_hrs, final_hrs,
       bonus (bool), ot_regular_hrs, ot_1_5_hrs, ot_power_hrs,
       commission_pct, base_pay_mxn, ot_regular_mxn, ot_1_5_mxn,
-      power_hour_usd, adherence_bonus_mxn,
+      power_hour_usd, bonus_mxn,
       total_pay_mxn, total_pay_usd, billing_usd
     """
     agent_ids = [a.pk for a in agents]
@@ -191,7 +191,13 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         power_usd = (ot_pow * billing_rate * Decimal('2')).quantize(Decimal('0.01'), ROUND_HALF_UP)
 
         bonus_qualifies = bonus_map.get(aid) is True and aid in has_status
-        bonus_mxn = settings.adherence_bonus_mxn if bonus_qualifies else Decimal('0')
+        if bonus_qualifies and settings.adherence_bonus_full_hours > 0:
+            bonus_mxn = min(
+                settings.adherence_bonus_max_mxn,
+                (final_hrs / settings.adherence_bonus_full_hours * settings.adherence_bonus_max_mxn)
+            ).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        else:
+            bonus_mxn = Decimal('0')
 
         comm_pct = commission_map.get(aid, Decimal('0'))
 
@@ -252,6 +258,7 @@ def finance_dashboard(request):
     total_payroll_mxn = sum(d['total_pay_mxn'] for d in data.values())
     total_payroll_usd = sum(d['total_pay_usd'] for d in data.values())
     bonus_count = sum(1 for d in data.values() if d['bonus_qualifies'])
+    bonus_total_mxn = sum(d['bonus_mxn'] for d in data.values())
     power_usd = sum(d['power_hour_usd'] for d in data.values())
 
     return render(request, 'finance/dashboard.html', {
@@ -264,6 +271,7 @@ def finance_dashboard(request):
         'total_payroll_mxn': total_payroll_mxn,
         'total_payroll_usd': total_payroll_usd,
         'bonus_count': bonus_count,
+        'bonus_total_mxn': bonus_total_mxn,
         'power_usd': power_usd,
         'agent_count': len(data),
     })
@@ -657,7 +665,8 @@ def finance_settings(request):
                 settings.usd_to_mxn_updated = date.fromisoformat(usd_updated_str)
             settings.nr_cap_regular_hours = Decimal(request.POST.get('nr_cap_regular_hours', str(settings.nr_cap_regular_hours)))
             settings.nr_cap_kill_team_hours = Decimal(request.POST.get('nr_cap_kill_team_hours', str(settings.nr_cap_kill_team_hours)))
-            settings.adherence_bonus_mxn = Decimal(request.POST.get('adherence_bonus_mxn', str(settings.adherence_bonus_mxn)))
+            settings.adherence_bonus_max_mxn = Decimal(request.POST.get('adherence_bonus_max_mxn', str(settings.adherence_bonus_max_mxn)))
+            settings.adherence_bonus_full_hours = Decimal(request.POST.get('adherence_bonus_full_hours', str(settings.adherence_bonus_full_hours)))
             settings.save()
             messages.success(request, "Settings saved.")
         except Exception as e:

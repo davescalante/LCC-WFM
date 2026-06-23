@@ -43,11 +43,19 @@
             </div>
 
             <div>
-                <label for="id_adherence_bonus_mxn">Adherence Bonus</label>
-                <input type="number" id="id_adherence_bonus_mxn" name="adherence_bonus_mxn"
+                <label for="id_adherence_bonus_max_mxn">Adherence Bonus Maximum (MXN)</label>
+                <input type="number" id="id_adherence_bonus_max_mxn" name="adherence_bonus_max_mxn"
                     step="0.01"
-                    value="{{ settings.adherence_bonus_mxn|default:'' }}">
-                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Amount paid in MXN to agents who qualify for the weekly bonus</p>
+                    value="{{ settings.adherence_bonus_max_mxn|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Maximum bonus paid per week — agents at or above the hour threshold receive this full amount</p>
+            </div>
+
+            <div>
+                <label for="id_adherence_bonus_full_hours">Adherence Bonus Full Hours Threshold</label>
+                <input type="number" id="id_adherence_bonus_full_hours" name="adherence_bonus_full_hours"
+                    step="0.5"
+                    value="{{ settings.adherence_bonus_full_hours|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Hours worked required for the full bonus — agents below this earn a proportional amount</p>
             </div>
 
             <div>

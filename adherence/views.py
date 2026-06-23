@@ -597,6 +597,13 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         else:
             bonus_display = '—'
 
+        _bonus_max = _billing_settings.adherence_bonus_max_mxn
+        _bonus_full = _billing_settings.adherence_bonus_full_hours
+        if bonus_display == 'Yes' and _bonus_full > 0:
+            bonus_mxn = min(_bonus_max, (final_adjusted / _bonus_full * _bonus_max)).quantize(Decimal('0.01'))
+        else:
+            bonus_mxn = Decimal('0')
+
         rows.append({
             'agent': agent,
             'cells': cells,
@@ -611,6 +618,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             'nr_cap_adj': _nr_cap_adj,
             'final_adjusted': final_adjusted,
             'bonus': bonus_display,
+            'bonus_mxn': bonus_mxn,
             'bonus_reasons': bonus_reasons,
         })
 
