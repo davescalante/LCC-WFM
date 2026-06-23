@@ -129,8 +129,12 @@
     <hr style="border:none;border-top:1px solid #e5e7eb;margin-bottom:16px;">
     <div style="display:flex;flex-direction:column;gap:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0;">
-            <span style="font-size:13px;color:#374151;font-weight:600;">Power Hour Spiff <span style="font-weight:400;color:#6b7280;">(LCC pays direct)</span></span>
-            <span style="font-size:14px;font-weight:700;color:#15803d;">${{ power_total_usd|floatformat:2 }} USD</span>
+            <span style="font-size:13px;color:#374151;font-weight:600;">Power Hour Top-up <span style="font-weight:400;color:#6b7280;">(MXN→USD equiv., LCC pays direct)</span></span>
+            <span style="font-size:14px;font-weight:700;color:#15803d;">${{ ph_topup_total_usd|floatformat:2 }} USD</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#f5f3ff;border-radius:6px;border:1px solid #ddd6fe;">
+            <span style="font-size:13px;color:#374151;font-weight:600;">1.5x OT Top-up <span style="font-weight:400;color:#6b7280;">(MXN→USD equiv., LCC pays direct)</span></span>
+            <span style="font-size:14px;font-weight:700;color:#7c3aed;">${{ ot_1_5_topup_total_usd|floatformat:2 }} USD</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#fffbeb;border-radius:6px;border:1px solid #fde68a;">
             <span style="font-size:13px;color:#374151;font-weight:600;">Adherence Bonus Total <span style="font-weight:400;color:#6b7280;">(USD equiv.)</span></span>

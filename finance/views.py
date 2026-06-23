@@ -185,10 +185,11 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         ot_pow = ot_power_map.get(aid, Decimal('0'))
 
         # Pay calculations
+        # OT base pay is already captured in final_hrs (agents log into Five9 during OT)
+        # These columns are top-up only: the LCC incentive premium above the regular rate
         base_pay = (final_hrs * hourly_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP)
-        ot_reg_pay = (ot_reg * hourly_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP)
-        ot_1_5_pay = (ot_1_5 * hourly_mxn * Decimal('1.5')).quantize(Decimal('0.01'), ROUND_HALF_UP)
-        power_usd = (ot_pow * billing_rate * Decimal('2')).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        ph_topup_mxn = (ot_pow * hourly_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP)
+        ot_1_5_topup_mxn = (ot_1_5 * hourly_mxn * Decimal('0.5')).quantize(Decimal('0.01'), ROUND_HALF_UP)
 
         is_official_admin = getattr(agent, 'is_official_admin', False)
         bonus_qualifies = (not is_official_admin) and bonus_map.get(aid) is True and aid in has_status
@@ -208,7 +209,7 @@ def _get_billable_weekly_data(agents, week_dates, settings):
 
         comm_pct = commission_map.get(aid, Decimal('0'))
 
-        total_pay_mxn = base_pay + ot_reg_pay + ot_1_5_pay + bonus_mxn + admin_bonus
+        total_pay_mxn = base_pay + ph_topup_mxn + ot_1_5_topup_mxn + bonus_mxn + admin_bonus
         total_pay_usd = (total_pay_mxn / usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if usd_to_mxn else Decimal('0')
 
         # Billing (what Infinity charges LCC)
@@ -229,9 +230,8 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             'hourly_mxn': hourly_mxn,
             'billing_rate_usd': billing_rate,
             'base_pay_mxn': base_pay,
-            'ot_regular_mxn': ot_reg_pay,
-            'ot_1_5_mxn': ot_1_5_pay,
-            'power_hour_usd': power_usd,
+            'ph_topup_mxn': ph_topup_mxn,
+            'ot_1_5_topup_mxn': ot_1_5_topup_mxn,
             'bonus_qualifies': bonus_qualifies,
             'is_official_admin': is_official_admin,
             'bonus_mxn': bonus_mxn,
@@ -269,7 +269,8 @@ def finance_dashboard(request):
     bonus_count = sum(1 for d in data.values() if d['bonus_qualifies'])
     bonus_total_mxn = sum(d['bonus_mxn'] for d in data.values())
     admin_bonus_total_mxn = sum(d['admin_bonus_mxn'] for d in data.values())
-    power_usd = sum(d['power_hour_usd'] for d in data.values())
+    ph_topup_total_mxn = sum(d['ph_topup_mxn'] for d in data.values())
+    ot_1_5_topup_total_mxn = sum(d['ot_1_5_topup_mxn'] for d in data.values())
 
     return render(request, 'finance/dashboard.html', {
         'settings': settings,
@@ -283,7 +284,8 @@ def finance_dashboard(request):
         'bonus_count': bonus_count,
         'bonus_total_mxn': bonus_total_mxn,
         'admin_bonus_total_mxn': admin_bonus_total_mxn,
-        'power_usd': power_usd,
+        'ph_topup_total_mxn': ph_topup_total_mxn,
+        'ot_1_5_topup_total_mxn': ot_1_5_topup_total_mxn,
         'agent_count': len(data),
     })
 
@@ -362,7 +364,10 @@ def billing_report(request):
 
     infinity_total_hrs = sum(r.get('final_hrs', Decimal('0')) for r in infinity_rows)
     infinity_total_usd = sum(r.get('billing_usd', Decimal('0')) for r in infinity_rows)
-    power_total_usd = sum(d.get('power_hour_usd', Decimal('0')) for d in data.values())
+    ph_topup_total_mxn = sum(d.get('ph_topup_mxn', Decimal('0')) for d in data.values())
+    ot_1_5_topup_total_mxn = sum(d.get('ot_1_5_topup_mxn', Decimal('0')) for d in data.values())
+    ph_topup_total_usd = (ph_topup_total_mxn / settings.usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if settings.usd_to_mxn else Decimal('0')
+    ot_1_5_topup_total_usd = (ot_1_5_topup_total_mxn / settings.usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if settings.usd_to_mxn else Decimal('0')
     bonus_total_mxn = sum(d.get('bonus_mxn', Decimal('0')) for d in data.values())
     bonus_total_usd = (bonus_total_mxn / settings.usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if settings.usd_to_mxn else Decimal('0')
 
@@ -380,7 +385,8 @@ def billing_report(request):
         'lcc_groups': lcc_groups,
         'infinity_total_hrs': infinity_total_hrs,
         'infinity_total_usd': infinity_total_usd,
-        'power_total_usd': power_total_usd,
+        'ph_topup_total_usd': ph_topup_total_usd,
+        'ot_1_5_topup_total_usd': ot_1_5_topup_total_usd,
         'bonus_total_usd': bonus_total_usd,
     })
 
@@ -482,13 +488,17 @@ def billing_export(request):
     row_num += 1
     total_hrs = sum(d.get('final_hrs', Decimal('0')) for d in data.values())
     total_usd = sum(d.get('billing_usd', Decimal('0')) for d in data.values())
-    power_usd = sum(d.get('power_hour_usd', Decimal('0')) for d in data.values())
+    ph_topup_mxn = sum(d.get('ph_topup_mxn', Decimal('0')) for d in data.values())
+    ot_1_5_topup_mxn = sum(d.get('ot_1_5_topup_mxn', Decimal('0')) for d in data.values())
+    ph_topup_usd = (ph_topup_mxn / settings.usd_to_mxn).quantize(Decimal('0.01')) if settings.usd_to_mxn else Decimal('0')
+    ot_1_5_topup_usd = (ot_1_5_topup_mxn / settings.usd_to_mxn).quantize(Decimal('0.01')) if settings.usd_to_mxn else Decimal('0')
     bonus_mxn = sum(d.get('bonus_mxn', Decimal('0')) for d in data.values())
     bonus_usd = (bonus_mxn / settings.usd_to_mxn).quantize(Decimal('0.01')) if settings.usd_to_mxn else Decimal('0')
 
     ws.append(['TOTAL', '', '', '', '', '', '', float(total_hrs), '', float(total_usd)])
-    ws.append(['Power Hour Spiff (LCC pays direct)', '', '', '', '', '', '', '', '', float(power_usd)])
-    ws.append([f'Adherence Bonus Total (USD equiv.)', '', '', '', '', '', '', '', '', float(bonus_usd)])
+    ws.append(['Power Hour Top-up (MXN→USD equiv.)', '', '', '', '', '', '', '', '', float(ph_topup_usd)])
+    ws.append(['1.5x OT Top-up (MXN→USD equiv.)', '', '', '', '', '', '', '', '', float(ot_1_5_topup_usd)])
+    ws.append(['Adherence Bonus Total (USD equiv.)', '', '', '', '', '', '', '', '', float(bonus_usd)])
 
     # Column widths
     col_widths = [22, 22, 14, 24, 20, 18, 12, 16, 16, 18]
@@ -538,9 +548,8 @@ def payroll_report(request):
 
     infinity_totals = {
         'base_pay_mxn': sum(r.get('base_pay_mxn', Decimal('0')) for r in infinity_rows),
-        'ot_regular_mxn': sum(r.get('ot_regular_mxn', Decimal('0')) for r in infinity_rows),
-        'ot_1_5_mxn': sum(r.get('ot_1_5_mxn', Decimal('0')) for r in infinity_rows),
-        'power_hour_usd': sum(r.get('power_hour_usd', Decimal('0')) for r in infinity_rows),
+        'ph_topup_mxn': sum(r.get('ph_topup_mxn', Decimal('0')) for r in infinity_rows),
+        'ot_1_5_topup_mxn': sum(r.get('ot_1_5_topup_mxn', Decimal('0')) for r in infinity_rows),
         'bonus_mxn': sum(r.get('bonus_mxn', Decimal('0')) for r in infinity_rows),
         'admin_bonus_mxn': sum(r.get('admin_bonus_mxn', Decimal('0')) for r in infinity_rows),
         'total_pay_mxn': sum(r.get('total_pay_mxn', Decimal('0')) for r in infinity_rows),
@@ -599,7 +608,7 @@ def payroll_export(request):
         'Agent Name', 'Legal Name', 'Employee ID', 'Supervisor', 'Agent Type',
         'Worked Hrs', 'Hourly Rate (MXN)',
         'Base Pay (MXN)', 'Adh. Bonus (MXN)', 'Admin Bonus (MXN)',
-        'OT Regular (MXN)', 'OT 1.5x (MXN)', 'Power Hour (USD)',
+        '1.5x Top-up (MXN)', 'PH Top-up (MXN)',
         'Comm. Ded. %', 'Comm. Earned (MXN)',
         'Total Pay (MXN)', 'Total Pay (USD equiv.)',
     ]
@@ -641,9 +650,8 @@ def payroll_export(request):
                 float(d.get('base_pay_mxn', 0)),
                 float(d.get('bonus_mxn', 0)),
                 float(d.get('admin_bonus_mxn', 0)),
-                float(d.get('ot_regular_mxn', 0)),
-                float(d.get('ot_1_5_mxn', 0)),
-                float(d.get('power_hour_usd', 0)),
+                float(d.get('ot_1_5_topup_mxn', 0)),
+                float(d.get('ph_topup_mxn', 0)),
                 float(d.get('commission_pct', 0)),
                 '—',
                 float(d.get('total_pay_mxn', 0)),
@@ -651,7 +659,7 @@ def payroll_export(request):
             ])
             row_num += 1
 
-    col_widths = [22, 22, 14, 20, 18, 12, 18, 16, 16, 16, 16, 14, 16, 14, 18, 16, 18]
+    col_widths = [22, 22, 14, 20, 18, 12, 18, 16, 16, 16, 16, 16, 14, 18, 16, 18]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 

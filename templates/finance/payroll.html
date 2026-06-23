@@ -21,7 +21,7 @@
 <table>
     <thead>
         <tr style="position:sticky;top:0;z-index:1;background:#f0f4f8;">
-            <th colspan="17" style="padding:8px 14px;font-size:12px;font-weight:700;color:white;letter-spacing:.5px;text-transform:uppercase;background:#1a3a5c;border:none;">
+            <th colspan="16" style="padding:8px 14px;font-size:12px;font-weight:700;color:white;letter-spacing:.5px;text-transform:uppercase;background:#1a3a5c;border:none;">
                 Infinity Employees
             </th>
         </tr>
@@ -36,9 +36,8 @@
             <th style="white-space:nowrap;text-align:right;">Base Pay (MXN)</th>
             <th style="white-space:nowrap;text-align:right;" title="Adherence bonus — proportional to hours worked, 0 for Official Admins">Adh. Bonus</th>
             <th style="white-space:nowrap;text-align:right;" title="Admin bonus — Official Admins only">Admin Bonus</th>
-            <th style="white-space:nowrap;text-align:right;">OT Reg (MXN)</th>
-            <th style="white-space:nowrap;text-align:right;">OT 1.5x (MXN)</th>
-            <th style="white-space:nowrap;text-align:right;">Power Hr (USD)</th>
+            <th style="white-space:nowrap;text-align:right;" title="1.5x OT incentive top-up only (0.5× rate); base pay already in Worked Hrs">1.5x Top-up (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;" title="Power Hour incentive top-up only (1× rate); base pay already in Worked Hrs">PH Top-up (MXN)</th>
             <th style="white-space:nowrap;text-align:right;" title="Percentage of commission earnings deducted. Commission totals tracked separately.">Comm. Ded. %</th>
             <th style="white-space:nowrap;text-align:right;" title="Commission earnings tracking coming soon.">Comm. Earned (MXN)</th>
             <th style="white-space:nowrap;text-align:right;">Total (MXN)</th>
@@ -62,16 +61,15 @@
             <td style="font-size:13px;text-align:right;">${{ row.base_pay_mxn|floatformat:2 }}</td>
             <td style="font-size:13px;text-align:right;">{% if row.is_official_admin %}<span style="color:#d1d5db;">—</span>{% elif row.bonus_mxn %}<span style="color:#15803d;">${{ row.bonus_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
             <td style="font-size:13px;text-align:right;">{% if row.admin_bonus_mxn %}<span style="color:#1d4ed8;">${{ row.admin_bonus_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
-            <td style="font-size:13px;text-align:right;">{% if row.ot_regular_mxn %}<span style="color:#7c3aed;">${{ row.ot_regular_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
-            <td style="font-size:13px;text-align:right;">{% if row.ot_1_5_mxn %}<span style="color:#7c3aed;">${{ row.ot_1_5_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
-            <td style="font-size:13px;text-align:right;">{% if row.power_hour_usd %}<span style="color:#f59e0b;">${{ row.power_hour_usd|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ot_1_5_topup_mxn %}<span style="color:#7c3aed;">${{ row.ot_1_5_topup_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ph_topup_mxn %}<span style="color:#f59e0b;">${{ row.ph_topup_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
             <td style="font-size:13px;text-align:right;">{% if row.commission_pct %}<span style="color:#c0392b;">{{ row.commission_pct }}%</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
             <td style="font-size:13px;text-align:right;color:#d1d5db;">—</td>
             <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_mxn|floatformat:2 }}</td>
             <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_usd|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="17" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No Infinity employees found for this week.</td></tr>
+        <tr><td colspan="16" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No Infinity employees found for this week.</td></tr>
         {% endfor %}
     </tbody>
     <tfoot>
@@ -83,9 +81,8 @@
             <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">${{ infinity_totals.base_pay_mxn|floatformat:2 }}</td>
             <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.bonus_mxn %}${{ infinity_totals.bonus_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
             <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.admin_bonus_mxn %}${{ infinity_totals.admin_bonus_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
-            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.ot_regular_mxn %}${{ infinity_totals.ot_regular_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
-            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.ot_1_5_mxn %}${{ infinity_totals.ot_1_5_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
-            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.power_hour_usd %}${{ infinity_totals.power_hour_usd|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.ot_1_5_topup_mxn %}${{ infinity_totals.ot_1_5_topup_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
+            <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{% if infinity_totals.ph_topup_mxn %}${{ infinity_totals.ph_topup_mxn|floatformat:2 }}{% else %}—{% endif %}</td>
             <td></td>
             <td></td>
             <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">${{ infinity_totals.total_pay_mxn|floatformat:2 }}</td>
@@ -101,7 +98,7 @@
 <table>
     <thead>
         <tr style="position:sticky;top:0;z-index:1;background:#f0f4f8;">
-            <th colspan="17" style="padding:8px 14px;font-size:12px;font-weight:700;color:#92400e;letter-spacing:.5px;text-transform:uppercase;background:#fef3c7;border:none;">
+            <th colspan="16" style="padding:8px 14px;font-size:12px;font-weight:700;color:#92400e;letter-spacing:.5px;text-transform:uppercase;background:#fef3c7;border:none;">
                 LCC Direct Employees
             </th>
         </tr>
@@ -116,9 +113,8 @@
             <th style="white-space:nowrap;text-align:right;">Base Pay (MXN)</th>
             <th style="white-space:nowrap;text-align:right;" title="Adherence bonus — proportional to hours worked, 0 for Official Admins">Adh. Bonus</th>
             <th style="white-space:nowrap;text-align:right;" title="Admin bonus — Official Admins only">Admin Bonus</th>
-            <th style="white-space:nowrap;text-align:right;">OT Reg (MXN)</th>
-            <th style="white-space:nowrap;text-align:right;">OT 1.5x (MXN)</th>
-            <th style="white-space:nowrap;text-align:right;">Power Hr (USD)</th>
+            <th style="white-space:nowrap;text-align:right;" title="1.5x OT incentive top-up only (0.5× rate); base pay already in Worked Hrs">1.5x Top-up (MXN)</th>
+            <th style="white-space:nowrap;text-align:right;" title="Power Hour incentive top-up only (1× rate); base pay already in Worked Hrs">PH Top-up (MXN)</th>
             <th style="white-space:nowrap;text-align:right;" title="Percentage of commission earnings deducted. Commission totals tracked separately.">Comm. Ded. %</th>
             <th style="white-space:nowrap;text-align:right;" title="Commission earnings tracking coming soon.">Comm. Earned (MXN)</th>
             <th style="white-space:nowrap;text-align:right;">Total (MXN)</th>
@@ -142,16 +138,15 @@
             <td style="font-size:13px;text-align:right;">${{ row.base_pay_mxn|floatformat:2 }}</td>
             <td style="font-size:13px;text-align:right;">{% if row.is_official_admin %}<span style="color:#d1d5db;">—</span>{% elif row.bonus_mxn %}<span style="color:#15803d;">${{ row.bonus_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
             <td style="font-size:13px;text-align:right;">{% if row.admin_bonus_mxn %}<span style="color:#1d4ed8;">${{ row.admin_bonus_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
-            <td style="font-size:13px;text-align:right;">{% if row.ot_regular_mxn %}<span style="color:#7c3aed;">${{ row.ot_regular_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
-            <td style="font-size:13px;text-align:right;">{% if row.ot_1_5_mxn %}<span style="color:#7c3aed;">${{ row.ot_1_5_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
-            <td style="font-size:13px;text-align:right;">{% if row.power_hour_usd %}<span style="color:#f59e0b;">${{ row.power_hour_usd|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ot_1_5_topup_mxn %}<span style="color:#7c3aed;">${{ row.ot_1_5_topup_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
+            <td style="font-size:13px;text-align:right;">{% if row.ph_topup_mxn %}<span style="color:#f59e0b;">${{ row.ph_topup_mxn|floatformat:2 }}</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
             <td style="font-size:13px;text-align:right;">{% if row.commission_pct %}<span style="color:#c0392b;">{{ row.commission_pct }}%</span>{% else %}<span style="color:#d1d5db;">—</span>{% endif %}</td>
             <td style="font-size:13px;text-align:right;color:#d1d5db;">—</td>
             <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_mxn|floatformat:2 }}</td>
             <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_usd|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="17" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No LCC Direct employees found for this week.</td></tr>
+        <tr><td colspan="16" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No LCC Direct employees found for this week.</td></tr>
         {% endfor %}
     </tbody>
 </table>
