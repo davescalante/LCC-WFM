@@ -63,6 +63,18 @@ class AgentForm(forms.ModelForm):
             'hourly_rate': 'Hourly Rate ($)',
         }
 
+    def clean_billing_rate_usd(self):
+        val = self.cleaned_data.get('billing_rate_usd')
+        if val is not None and val <= 0:
+            raise forms.ValidationError("Billing rate must be greater than zero.")
+        return val
+
+    def clean_hourly_rate(self):
+        val = self.cleaned_data.get('hourly_rate')
+        if val is not None and val < 0:
+            raise forms.ValidationError("Hourly rate cannot be negative.")
+        return val
+
 
 class ShiftForm(forms.ModelForm):
     class Meta:

@@ -12,7 +12,7 @@
 <tr class="agent-row {% if forloop.counter|divisibleby:2 %}row-b{% else %}row-a{% endif %}">
     <td class="ai-cell sup-col  fc fc-1">{{ row.agent.supervisor|default:"—" }}</td>
     <td class="ai-cell name-col fc fc-2">{{ row.agent }}</td>
-    <td class="ai-cell five9-col fc fc-3">{% with p=row.agent.five9_profiles.all.0 %}{% if p %}{{ p.five9_username }}{% else %}—{% endif %}{% endwith %}</td>
+    <td class="ai-cell five9-col fc fc-3">{{ row.billable_five9_username|default:"—" }}</td>
     <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
 
     {% for cell in row.cells %}

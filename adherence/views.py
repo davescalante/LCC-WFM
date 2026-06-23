@@ -390,9 +390,14 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
     # Pre-compute weekly NR seconds from billable DailyAgentHours
     _agent_ids = [a.pk for a in agents]
-    _billable_map = {}  # agent_id -> set of usernames (lowercase)
-    for _p in _Five9Profile.objects.filter(agent__in=_agent_ids, billable=True).values('agent_id', 'five9_username'):
+    _billable_map = {}          # agent_id -> set of usernames (lowercase)
+    _primary_billable_map = {}  # agent_id -> display username (primary billable first)
+    for _p in _Five9Profile.objects.filter(
+        agent__in=_agent_ids, billable=True
+    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
         _billable_map.setdefault(_p['agent_id'], set()).add(_p['five9_username'].strip().lower())
+        if _p['agent_id'] not in _primary_billable_map:
+            _primary_billable_map[_p['agent_id']] = _p['five9_username']
 
     _weekly_nr_map = {}  # agent_id -> total NR seconds
     for _row in DailyAgentHours.objects.filter(
@@ -606,6 +611,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
         rows.append({
             'agent': agent,
+            'billable_five9_username': _primary_billable_map.get(agent.pk, ''),
             'cells': cells,
             'total_present': total_present,
             'total_absent': total_absent,
@@ -1373,6 +1379,21 @@ def upload_daily_file(request):
         rows = list(reader)
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Could not read file: {e}'}, status=400)
+
+    if rows:
+        cols = set(rows[0].keys())
+        missing = []
+        if not (cols & {'AGENT', 'Agent'}):
+            missing.append('AGENT')
+        if not (cols & {'LOGIN TIME', 'Login Time'}):
+            missing.append('LOGIN TIME')
+        if not (cols & {'NOT READY TIME', 'Not Ready Time'}):
+            missing.append('NOT READY TIME')
+        if missing:
+            return JsonResponse(
+                {'ok': False, 'error': f'Missing required columns: {", ".join(missing)}. Is this a Five9 agent summary CSV?'},
+                status=400,
+            )
 
     # Build lookup from Five9 username → Agent using Five9Profile table
     # so agents with multiple Five9 accounts all resolve to the same person

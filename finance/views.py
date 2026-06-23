@@ -3,7 +3,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.shortcuts import render, redirect
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.http import require_POST
+from django.db import transaction
 from django.db.models import Q, Sum
 
 from scheduling.models import Agent, Five9Profile, OvertimeShift
@@ -697,26 +699,26 @@ def finance_settings(request):
             except (ValueError, TypeError):
                 effective_week = current_week
 
-            BillingSettingsHistory.objects.create(
-                week_start=effective_week,
-                changed_by=request.user,
-                billing_rate_usd=Decimal(request.POST.get('billing_rate_usd', str(singleton.billing_rate_usd))),
-                usd_to_mxn=Decimal(request.POST.get('usd_to_mxn', str(singleton.usd_to_mxn))),
-                nr_cap_regular_hours=Decimal(request.POST.get('nr_cap_regular_hours', str(singleton.nr_cap_regular_hours))),
-                nr_cap_kill_team_hours=Decimal(request.POST.get('nr_cap_kill_team_hours', str(singleton.nr_cap_kill_team_hours))),
-                default_admin_bonus_mxn=Decimal(request.POST.get('default_admin_bonus_mxn', str(singleton.default_admin_bonus_mxn))),
-                adherence_bonus_max_mxn=Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn))),
-                adherence_bonus_full_hours=Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours))),
-            )
-            # Also update the singleton so it always reflects the latest values
-            singleton.billing_rate_usd = Decimal(request.POST.get('billing_rate_usd', str(singleton.billing_rate_usd)))
-            singleton.usd_to_mxn = Decimal(request.POST.get('usd_to_mxn', str(singleton.usd_to_mxn)))
-            singleton.nr_cap_regular_hours = Decimal(request.POST.get('nr_cap_regular_hours', str(singleton.nr_cap_regular_hours)))
-            singleton.nr_cap_kill_team_hours = Decimal(request.POST.get('nr_cap_kill_team_hours', str(singleton.nr_cap_kill_team_hours)))
-            singleton.default_admin_bonus_mxn = Decimal(request.POST.get('default_admin_bonus_mxn', str(singleton.default_admin_bonus_mxn)))
-            singleton.adherence_bonus_max_mxn = Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn)))
-            singleton.adherence_bonus_full_hours = Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours)))
-            singleton.save()
+            new_vals = {
+                'billing_rate_usd':       Decimal(request.POST.get('billing_rate_usd', str(singleton.billing_rate_usd))),
+                'usd_to_mxn':             Decimal(request.POST.get('usd_to_mxn', str(singleton.usd_to_mxn))),
+                'nr_cap_regular_hours':   Decimal(request.POST.get('nr_cap_regular_hours', str(singleton.nr_cap_regular_hours))),
+                'nr_cap_kill_team_hours': Decimal(request.POST.get('nr_cap_kill_team_hours', str(singleton.nr_cap_kill_team_hours))),
+                'default_admin_bonus_mxn':Decimal(request.POST.get('default_admin_bonus_mxn', str(singleton.default_admin_bonus_mxn))),
+                'adherence_bonus_max_mxn':Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn))),
+                'adherence_bonus_full_hours': Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours))),
+            }
+
+            with transaction.atomic():
+                BillingSettingsHistory.objects.create(
+                    week_start=effective_week,
+                    changed_by=request.user,
+                    **new_vals,
+                )
+                for field, value in new_vals.items():
+                    setattr(singleton, field, value)
+                singleton.save()
+
             messages.success(request, f"Settings saved — effective from week of {effective_week.strftime('%b %d, %Y')}.")
         except Exception as e:
             messages.error(request, f"Error saving settings: {e}")
@@ -802,9 +804,9 @@ def admin_codings(request):
 
 @login_required
 @finance_access_required
+@require_POST
 def add_admin_coding_ajax(request):
     import json as _json
-    from django.views.decorators.http import require_POST as _rp
     from adherence.models import Coding
     from datetime import time as time_cls
 
@@ -859,6 +861,7 @@ def add_admin_coding_ajax(request):
 
 @login_required
 @finance_access_required
+@require_POST
 def edit_admin_coding_ajax(request):
     import json as _json
     from adherence.models import Coding
@@ -907,6 +910,7 @@ def edit_admin_coding_ajax(request):
 
 @login_required
 @finance_access_required
+@require_POST
 def delete_admin_coding_ajax(request):
     import json as _json
     from adherence.models import Coding
