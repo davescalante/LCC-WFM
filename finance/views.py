@@ -174,7 +174,11 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         nr_cap_adj = max(Decimal('0'), total_nr_hrs - nr_cap)
 
         # Final worked hours
+        # Agents without AdherenceRecord entries (e.g. coordinators on agent shifts)
+        # fall back to raw DailyAgentHours login seconds for their billable Five9 profiles
         actual_hrs = actual_hrs_map.get(aid, Decimal('0'))
+        if not actual_hrs:
+            actual_hrs = Decimal(str(login_secs_map.get(aid, 0))) / Decimal('3600')
         coded_hrs = coded_hrs_map.get(aid, Decimal('0'))
         pre_cap_total = actual_hrs + coded_hrs
         final_hrs = max(Decimal('0'), pre_cap_total - nr_cap_adj)
@@ -256,9 +260,9 @@ def finance_dashboard(request):
     week_end = week_dates[-1]
 
     agents = Agent.objects.filter(
-        status='active', track_attendance=True,
-        billing_status='Billed',
-    ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles', 'separations')
+        status='active',
+        five9_profiles__billable=True,
+    ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles', 'separations').distinct()
 
     data = _get_billable_weekly_data(list(agents), week_dates, settings)
 
@@ -300,7 +304,7 @@ def billing_report(request):
 
     # All billed agents (Infinity employer or LCC) with separation filter
     agents = Agent.objects.filter(
-        billing_status='Billed',
+        five9_profiles__billable=True,
     ).exclude(
         Q(status='inactive') &
         Q(separations__status='finalized') &
@@ -405,7 +409,7 @@ def billing_export(request):
     week_end = week_dates[-1]
 
     agents = Agent.objects.filter(
-        billing_status='Billed',
+        five9_profiles__billable=True,
     ).exclude(
         Q(status='inactive') &
         Q(separations__status='finalized') &
@@ -524,7 +528,7 @@ def payroll_report(request):
     week_end = week_dates[-1]
 
     agents = Agent.objects.filter(
-        track_attendance=True,
+        Q(track_attendance=True) | Q(five9_profiles__billable=True),
     ).exclude(
         Q(status='inactive') &
         Q(separations__status='finalized') &
@@ -585,7 +589,7 @@ def payroll_export(request):
     week_end = week_dates[-1]
 
     agents = Agent.objects.filter(
-        track_attendance=True,
+        Q(track_attendance=True) | Q(five9_profiles__billable=True),
     ).exclude(
         Q(status='inactive') &
         Q(separations__status='finalized') &
