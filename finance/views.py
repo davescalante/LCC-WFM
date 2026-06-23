@@ -111,13 +111,6 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             nr_secs_map[aid] = nr_secs_map.get(aid, 0) + row['not_ready_seconds']
             login_secs_map[aid] = login_secs_map.get(aid, 0) + row['login_seconds']
 
-    # ── AdherenceRecord actual_hours (already has daily NR deduction) ──────
-    actual_hrs_map = {}
-    for rec in AdherenceRecord.objects.filter(agent__in=agent_ids, date__in=week_dates).values('agent_id', 'actual_hours', 'status'):
-        aid = rec['agent_id']
-        if rec['actual_hours']:
-            actual_hrs_map[aid] = actual_hrs_map.get(aid, Decimal('0')) + rec['actual_hours']
-
     # ── Coding hours ──────────────────────────────────────────────────────
     coded_hrs_map = {}
     for coding in Coding.objects.filter(agent__in=agent_ids, date__in=week_dates):
@@ -168,20 +161,21 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         billing_rate = agent.billing_rate_usd or settings.billing_rate_usd
         usd_to_mxn = settings.usd_to_mxn
 
-        # NR cap
+        # Raw login hours — no daily NR deductions; weekly checks only
+        raw_login_hrs = Decimal(str(login_secs_map.get(aid, 0))) / Decimal('3600')
+        coded_hrs = coded_hrs_map.get(aid, Decimal('0'))
+        pre_total = raw_login_hrs + coded_hrs
+
+        # Weekly NR deduction — apply the larger of two checks, never both
         total_nr_hrs = Decimal(str(nr_secs_map.get(aid, 0))) / Decimal('3600')
         nr_cap = settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team' else settings.nr_cap_regular_hours
-        nr_cap_adj = max(Decimal('0'), total_nr_hrs - nr_cap)
-
-        # Final worked hours
-        # Agents without AdherenceRecord entries (e.g. coordinators on agent shifts)
-        # fall back to raw DailyAgentHours login seconds for their billable Five9 profiles
-        actual_hrs = actual_hrs_map.get(aid, Decimal('0'))
-        if not actual_hrs:
-            actual_hrs = Decimal(str(login_secs_map.get(aid, 0))) / Decimal('3600')
-        coded_hrs = coded_hrs_map.get(aid, Decimal('0'))
-        pre_cap_total = actual_hrs + coded_hrs
-        final_hrs = max(Decimal('0'), pre_cap_total - nr_cap_adj)
+        check1_ded = max(Decimal('0'), total_nr_hrs - nr_cap)
+        if pre_total <= Decimal('48'):
+            check2_ded = max(Decimal('0'), total_nr_hrs - raw_login_hrs * Decimal('0.125'))
+        else:
+            check2_ded = Decimal('0')
+        nr_deduction = max(check1_ded, check2_ded)
+        final_hrs = max(Decimal('0'), pre_total - nr_deduction)
 
         # OT
         ot_reg = ot_regular_map.get(aid, Decimal('0'))
@@ -223,10 +217,10 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             'agent': agent,
             'total_nr_hrs': total_nr_hrs,
             'nr_cap_hrs': nr_cap,
-            'nr_cap_adj_hrs': nr_cap_adj,
-            'actual_hrs': actual_hrs,
+            'nr_deduction': nr_deduction,
+            'actual_hrs': raw_login_hrs,
             'coded_hrs': coded_hrs,
-            'pre_cap_total': pre_cap_total,
+            'pre_cap_total': pre_total,
             'final_hrs': final_hrs,
             'ot_regular_hrs': ot_reg,
             'ot_1_5_hrs': ot_1_5,
