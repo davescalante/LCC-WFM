@@ -8,7 +8,7 @@ from django.db.models import Q, Sum
 
 from scheduling.models import Agent, Five9Profile, OvertimeShift
 from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, PayrollAdjustment, Coding
-from .models import BillingSettings
+from .models import BillingSettings, BillingSettingsHistory
 
 # ─── Access control ───────────────────────────────────────────────────────────
 # Finance is visible only to users with is_super_admin=True, plus Django superusers.
@@ -250,11 +250,11 @@ def _get_billable_weekly_data(agents, week_dates, settings):
 @login_required
 @finance_access_required
 def finance_dashboard(request):
-    settings = BillingSettings.get()
     today = date.today()
-    week_start = today - timedelta(days=today.weekday())
+    week_start = _get_week_start(request)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
+    settings = BillingSettings.get_for_week(week_start)
 
     agents = Agent.objects.filter(
         status='active',
@@ -273,11 +273,18 @@ def finance_dashboard(request):
     ph_topup_total_mxn = sum(d['ph_topup_mxn'] for d in data.values())
     ot_1_5_topup_total_mxn = sum(d['ot_1_5_topup_mxn'] for d in data.values())
 
+    prev_week = (week_start - timedelta(days=7)).isoformat()
+    next_week = (week_start + timedelta(days=7)).isoformat()
+    current_week = (today - timedelta(days=today.weekday())).isoformat()
+
     return render(request, 'finance/dashboard.html', {
         'settings': settings,
         'week_start': week_start,
         'week_end': week_end,
         'today': today,
+        'prev_week': prev_week,
+        'next_week': next_week,
+        'current_week': current_week,
         'total_hrs': total_hrs,
         'total_billing_usd': total_billing_usd,
         'total_payroll_mxn': total_payroll_mxn,
@@ -294,8 +301,8 @@ def finance_dashboard(request):
 @login_required
 @finance_access_required
 def billing_report(request):
-    settings = BillingSettings.get()
     week_start = _get_week_start(request)
+    settings = BillingSettings.get_for_week(week_start)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
 
@@ -400,8 +407,8 @@ def billing_export(request):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
-    settings = BillingSettings.get()
     week_start = _get_week_start(request)
+    settings = BillingSettings.get_for_week(week_start)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
 
@@ -519,8 +526,8 @@ def billing_export(request):
 @login_required
 @finance_access_required
 def payroll_report(request):
-    settings = BillingSettings.get()
     week_start = _get_week_start(request)
+    settings = BillingSettings.get_for_week(week_start)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
 
@@ -580,8 +587,8 @@ def payroll_export(request):
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
 
-    settings = BillingSettings.get()
     week_start = _get_week_start(request)
+    settings = BillingSettings.get_for_week(week_start)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
 
@@ -677,26 +684,54 @@ def payroll_export(request):
 @login_required
 @finance_access_required
 def finance_settings(request):
-    settings = BillingSettings.get()
+    today = date.today()
+    current_week = today - timedelta(days=today.weekday())
+    singleton = BillingSettings.get()
+
     if request.method == 'POST':
         try:
-            settings.billing_rate_usd = Decimal(request.POST.get('billing_rate_usd', str(settings.billing_rate_usd)))
-            settings.usd_to_mxn = Decimal(request.POST.get('usd_to_mxn', str(settings.usd_to_mxn)))
-            usd_updated_str = request.POST.get('usd_to_mxn_updated', '').strip()
-            if usd_updated_str:
-                settings.usd_to_mxn_updated = date.fromisoformat(usd_updated_str)
-            settings.nr_cap_regular_hours = Decimal(request.POST.get('nr_cap_regular_hours', str(settings.nr_cap_regular_hours)))
-            settings.nr_cap_kill_team_hours = Decimal(request.POST.get('nr_cap_kill_team_hours', str(settings.nr_cap_kill_team_hours)))
-            settings.default_admin_bonus_mxn = Decimal(request.POST.get('default_admin_bonus_mxn', str(settings.default_admin_bonus_mxn)))
-            settings.adherence_bonus_max_mxn = Decimal(request.POST.get('adherence_bonus_max_mxn', str(settings.adherence_bonus_max_mxn)))
-            settings.adherence_bonus_full_hours = Decimal(request.POST.get('adherence_bonus_full_hours', str(settings.adherence_bonus_full_hours)))
-            settings.save()
-            messages.success(request, "Settings saved.")
+            week_str = request.POST.get('effective_week', '').strip()
+            try:
+                effective_week = date.fromisoformat(week_str)
+                effective_week = effective_week - timedelta(days=effective_week.weekday())
+            except (ValueError, TypeError):
+                effective_week = current_week
+
+            BillingSettingsHistory.objects.create(
+                week_start=effective_week,
+                changed_by=request.user,
+                billing_rate_usd=Decimal(request.POST.get('billing_rate_usd', str(singleton.billing_rate_usd))),
+                usd_to_mxn=Decimal(request.POST.get('usd_to_mxn', str(singleton.usd_to_mxn))),
+                nr_cap_regular_hours=Decimal(request.POST.get('nr_cap_regular_hours', str(singleton.nr_cap_regular_hours))),
+                nr_cap_kill_team_hours=Decimal(request.POST.get('nr_cap_kill_team_hours', str(singleton.nr_cap_kill_team_hours))),
+                default_admin_bonus_mxn=Decimal(request.POST.get('default_admin_bonus_mxn', str(singleton.default_admin_bonus_mxn))),
+                adherence_bonus_max_mxn=Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn))),
+                adherence_bonus_full_hours=Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours))),
+            )
+            # Also update the singleton so it always reflects the latest values
+            singleton.billing_rate_usd = Decimal(request.POST.get('billing_rate_usd', str(singleton.billing_rate_usd)))
+            singleton.usd_to_mxn = Decimal(request.POST.get('usd_to_mxn', str(singleton.usd_to_mxn)))
+            singleton.nr_cap_regular_hours = Decimal(request.POST.get('nr_cap_regular_hours', str(singleton.nr_cap_regular_hours)))
+            singleton.nr_cap_kill_team_hours = Decimal(request.POST.get('nr_cap_kill_team_hours', str(singleton.nr_cap_kill_team_hours)))
+            singleton.default_admin_bonus_mxn = Decimal(request.POST.get('default_admin_bonus_mxn', str(singleton.default_admin_bonus_mxn)))
+            singleton.adherence_bonus_max_mxn = Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn)))
+            singleton.adherence_bonus_full_hours = Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours)))
+            singleton.save()
+            messages.success(request, f"Settings saved — effective from week of {effective_week.strftime('%b %d, %Y')}.")
         except Exception as e:
             messages.error(request, f"Error saving settings: {e}")
         return redirect('finance_settings')
 
-    return render(request, 'finance/settings.html', {'settings': settings})
+    # Current effective settings (latest history record)
+    current = BillingSettings.get_for_week(current_week)
+    history = BillingSettingsHistory.objects.order_by('-week_start', '-changed_at')[:50]
+
+    return render(request, 'finance/settings.html', {
+        'settings': current,
+        'singleton': singleton,
+        'history': history,
+        'current_week': current_week,
+    })
 
 
 # ─── Admin Codings ────────────────────────────────────────────────────────────
@@ -918,7 +953,7 @@ def admin_adherence(request):
                        tmpl_by_agent_dow=tmpl_by_agent_dow)
 
     # Replace adherence bonus with fixed admin bonus for each row
-    billing_settings = BillingSettings.get()
+    billing_settings = BillingSettings.get_for_week(week_start)
     billable_five9_map = {}
     for p in Five9Profile.objects.filter(
         agent__in=[a.pk for a in agents], billable=True
@@ -970,8 +1005,8 @@ def admin_adherence_export(request):
     from adherence.views import _build_maps, _build_rows
     from adherence.models import Coding as _Coding
 
-    billing_settings = BillingSettings.get()
     week_start = _get_week_start(request)
+    billing_settings = BillingSettings.get_for_week(week_start)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
 

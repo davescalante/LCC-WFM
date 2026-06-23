@@ -14,16 +14,21 @@
     {% endfor %}
 {% endif %}
 
-<div class="card">
-    <h2 style="margin-bottom:20px;">Billing and Payroll</h2>
-    <form method="post">
+<div class="card" style="margin-bottom:20px;">
+    <h2 style="margin-bottom:6px;">Current Settings</h2>
+    <p style="font-size:13px;color:#888;margin-bottom:20px;">
+        Effective from week of {{ settings.week_start|date:"M d, Y"|default:"(legacy)" }}.
+        Changes take effect for the week you specify below — past weeks always use the rates that were active then.
+    </p>
+
+    <form method="post" id="settings-form">
         {% csrf_token %}
 
         <div class="grid-2">
             <div>
                 <label for="id_billing_rate_usd">Infinity Billing Rate to LCC</label>
                 <input type="number" id="id_billing_rate_usd" name="billing_rate_usd"
-                    step="0.01" placeholder="14.00"
+                    step="0.01" placeholder="15.00"
                     value="{{ settings.billing_rate_usd|default:'' }}">
                 <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">USD per worked hour charged to LCC</p>
             </div>
@@ -34,12 +39,6 @@
                     step="0.0001"
                     value="{{ settings.usd_to_mxn|default:'' }}">
                 <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Manually update this when the rate changes</p>
-            </div>
-
-            <div>
-                <label for="id_usd_to_mxn_updated">Exchange Rate Last Updated</label>
-                <input type="date" id="id_usd_to_mxn_updated" name="usd_to_mxn_updated"
-                    value="{{ settings.usd_to_mxn_updated|date:'Y-m-d'|default:'' }}">
             </div>
 
             <div>
@@ -81,12 +80,150 @@
                     value="{{ settings.nr_cap_kill_team_hours|default:'' }}">
                 <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Weekly not-ready cap in hours (default 7)</p>
             </div>
+
+            <div>
+                <label for="id_effective_week">Effective From Week</label>
+                <input type="date" id="id_effective_week" name="effective_week"
+                    value="{{ current_week|date:'Y-m-d' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">These rates will apply to this week and all future weeks until changed again</p>
+            </div>
         </div>
 
         <div style="margin-top:8px;">
-            <button type="submit" class="btn btn-primary">Save Settings</button>
+            <button type="button" class="btn btn-primary" onclick="reviewChanges()">Review &amp; Save</button>
         </div>
     </form>
 </div>
+
+<!-- Settings History -->
+<div class="card">
+    <h2 style="margin-bottom:14px;">Settings History</h2>
+    {% if history %}
+    <div style="overflow-x:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Effective Week</th>
+                    <th>Billing Rate (USD/hr)</th>
+                    <th>USD&rarr;MXN</th>
+                    <th>Adh. Bonus Max</th>
+                    <th>Adh. Bonus Hrs</th>
+                    <th>Admin Bonus</th>
+                    <th>NR Cap Regular</th>
+                    <th>NR Cap Kill Team</th>
+                    <th>Saved By</th>
+                    <th>Saved At</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for h in history %}
+                <tr>
+                    <td>{{ h.week_start|date:"M d, Y" }}</td>
+                    <td>${{ h.billing_rate_usd }}</td>
+                    <td>{{ h.usd_to_mxn }}</td>
+                    <td>${{ h.adherence_bonus_max_mxn }}</td>
+                    <td>{{ h.adherence_bonus_full_hours }}h</td>
+                    <td>${{ h.default_admin_bonus_mxn }}</td>
+                    <td>{{ h.nr_cap_regular_hours }}h</td>
+                    <td>{{ h.nr_cap_kill_team_hours }}h</td>
+                    <td>{{ h.changed_by.get_full_name|default:h.changed_by.username|default:"(seed)" }}</td>
+                    <td style="white-space:nowrap;font-size:12px;color:#888;">{{ h.changed_at|date:"M d, Y H:i" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p style="color:#888;font-size:14px;">No history records yet.</p>
+    {% endif %}
+</div>
+
+<!-- Confirmation Modal -->
+<div id="confirm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:8px;padding:32px;width:540px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2);max-height:90vh;overflow-y:auto;">
+        <h2 style="color:#1a3a5c;font-size:18px;margin-bottom:4px;">Confirm Settings Change</h2>
+        <p style="color:#666;font-size:13px;margin-bottom:20px;">
+            These changes will apply from week of <strong id="confirm-week"></strong>. Review before saving.
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px;">
+            <thead>
+                <tr>
+                    <th style="text-align:left;padding:6px 8px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;">Setting</th>
+                    <th style="text-align:right;padding:6px 8px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;">Current</th>
+                    <th style="text-align:right;padding:6px 8px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;">New</th>
+                </tr>
+            </thead>
+            <tbody id="confirm-rows"></tbody>
+        </table>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button type="button" class="btn" style="background:#e5e7eb;color:#374151;" onclick="closeConfirm()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="submitSettings()">Save Settings</button>
+        </div>
+    </div>
+</div>
+
+<script>
+var _current = {
+    billing_rate_usd: "{{ settings.billing_rate_usd }}",
+    usd_to_mxn: "{{ settings.usd_to_mxn }}",
+    default_admin_bonus_mxn: "{{ settings.default_admin_bonus_mxn }}",
+    adherence_bonus_max_mxn: "{{ settings.adherence_bonus_max_mxn }}",
+    adherence_bonus_full_hours: "{{ settings.adherence_bonus_full_hours }}",
+    nr_cap_regular_hours: "{{ settings.nr_cap_regular_hours }}",
+    nr_cap_kill_team_hours: "{{ settings.nr_cap_kill_team_hours }}"
+};
+
+var _labels = {
+    billing_rate_usd: 'Billing Rate (USD/hr)',
+    usd_to_mxn: 'USD→MXN Exchange Rate',
+    default_admin_bonus_mxn: 'Default Admin Bonus (MXN)',
+    adherence_bonus_max_mxn: 'Adherence Bonus Max (MXN)',
+    adherence_bonus_full_hours: 'Adh. Bonus Full Hours',
+    nr_cap_regular_hours: 'NR Cap — Regular (hrs)',
+    nr_cap_kill_team_hours: 'NR Cap — Kill Team (hrs)'
+};
+
+function reviewChanges() {
+    var form = document.getElementById('settings-form');
+    var weekInput = document.getElementById('id_effective_week');
+    var weekVal = weekInput.value;
+    var weekDate = weekVal ? new Date(weekVal + 'T00:00:00') : new Date();
+    var weekStr = weekDate.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+
+    document.getElementById('confirm-week').textContent = weekStr;
+
+    var tbody = document.getElementById('confirm-rows');
+    tbody.innerHTML = '';
+    var fields = Object.keys(_labels);
+    fields.forEach(function(f) {
+        var input = form.querySelector('[name=' + f + ']');
+        var newVal = input ? parseFloat(input.value).toString() : '';
+        var curVal = parseFloat(_current[f]).toString();
+        var changed = newVal !== curVal;
+        var tr = document.createElement('tr');
+        tr.style.background = changed ? '#fef9c3' : '';
+        tr.innerHTML = '<td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;">' + _labels[f] + '</td>' +
+            '<td style="text-align:right;padding:5px 8px;border-bottom:1px solid #f3f4f6;color:#6b7280;">' + curVal + '</td>' +
+            '<td style="text-align:right;padding:5px 8px;border-bottom:1px solid #f3f4f6;font-weight:' + (changed?'700':'400') + ';color:' + (changed?'#1d4ed8':'#374151') + ';">' + newVal + '</td>';
+        tbody.appendChild(tr);
+    });
+
+    var modal = document.getElementById('confirm-modal');
+    modal.style.display = 'flex';
+}
+
+function closeConfirm() {
+    document.getElementById('confirm-modal').style.display = 'none';
+}
+
+function submitSettings() {
+    document.getElementById('confirm-modal').style.display = 'none';
+    document.getElementById('settings-form').submit();
+}
+
+document.getElementById('confirm-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeConfirm();
+});
+</script>
 
 {% endblock %}

@@ -2,12 +2,24 @@
 {% block title %} - Finance Dashboard{% endblock %}
 {% block content %}
 
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
     <div>
         <h1 style="margin:0;">Finance Dashboard</h1>
         <div style="font-size:13px;color:#888;margin-top:4px;">
             Week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }}
         </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <a href="?week={{ prev_week }}" class="btn" style="background:#e5e7eb;color:#374151;padding:6px 12px;">&#8592; Prev</a>
+        <form method="get" style="margin:0;display:flex;align-items:center;gap:6px;">
+            <input type="date" name="week" value="{{ week_start|date:'Y-m-d' }}"
+                   style="padding:5px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;width:140px;"
+                   onchange="this.form.submit()">
+        </form>
+        <a href="?week={{ next_week }}" class="btn" style="background:#e5e7eb;color:#374151;padding:6px 12px;">Next &#8594;</a>
+        {% if week_start|date:"Y-m-d" != current_week %}
+        <a href="?week={{ current_week }}" class="btn btn-primary" style="padding:6px 12px;">Today</a>
+        {% endif %}
     </div>
 </div>
 
@@ -51,7 +63,7 @@
         <div class="number" style="font-size:28px;color:#1a3a5c;">{{ settings.usd_to_mxn }}</div>
         <div class="label">Exchange Rate</div>
         <div style="margin-top:6px;font-size:12px;color:#9ca3af;">
-            MXN/USD &nbsp;&middot;&nbsp; Last updated: {{ settings.usd_to_mxn_updated|date:"M d, Y"|default:"Not set" }}
+            MXN/USD &nbsp;&middot;&nbsp; Effective: {{ settings.usd_to_mxn_updated|date:"M d, Y"|default:"Not set" }}
         </div>
     </div>
 
@@ -61,14 +73,18 @@
 <div class="card" style="margin-bottom:20px;">
     <h2 style="margin-bottom:14px;">Quick Links</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <a href="{% url 'billing_report' %}" class="btn btn-primary">Billing Report</a>
-        <a href="{% url 'payroll_report' %}" class="btn btn-primary">Payroll Report</a>
+        <a href="{% url 'billing_report' %}?week={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Billing Report</a>
+        <a href="{% url 'payroll_report' %}?week={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Payroll Report</a>
         <a href="{% url 'finance_settings' %}" class="btn" style="background:#e5e7eb;color:#374151;">Settings</a>
     </div>
 </div>
 
 <div style="font-size:12px;color:#9ca3af;margin-top:4px;">
+    {% if week_start|date:"Y-m-d" == current_week %}
     Data shown is for the current week to date and may be incomplete. Final reports are available after the week closes.
+    {% else %}
+    Showing data for week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }} using rates effective that week.
+    {% endif %}
 </div>
 
 {% endblock %}

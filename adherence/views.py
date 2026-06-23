@@ -381,7 +381,7 @@ def _build_maps(agents, week_dates):
     return shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow
 
 
-def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None):
+def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None, billing_settings=None):
     from scheduling.models import Five9Profile as _Five9Profile
     from finance.models import BillingSettings as _BS
 
@@ -405,7 +405,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         if _bnames is None or _row['five9_username'].strip().lower() in _bnames:
             _weekly_nr_map[_aid] = _weekly_nr_map.get(_aid, 0) + _row['not_ready_seconds']
 
-    _billing_settings = _BS.get()
+    _billing_settings = billing_settings if billing_settings is not None else _BS.get()
 
     def _effective_template(agent_id, d):
         dow = d.weekday()
@@ -941,10 +941,13 @@ def adherence_rows_fragment(request):
         Q(adherence_records__date__in=week_dates)
     ).distinct())
 
+    from finance.models import BillingSettings as _BillingSettings
+    _week_billing = _BillingSettings.get_for_week(week_start)
+
     shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
     rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
                        extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
-                       tmpl_by_agent_dow=tmpl_by_agent_dow)
+                       tmpl_by_agent_dow=tmpl_by_agent_dow, billing_settings=_week_billing)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction
@@ -1225,8 +1228,10 @@ def payroll_export(request):
         return response
 
     # GET — show preview with editable deductions
+    from finance.models import BillingSettings as _BillingSettings
+    _week_billing_pe = _BillingSettings.get_for_week(week_start)
     shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map, tmpl_by_agent_dow=tmpl_by_agent_dow)
+    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map, extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map, tmpl_by_agent_dow=tmpl_by_agent_dow, billing_settings=_week_billing_pe)
 
     adj_map = {
         pa.agent_id: pa.commission_deduction
