@@ -85,7 +85,7 @@ def _get_billable_weekly_data(agents, week_dates, settings):
       nr_cap_hrs, nr_cap_adj_hrs, final_hrs,
       bonus (bool), ot_regular_hrs, ot_1_5_hrs, ot_power_hrs,
       commission_pct, base_pay_mxn, ot_regular_mxn, ot_1_5_mxn,
-      power_hour_usd, adherence_bonus_mxn, commission_deduction_mxn,
+      power_hour_usd, adherence_bonus_mxn,
       total_pay_mxn, total_pay_usd, billing_usd
     """
     agent_ids = [a.pk for a in agents]
@@ -194,9 +194,8 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         bonus_mxn = settings.adherence_bonus_mxn if bonus_qualifies else Decimal('0')
 
         comm_pct = commission_map.get(aid, Decimal('0'))
-        comm_deduction = (base_pay * comm_pct / Decimal('100')).quantize(Decimal('0.01'), ROUND_HALF_UP)
 
-        total_pay_mxn = base_pay + ot_reg_pay + ot_1_5_pay + bonus_mxn - comm_deduction
+        total_pay_mxn = base_pay + ot_reg_pay + ot_1_5_pay + bonus_mxn
         total_pay_usd = (total_pay_mxn / usd_to_mxn).quantize(Decimal('0.01'), ROUND_HALF_UP) if usd_to_mxn else Decimal('0')
 
         # Billing (what Infinity charges LCC)
@@ -223,7 +222,6 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             'bonus_qualifies': bonus_qualifies,
             'bonus_mxn': bonus_mxn,
             'commission_pct': comm_pct,
-            'commission_deduction_mxn': comm_deduction,
             'total_pay_mxn': total_pay_mxn,
             'total_pay_usd': total_pay_usd,
             'billing_usd': billing_usd,
@@ -525,7 +523,6 @@ def payroll_report(request):
         'ot_1_5_mxn': sum(r.get('ot_1_5_mxn', Decimal('0')) for r in infinity_rows),
         'power_hour_usd': sum(r.get('power_hour_usd', Decimal('0')) for r in infinity_rows),
         'bonus_mxn': sum(r.get('bonus_mxn', Decimal('0')) for r in infinity_rows),
-        'commission_deduction_mxn': sum(r.get('commission_deduction_mxn', Decimal('0')) for r in infinity_rows),
         'total_pay_mxn': sum(r.get('total_pay_mxn', Decimal('0')) for r in infinity_rows),
         'total_pay_usd': sum(r.get('total_pay_usd', Decimal('0')) for r in infinity_rows),
     }
@@ -583,7 +580,7 @@ def payroll_export(request):
         'Worked Hrs', 'Hourly Rate (MXN)',
         'Base Pay (MXN)', 'Adherence Bonus (MXN)',
         'OT Regular (MXN)', 'OT 1.5x (MXN)', 'Power Hour (USD)',
-        'Commission Deduction (MXN)',
+        'Comm. Ded. %', 'Comm. Earned (MXN)',
         'Total Pay (MXN)', 'Total Pay (USD equiv.)',
     ]
 
@@ -626,13 +623,14 @@ def payroll_export(request):
                 float(d.get('ot_regular_mxn', 0)),
                 float(d.get('ot_1_5_mxn', 0)),
                 float(d.get('power_hour_usd', 0)),
-                float(d.get('commission_deduction_mxn', 0)),
+                float(d.get('commission_pct', 0)),
+                '—',
                 float(d.get('total_pay_mxn', 0)),
                 float(d.get('total_pay_usd', 0)),
             ])
             row_num += 1
 
-    col_widths = [22, 22, 14, 20, 18, 12, 18, 16, 18, 16, 14, 16, 22, 16, 18]
+    col_widths = [22, 22, 14, 20, 18, 12, 18, 16, 18, 16, 14, 16, 14, 18, 16, 18]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
