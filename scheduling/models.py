@@ -63,6 +63,7 @@ class Agent(models.Model):
     billing_rate_usd = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Override billing rate in USD (uses global rate if blank)")
     is_official_admin = models.BooleanField(default=False, help_text="Genuine administrator — receives admin bonus instead of adherence bonus")
     admin_bonus_mxn = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Individual admin bonus in MXN (uses global default if blank)")
+    is_super_admin = models.BooleanField(default=False, help_text="Super admin — full access to Finance section; can grant super admin to others")
     notes = models.TextField(blank=True)
 
     @property

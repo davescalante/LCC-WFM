@@ -21,12 +21,13 @@
 <table>
     <thead>
         <tr style="position:sticky;top:0;z-index:1;background:#f0f4f8;">
-            <th colspan="16" style="padding:8px 14px;font-size:12px;font-weight:700;color:white;letter-spacing:.5px;text-transform:uppercase;background:#1a3a5c;border:none;">
+            <th colspan="17" style="padding:8px 14px;font-size:12px;font-weight:700;color:white;letter-spacing:.5px;text-transform:uppercase;background:#1a3a5c;border:none;">
                 Infinity Employees
             </th>
         </tr>
         <tr style="position:sticky;top:37px;z-index:1;background:#f0f4f8;">
             <th style="white-space:nowrap;">Agent Name</th>
+            <th style="white-space:nowrap;">Five9 User</th>
             <th style="white-space:nowrap;">Legal Name</th>
             <th style="white-space:nowrap;">Employee ID</th>
             <th style="white-space:nowrap;">Supervisor</th>
@@ -52,6 +53,7 @@
                     {{ row.agent.agent_name|default:row.agent.user.get_full_name }}
                 </a>
             </td>
+            <td style="font-size:13px;">{{ row.five9_username|default:"—" }}</td>
             <td style="font-size:13px;">{{ row.agent.user.get_full_name }}</td>
             <td style="font-size:13px;">{{ row.agent.employee_id|default:"—" }}</td>
             <td style="font-size:13px;">{{ row.agent.supervisor|default:"—" }}</td>
@@ -69,13 +71,13 @@
             <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_usd|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="16" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No Infinity employees found for this week.</td></tr>
+        <tr><td colspan="17" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No Infinity employees found for this week.</td></tr>
         {% endfor %}
     </tbody>
     <tfoot>
         {% if infinity_totals %}
         <tr style="background:#dbeafe;border-top:2px solid #93c5fd;">
-            <td colspan="5" style="padding:10px 14px;font-size:13px;font-weight:700;color:#1e3a8a;">Infinity Totals</td>
+            <td colspan="6" style="padding:10px 14px;font-size:13px;font-weight:700;color:#1e3a8a;">Infinity Totals</td>
             <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">{{ infinity_totals.final_hrs|floatformat:2 }}</td>
             <td></td>
             <td style="font-size:13px;font-weight:700;color:#1e3a8a;text-align:right;">${{ infinity_totals.base_pay_mxn|floatformat:2 }}</td>
@@ -98,12 +100,13 @@
 <table>
     <thead>
         <tr style="position:sticky;top:0;z-index:1;background:#f0f4f8;">
-            <th colspan="16" style="padding:8px 14px;font-size:12px;font-weight:700;color:#92400e;letter-spacing:.5px;text-transform:uppercase;background:#fef3c7;border:none;">
+            <th colspan="17" style="padding:8px 14px;font-size:12px;font-weight:700;color:#92400e;letter-spacing:.5px;text-transform:uppercase;background:#fef3c7;border:none;">
                 LCC Direct Employees
             </th>
         </tr>
         <tr style="position:sticky;top:37px;z-index:1;background:#f0f4f8;">
             <th style="white-space:nowrap;">Agent Name</th>
+            <th style="white-space:nowrap;">Five9 User</th>
             <th style="white-space:nowrap;">Legal Name</th>
             <th style="white-space:nowrap;">Employee ID</th>
             <th style="white-space:nowrap;">Supervisor</th>
@@ -129,6 +132,7 @@
                     {{ row.agent.agent_name|default:row.agent.user.get_full_name }}
                 </a>
             </td>
+            <td style="font-size:13px;">{{ row.five9_username|default:"—" }}</td>
             <td style="font-size:13px;">{{ row.agent.user.get_full_name }}</td>
             <td style="font-size:13px;">{{ row.agent.employee_id|default:"—" }}</td>
             <td style="font-size:13px;">{{ row.agent.supervisor|default:"—" }}</td>
@@ -146,7 +150,7 @@
             <td style="font-size:13px;text-align:right;font-weight:600;">${{ row.total_pay_usd|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="16" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No LCC Direct employees found for this week.</td></tr>
+        <tr><td colspan="17" style="padding:24px;text-align:center;color:#9ca3af;font-size:13px;">No LCC Direct employees found for this week.</td></tr>
         {% endfor %}
     </tbody>
 </table>

@@ -11,17 +11,13 @@ from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, Payr
 from .models import BillingSettings
 
 # ─── Access control ───────────────────────────────────────────────────────────
-# Finance is visible to role='admin' users who are NOT supervisors or coordinators,
-# plus Django superusers.
-_FINANCE_BLOCKED_TYPES = {'supervisor', 'coordinator'}
-
+# Finance is visible only to users with is_super_admin=True, plus Django superusers.
 
 def _has_finance_access(user):
     if user.is_superuser:
         return True
     try:
-        p = user.agent
-        return p.role == 'admin' and p.role_type not in _FINANCE_BLOCKED_TYPES
+        return user.agent.is_super_admin
     except Exception:
         return False
 
@@ -92,9 +88,15 @@ def _get_billable_weekly_data(agents, week_dates, settings):
     week_start = week_dates[0]
 
     # ── Billable username lookup ───────────────────────────────────────────
-    billable_map = {}   # agent_id -> set of usernames (lowercase)
-    for p in Five9Profile.objects.filter(agent__in=agent_ids, billable=True).values('agent_id', 'five9_username'):
-        billable_map.setdefault(p['agent_id'], set()).add(p['five9_username'].strip().lower())
+    billable_map = {}         # agent_id -> set of usernames (lowercase) for hour filtering
+    primary_billable_map = {} # agent_id -> display username (primary billable, or first billable)
+    for p in Five9Profile.objects.filter(
+        agent__in=agent_ids, billable=True
+    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
+        aid = p['agent_id']
+        billable_map.setdefault(aid, set()).add(p['five9_username'].strip().lower())
+        if aid not in primary_billable_map:
+            primary_billable_map[aid] = p['five9_username']
 
     # ── Sum login + NR seconds from billable DailyAgentHours ──────────────
     nr_secs_map = {}    # agent_id -> total NR seconds
@@ -215,6 +217,7 @@ def _get_billable_weekly_data(agents, week_dates, settings):
 
         results[aid] = {
             'agent': agent,
+            'five9_username': primary_billable_map.get(aid, ''),
             'total_nr_hrs': total_nr_hrs,
             'nr_cap_hrs': nr_cap,
             'nr_deduction': nr_deduction,
@@ -694,3 +697,186 @@ def finance_settings(request):
         return redirect('finance_settings')
 
     return render(request, 'finance/settings.html', {'settings': settings})
+
+
+# ─── Admin Codings ────────────────────────────────────────────────────────────
+
+@login_required
+@finance_access_required
+def admin_codings(request):
+    """Codings for Official Admins and coordinators against their billable Five9 user."""
+    from django.utils import timezone
+    from adherence.models import Coding
+
+    week_start = _get_week_start(request)
+    week_dates = _week_dates(week_start)
+    week_end = week_dates[-1]
+
+    # Admin-role users who have a billable Five9 profile
+    agents = Agent.objects.filter(
+        status='active',
+        five9_profiles__billable=True,
+        role='admin',
+    ).distinct().select_related('user', 'supervisor__user').order_by(
+        'user__last_name', 'user__first_name'
+    )
+
+    # Billable username display map
+    agent_ids = [a.pk for a in agents]
+    billable_display_map = {}
+    for p in Five9Profile.objects.filter(
+        agent__in=agent_ids, billable=True
+    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
+        if p['agent_id'] not in billable_display_map:
+            billable_display_map[p['agent_id']] = p['five9_username']
+
+    # Build coding map (admin codings only)
+    codings_qs = Coding.objects.filter(
+        date__in=week_dates, agent__in=agents, is_admin_coding=True
+    ).select_related('agent__user').order_by('start_time')
+    coding_map = {}
+    for c in codings_qs:
+        coding_map.setdefault((c.agent_id, c.date), []).append(c)
+
+    rows = []
+    for agent in agents:
+        cells = []
+        agent_total_seconds = 0
+        for day_date in week_dates:
+            entries = coding_map.get((agent.pk, day_date), [])
+            day_seconds = sum(e.total_seconds_count() for e in entries)
+            agent_total_seconds += day_seconds
+            cells.append({'date': day_date, 'entries': entries, 'total_seconds': day_seconds})
+        rows.append({
+            'agent': agent,
+            'billable_five9_username': billable_display_map.get(agent.pk, ''),
+            'cells': cells,
+            'total_seconds': agent_total_seconds,
+        })
+
+    return render(request, 'finance/admin_codings.html', {
+        'rows': rows,
+        'week_dates': week_dates,
+        'week_start': week_start,
+        'week_end': week_end,
+        'today': timezone.localdate(),
+        'prev_week': (week_start - timedelta(days=7)).isoformat(),
+        'next_week': (week_start + timedelta(days=7)).isoformat(),
+    })
+
+
+@login_required
+@finance_access_required
+def add_admin_coding_ajax(request):
+    import json as _json
+    from django.views.decorators.http import require_POST as _rp
+    from adherence.models import Coding
+    from datetime import time as time_cls
+
+    data = _json.loads(request.body)
+    agent_id = data.get('agent_id')
+    date_str = data.get('date')
+    start_time = data.get('start_time', '').strip()
+    end_time = data.get('end_time', '').strip()
+    notes = data.get('notes', '')
+
+    if not all([agent_id, date_str, start_time, end_time]):
+        return JsonResponse({'ok': False, 'error': 'missing fields'}, status=400)
+
+    def _pad(s):
+        parts = s.split(':')
+        if parts:
+            parts[0] = parts[0].zfill(2)
+        return ':'.join(parts)
+
+    start_time = _pad(start_time)
+    end_time = _pad(end_time)
+
+    try:
+        start_t = time_cls.fromisoformat(start_time)
+        end_t = time_cls.fromisoformat(end_time)
+    except ValueError:
+        return JsonResponse({'ok': False, 'error': 'Invalid time format. Use H:MM:SS'}, status=400)
+
+    if end_t <= start_t:
+        return JsonResponse({'ok': False, 'error': 'End time must be after start time.'}, status=400)
+
+    try:
+        coding = Coding.objects.create(
+            agent_id=agent_id, date=date_str,
+            start_time=start_time, end_time=end_time,
+            notes=notes, is_admin_coding=True,
+        )
+        coding.refresh_from_db()
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)}, status=400)
+
+    return JsonResponse({
+        'ok': True, 'id': coding.pk,
+        'hhmmss': coding.total_hhmmss(),
+        'start': coding.start_time.strftime('%H:%M'),
+        'end': coding.end_time.strftime('%H:%M'),
+        'start_full': coding.start_time.strftime('%H:%M:%S'),
+        'end_full': coding.end_time.strftime('%H:%M:%S'),
+        'notes': coding.notes,
+    })
+
+
+@login_required
+@finance_access_required
+def edit_admin_coding_ajax(request):
+    import json as _json
+    from adherence.models import Coding
+    from datetime import time as time_cls
+
+    data = _json.loads(request.body)
+    coding_id = data.get('coding_id')
+    start_time = data.get('start_time', '').strip()
+    end_time = data.get('end_time', '').strip()
+    notes = data.get('notes', '')
+
+    coding = Coding.objects.filter(pk=coding_id, is_admin_coding=True).first()
+    if not coding:
+        return JsonResponse({'ok': False, 'error': 'Not found'}, status=404)
+
+    def _pad(s):
+        parts = s.split(':')
+        if parts:
+            parts[0] = parts[0].zfill(2)
+        return ':'.join(parts)
+
+    try:
+        start_t = time_cls.fromisoformat(_pad(start_time))
+        end_t = time_cls.fromisoformat(_pad(end_time))
+    except ValueError:
+        return JsonResponse({'ok': False, 'error': 'Invalid time format.'}, status=400)
+
+    if end_t <= start_t:
+        return JsonResponse({'ok': False, 'error': 'End time must be after start time.'}, status=400)
+
+    coding.start_time = start_t
+    coding.end_time = end_t
+    coding.notes = notes
+    coding.save()
+
+    return JsonResponse({
+        'ok': True, 'id': coding.pk,
+        'hhmmss': coding.total_hhmmss(),
+        'start': coding.start_time.strftime('%H:%M'),
+        'end': coding.end_time.strftime('%H:%M'),
+        'start_full': coding.start_time.strftime('%H:%M:%S'),
+        'end_full': coding.end_time.strftime('%H:%M:%S'),
+        'notes': coding.notes,
+    })
+
+
+@login_required
+@finance_access_required
+def delete_admin_coding_ajax(request):
+    import json as _json
+    from adherence.models import Coding
+
+    data = _json.loads(request.body)
+    coding_id = data.get('coding_id')
+    Coding.objects.filter(pk=coding_id, is_admin_coding=True).delete()
+    return JsonResponse({'ok': True})

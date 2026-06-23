@@ -50,6 +50,7 @@ class Coding(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     notes = models.TextField(blank=True)
+    is_admin_coding = models.BooleanField(default=False, help_text="Admin-only coding (Finance section); excluded from regular Codings/Adherence tabs")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

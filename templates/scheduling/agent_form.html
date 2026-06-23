@@ -55,6 +55,13 @@
                 {{ agent_form.admin_bonus_mxn }}
                 <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:0;">Leave blank to use global default (${{ default_admin_bonus_mxn }} MXN)</p>
             </div>
+            {% if request.has_finance_access or request.user.is_superuser %}
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                {{ agent_form.is_super_admin }}
+                <label for="{{ agent_form.is_super_admin.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Super Admin</label>
+                <span style="font-size:11px;color:#888;">Full access to Finance section</span>
+            </div>
+            {% endif %}
             {% endif %}
             {% if not agent %}
             <label>Start Date</label>

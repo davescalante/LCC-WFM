@@ -8,7 +8,6 @@ ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 # URL path prefixes agents are allowed to access
 _AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
 _INACTIVE_ALLOWED = ('/agent/inactive/', '/accounts/', '/static/', '/favicon')
-_FINANCE_BLOCKED_TYPES = frozenset({'supervisor', 'coordinator', 'agent'})
 
 
 class SessionTimeoutMiddleware:
@@ -81,10 +80,7 @@ class AgentAccessMiddleware:
                     request.supervisor_request_badge = AgentRequest.objects.filter(
                         status='pending', supervisor_read=False
                     ).count()
-                    request.has_finance_access = (
-                        profile.role == 'admin' and
-                        profile.role_type not in _FINANCE_BLOCKED_TYPES
-                    )
+                    request.has_finance_access = getattr(profile, 'is_super_admin', False)
             except Exception:
                 if request.user.is_superuser:
                     request.has_finance_access = True

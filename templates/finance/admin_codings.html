@@ -1,260 +1,100 @@
 {% extends 'base.html' %}
 {% load adherence_filters %}
-{% block title %} - Codings{% endblock %}
+{% block title %} - Admin Codings{% endblock %}
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <div style="display:flex;align-items:center;gap:16px;">
-        <h1 style="margin:0;">Codings — Non-System Time</h1>
+        <h1 style="margin:0;">Admin Codings</h1>
         <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
     </div>
-    <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Back to Adherence</a>
+    <a href="{% url 'finance_dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Finance</a>
 </div>
 
 <!-- Week navigation -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <a href="?week={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
-        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        <a href="?week={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
         <form method="get" style="display:flex;align-items:center;gap:8px;">
-            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
+            <input type="date" name="week" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
-        {% include 'includes/supervisor_filter.html' %}
     </div>
 </div>
 
 <style>
-/*
- * Z-index layers:
- *   Frozen body cells  : z-index 2
- *   Non-frozen header  : z-index 5
- *   Frozen header cells: z-index 8
- */
-
-/* ── Table base ─────────────────────────────────────────────────────────────── */
-#cod-table {
-    table-layout: fixed;
-    border-collapse: collapse;
-    font-size: 11px;
-}
-
 /* ── Frozen columns ─────────────────────────────────────────────────────────── */
-.fc           { position: sticky; z-index: 2; background: inherit; }
-.fc-1         { left: 0;     width: 90px;  }
-.fc-2         { left: 90px;  width: 130px; }
-.fc-3         { left: 220px; width: 120px; }
-.fc-4         { left: 340px; width: 58px;  box-shadow: 2px 0 4px rgba(0,0,0,.07); }
+.fc { position:sticky; background:#fff; z-index:1; }
+.fc-1 { left:0;   min-width:130px; }
+.fc-2 { left:130px; min-width:120px; }
+.fc-3 { left:250px; min-width:58px; }
 
-/* ── Sticky header ──────────────────────────────────────────────────────────── */
-#cod-table thead th {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    background: #e8edf4;
-    padding: 7px 4px;
-    border-bottom: 2px solid #b6c2d4;
-    border-right: 1px solid #c8d4e0;
-    font-size: 11px;
-    font-weight: 700;
-    color: #444;
-    text-align: center;
-    white-space: nowrap;
-}
-#cod-table thead th.th-left { text-align: left; padding-left: 8px; }
-#cod-table thead .fc { z-index: 8; }
+/* ── Table ──────────────────────────────────────────────────────────────────── */
+#adm-cod-table { border-collapse:collapse; width:100%; font-size:13px; }
+#adm-cod-table th, #adm-cod-table td { padding:5px 8px; border:1px solid #e5e7eb; vertical-align:top; }
+#adm-cod-table thead th { background:#f0f4f8; font-size:11px; text-align:center; white-space:nowrap; }
+.th-left { text-align:left !important; }
+.row-a td.fc { background:#fff; }
+.row-b td.fc { background:#f8fafc; }
+.row-a { background:#fff; }
+.row-b { background:#f8fafc; }
 
-/* ── Day header columns ─────────────────────────────────────────────────────── */
-.th-day   { width: 140px; }
-.day-name { font-size: 12px; font-weight: 700; }
-.day-date { font-size: 10px; font-weight: 400; color: #888; margin-top: 1px; }
+/* ── Day column ─────────────────────────────────────────────────────────────── */
+.th-day { font-size:11px; text-align:center; padding:4px 6px; }
+.col-today { background:#eff6ff !important; }
+.day-today-label { font-size:8px; font-weight:800; letter-spacing:.8px; color:#2563eb; margin-bottom:1px; }
+.day-name { font-weight:700; font-size:12px; }
+.day-date { font-size:10px; color:#666; }
 
-/* ── Alternating rows ───────────────────────────────────────────────────────── */
-tbody tr.row-a         { background: #fff; }
-tbody tr.row-b         { background: #f5f7fb; }
-tbody tr.row-a .fc     { background: #fff; }
-tbody tr.row-b .fc     { background: #f5f7fb; }
+/* ── Day cell ───────────────────────────────────────────────────────────────── */
+.day-cell { min-width:130px; vertical-align:top; padding:5px 6px; }
+.has-entries { background:#fffde7 !important; }
 
-/* ── Agent info cells ───────────────────────────────────────────────────────── */
-.ai-cell {
-    padding: 4px 7px;
-    vertical-align: top;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    border-right: 1px solid #d1d5db;
-    border-bottom: 1px solid #d1d5db;
-}
-.ai-cell.sup-col   { font-size: 10px; color: #888; }
-.ai-cell.name-col  { font-size: 12px; font-weight: 600; color: #1a3a5c; padding-top: 6px; }
-.ai-cell.five9-col { font-size: 10px; color: #777; }
-.ai-cell.id-col    { font-size: 10px; color: #999; text-align: center; }
+/* ── Total cell ─────────────────────────────────────────────────────────────── */
+.total-cell { text-align:center; border-left:2px solid #b6c2d4; background:#f0f4f8; }
 
-/* ── Day cells ──────────────────────────────────────────────────────────────── */
-.day-cell {
-    padding: 4px 4px;
-    vertical-align: top;
-    border-right: 1px solid #d1d5db;
-    border-bottom: 1px solid #d1d5db;
-}
+/* ── Cell total line ────────────────────────────────────────────────────────── */
+.cell-total-line { font-size:10px; font-family:monospace; color:#5d6d7e; margin-top:2px; border-top:1px solid #eee; padding-top:2px; }
 
-/* ── Today column ────────────────────────────────────────────────────────────
- * Header: plain background swap — no conflict with anything.
- * Body:   box-shadow inset border — visible on top of any background-color
- *         set by JS (updateCellTotal), does not override it.
- * ────────────────────────────────────────────────────────────────────────── */
-thead th.col-today       { background: #bfdbfe; color: #1e3a8a; border-bottom-color: #60a5fa !important; }
-tbody td.col-today       { background: #dbeafe !important; box-shadow: inset 1px 0 0 0 #93c5fd, inset -1px 0 0 0 #93c5fd; }
+/* ── Coding entry cards ─────────────────────────────────────────────────────── */
+.coding-entry-card { background:#fffde7; border:1px solid #fde68a; border-radius:4px; padding:3px 5px; margin-bottom:2px; font-size:11px; }
+.coding-entry-view { display:flex; justify-content:space-between; align-items:flex-start; gap:4px; }
+.coding-entry-time { font-weight:600; font-size:11px; }
+.coding-entry-dur  { font-family:monospace; font-size:10px; color:#b45309; }
+.coding-entry-notes { font-size:10px; color:#92400e; font-style:italic; }
+.coding-entry-edit, .coding-entry-del { background:none; border:none; cursor:pointer; padding:1px 3px; border-radius:2px; font-size:11px; }
+.coding-entry-edit:hover { background:#dbeafe; color:#1d4ed8; }
+.coding-entry-del:hover  { background:#fee2e2; color:#b91c1c; }
 
-/* ── Supervisor divider rows ────────────────────────────────────────────────── */
-.group-hdr td {
-    padding: 3px 10px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .6px;
-    color: #374151;
-    background: #dde3ec;
-    border-top: 2px solid #b6c2d4;
-}
-
-/* ── Total column ───────────────────────────────────────────────────────────── */
-.total-cell {
-    width: 70px;
-    padding: 4px 4px;
-    text-align: center;
-    vertical-align: middle;
-    border-left: 2px solid #b6c2d4;
-    border-bottom: 1px solid #d1d5db;
-    background: #f8fafc;
-}
-
-/* ── Coding entry card ──────────────────────────────────────────────────────── */
-.coding-entry-card {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    background: white;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    padding: 3px 5px;
-    margin-bottom: 3px;
-    font-size: 11px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.05);
-}
-.coding-entry-time  { font-weight: 600; color: #333; white-space: nowrap; }
-.coding-entry-dur   { color: #888; font-family: monospace; font-size: 11px; }
-.coding-entry-notes { color: #555; font-size: 10px; margin-top: 1px; }
-.coding-entry-del, .coding-entry-edit {
-    border: none; background: none; color: #ccc;
-    cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1;
-}
-.coding-entry-edit:hover { color: #1a3a5c; }
-.coding-entry-del:hover  { color: #dc2626; }
-
-/* ── Cell total ─────────────────────────────────────────────────────────────── */
-.cell-total-line {
-    font-size: 10px;
-    color: #888;
-    text-align: right;
-    margin-bottom: 3px;
-    font-family: monospace;
-}
-
-/* ── Inline add form ────────────────────────────────────────────────────────── */
-.cod-add-inputs {
-    display: flex;
-    gap: 2px;
-    margin-bottom: 2px;
-}
-.cod-add-input {
-    flex: 1;
-    font-size: 11px;
-    padding: 2px 3px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    margin: 0;
-    min-width: 0;
-    font-family: monospace;
-}
-.cod-notes-input {
-    width: 100%;
-    font-size: 11px;
-    padding: 2px 3px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    margin: 0 0 3px 0;
-    box-sizing: border-box;
-}
-.cod-form-btns { display: flex; gap: 3px; }
-.cod-save-btn {
-    flex: 1;
-    font-size: 11px;
-    padding: 3px;
-    background: #1a3a5c;
-    color: white;
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-}
-.cod-cancel-btn {
-    font-size: 11px;
-    padding: 3px 6px;
-    background: #eee;
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-}
-.cod-add-btn {
-    width: 100%;
-    font-size: 11px;
-    padding: 3px;
-    background: #f5f5f5;
-    border: 1px dashed #ccc;
-    border-radius: 3px;
-    cursor: pointer;
-    color: #888;
-    margin-top: 1px;
-}
-
-/* ── Row hover ──────────────────────────────────────────────────────────────── */
-tbody tr.row-a:hover .fc { background: #dbeafe; }
-tbody tr.row-b:hover .fc { background: #dbeafe; }
-
-/* ── Button hover states ────────────────────────────────────────────────────── */
-.cod-add-btn:hover  { background: #eaf2ff; border-color: #93c5fd; color: #1e40af; }
-.cod-save-btn:hover { background: #254e7a; }
-
-/* ── Today label ────────────────────────────────────────────────────────────── */
-.day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
-
-/* ── Column sort ────────────────────────────────────────────────────────── */
-.th-sortable { cursor:pointer; user-select:none; }
-.th-sortable:hover { filter:brightness(.93); }
-.sort-arrow { font-size:9px; color:#888; margin-left:2px; }
+/* ── Inline form ────────────────────────────────────────────────────────────── */
+.cod-add-inputs { display:flex; gap:4px; margin-bottom:3px; }
+.cod-add-input { width:70px; font-size:11px; padding:2px 4px; border:1px solid #ccc; border-radius:3px; }
+.cod-notes-input { width:100%; font-size:11px; padding:2px 4px; border:1px solid #ccc; border-radius:3px; margin-bottom:3px; }
+.cod-form-btns { display:flex; gap:4px; }
+.cod-save-btn { font-size:11px; padding:3px 8px; background:#1a3a5c; color:white; border:none; border-radius:3px; cursor:pointer; }
+.cod-cancel-btn { font-size:11px; padding:3px 6px; background:#eee; border:none; border-radius:3px; cursor:pointer; }
+.cod-add-btn { width:100%; font-size:11px; padding:3px; background:#f5f5f5; border:1px dashed #ccc; border-radius:3px; cursor:pointer; color:#888; margin-top:1px; }
+.cod-add-btn:hover  { background:#eaf2ff; border-color:#93c5fd; color:#1e40af; }
+.cod-save-btn:hover { background:#254e7a; }
 </style>
 
-<div id="tbl-card-cod" class="card" style="overflow-x:auto;padding:0;">
-<table id="cod-table">
+<div id="tbl-card-adm-cod" class="card" style="overflow-x:auto;padding:0;">
+<table id="adm-cod-table">
     <colgroup>
-        <!-- Frozen columns -->
-        <col style="width:90px;">
         <col style="width:130px;">
         <col style="width:120px;">
         <col style="width:58px;">
-        <!-- Day columns (7) -->
         {% for d in week_dates %}<col style="width:140px;">{% endfor %}
-        <!-- Total column -->
         <col style="width:70px;">
     </colgroup>
     <thead>
         <tr>
-            <th class="fc fc-1 th-left">Supervisor</th>
-            <th class="fc fc-2 th-left">Agent</th>
-            <th class="fc fc-3 th-left">Five9 User</th>
-            <th class="fc fc-4" style="text-align:center;">ID</th>
+            <th class="fc fc-1 th-left">Agent</th>
+            <th class="fc fc-2 th-left">Five9 User</th>
+            <th class="fc fc-3" style="text-align:center;">ID</th>
             {% for d in week_dates %}
             <th class="th-day {% if d == today %}col-today{% endif %}">
                 {% if d == today %}<div class="day-today-label">TODAY</div>{% endif %}
@@ -267,27 +107,18 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
     </thead>
     <tbody>
         {% for row in rows %}
-
-        {% if not selected_supervisor %}
-        {% ifchanged row.agent.supervisor_id %}
-        <tr class="group-hdr">
-            <td colspan="12">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
-        </tr>
-        {% endifchanged %}
-        {% endif %}
-
         <tr class="{% if forloop.counter|divisibleby:2 %}row-b{% else %}row-a{% endif %}">
-            <td class="ai-cell sup-col  fc fc-1">{{ row.agent.supervisor|default:"—" }}</td>
-            <td class="ai-cell name-col fc fc-2">{{ row.agent }}</td>
-            <td class="ai-cell five9-col fc fc-3">{{ row.billable_five9_username|default:"—" }}</td>
-            <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
+            <td class="ai-cell fc fc-1" style="font-weight:600;font-size:13px;">
+                <a href="{% url 'agent_detail' row.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ row.agent }}</a>
+            </td>
+            <td class="ai-cell fc fc-2" style="font-size:12px;color:#555;">{{ row.billable_five9_username|default:"—" }}</td>
+            <td class="ai-cell fc fc-3" style="font-size:12px;text-align:center;color:#888;">{{ row.agent.employee_id|default:"—" }}</td>
 
             {% for cell in row.cells %}
             <td class="day-cell {% if cell.date == today %}col-today{% endif %}{% if cell.entries %} has-entries{% endif %}"
                 data-agent="{{ row.agent.pk }}" data-date="{{ cell.date|date:'Y-m-d' }}"
                 {% if cell.entries %}style="background:#fffde7;"{% endif %}>
 
-                <!-- Existing entries -->
                 <div id="cell-entries-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}">
                 {% for entry in cell.entries %}
                 <div id="coding-entry-{{ entry.pk }}" class="coding-entry-card"
@@ -313,14 +144,12 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
                 {% endfor %}
                 </div>
 
-                <!-- Cell total -->
                 <div id="cell-total-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
                     class="cell-total-line"
                     style="{% if not cell.total_seconds %}display:none;{% endif %}">
                     {{ cell.total_seconds|seconds_to_hhmmss }}
                 </div>
 
-                <!-- Inline add form (hidden by default) -->
                 <div id="add-form-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}" style="display:none;">
                     <div class="cod-add-inputs">
                         <input type="text" id="start-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
@@ -339,14 +168,12 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
                     </div>
                 </div>
 
-                <!-- Add button -->
                 <button id="add-btn-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
                     onclick="toggleAddForm('{{ row.agent.pk }}', '{{ cell.date|date:'Y-m-d' }}')"
                     class="cod-add-btn">+ add</button>
             </td>
             {% endfor %}
 
-            <!-- Row total -->
             <td class="total-cell">
                 <span id="row-total-{{ row.agent.pk }}"
                     style="font-size:11px;font-family:monospace;font-weight:{% if row.total_seconds %}600{% else %}400{% endif %};color:{% if row.total_seconds %}#5d6d7e{% else %}#ccc{% endif %};">
@@ -354,9 +181,8 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
                 </span>
             </td>
         </tr>
-
         {% empty %}
-        <tr><td colspan="12" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+        <tr><td colspan="11" style="padding:30px;color:#888;text-align:center;">No admin-role agents with a billable Five9 profile found.</td></tr>
         {% endfor %}
     </tbody>
 </table>
@@ -364,7 +190,7 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
 
 <div class="card" style="margin-top:20px;background:#f8f9fa;border:1px solid #e9ecef;padding:14px 20px;">
     <p style="font-size:13px;color:#666;margin:0;">
-        <strong>What is a coding?</strong> Time an agent was working but not captured in Five9 — team meetings, training, system outages. Click <strong>+ add</strong> in any cell. All changes save instantly.
+        <strong>Admin Codings</strong> — record time for Official Admins and coordinators against their billable Five9 profile. These codings are included in billing and payroll but are separate from agent codings on the Adherence tab.
     </p>
 </div>
 
@@ -474,7 +300,7 @@ async function submitCoding(agentId, dateStr) {
     showStatus('Saving…', '#b45309', '#fef3c7');
 
     try {
-        const resp = await fetch('/adherence/add-coding/', {
+        const resp = await fetch('/finance/add-admin-coding/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
             body: JSON.stringify({agent_id: agentId, date: dateStr, start_time: start, end_time: end, notes}),
@@ -513,7 +339,7 @@ async function deleteCoding(codingId, agentId, dateStr) {
     if (!confirm('Delete this entry?')) return;
 
     try {
-        const resp = await fetch('/adherence/delete-coding/', {
+        const resp = await fetch('/finance/delete-admin-coding/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
             body: JSON.stringify({coding_id: codingId}),
@@ -576,10 +402,9 @@ function cancelEditCoding(codingId, agentId, dateStr) {
     if (!card) return;
     const start = card.dataset.start || '';
     const end   = card.dataset.end   || '';
-    const hhmmss = '';
     const displayStart = start.substring(0,5);
     const displayEnd   = end.substring(0,5);
-    card.innerHTML = buildCardView(codingId, agentId, dateStr, displayStart, displayEnd, hhmmss, card.dataset.notes || '');
+    card.innerHTML = buildCardView(codingId, agentId, dateStr, displayStart, displayEnd, '', card.dataset.notes || '');
 }
 
 async function saveEditCoding(codingId, agentId, dateStr) {
@@ -594,7 +419,7 @@ async function saveEditCoding(codingId, agentId, dateStr) {
 
     showStatus('Saving…', '#b45309', '#fef3c7');
     try {
-        const resp = await fetch('/adherence/edit-coding/', {
+        const resp = await fetch('/finance/edit-admin-coding/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
             body: JSON.stringify({coding_id: codingId, start_time: start, end_time: end, notes}),
@@ -617,35 +442,5 @@ async function saveEditCoding(codingId, agentId, dateStr) {
     }
 }
 </script>
-<script>
-// Frozen cols: 0=Supervisor 1=Agent 2=Five9 3=EmpID  — day/total cols not sortable
-(function(tid,sc,dc){
-    var t=document.getElementById(tid);if(!t)return;
-    var tb=t.querySelector('tbody');if(!tb)return;
-    var orig=Array.from(tb.children);
-    var div=function(r){return dc.some(function(c){return r.classList.contains(c);});};
-    var ac=-1,ad=0;
-    Array.from(t.querySelectorAll('thead th')).forEach(function(th,i){
-        if(sc.indexOf(i)<0)return;
-        th.classList.add('th-sortable');
-        var sp=document.createElement('span');sp.className='sort-arrow';th.appendChild(sp);
-        th.addEventListener('click',function(){
-            ad=ac===i?(ad+1)%3:(ac=i,1);
-            t.querySelectorAll('.sort-arrow').forEach(function(a){a.textContent='';});
-            if(ad>0)sp.textContent=ad===1?' ▲':' ▼';
-            while(tb.firstChild)tb.removeChild(tb.firstChild);
-            if(ad===0){ac=-1;orig.forEach(function(r){tb.appendChild(r);});return;}
-            var ci=ac,di=ad,v=function(r){
-                var c=r.cells?r.cells[ci]:null;
-                var s=c?c.textContent.replace(/[▲▼]/g,'').trim().replace(/\s+/g,' '):'';
-                return(!s||s==='—')?'￿':s.toLowerCase();
-            };
-            orig.filter(function(r){return!div(r);}).slice()
-                .sort(function(a,b){var cmp=v(a).localeCompare(v(b),undefined,{numeric:true,sensitivity:'base'});return di===1?cmp:-cmp;})
-                .forEach(function(r){tb.appendChild(r);});
-        });
-    });
-})('cod-table',[0,1,2,3],['group-hdr']);
-</script>
-<script>document.addEventListener('DOMContentLoaded',function(){_initStickyHeader(document.getElementById('tbl-card-cod'));});</script>
+<script>document.addEventListener('DOMContentLoaded',function(){_initStickyHeader(document.getElementById('tbl-card-adm-cod'));});</script>
 {% endblock %}

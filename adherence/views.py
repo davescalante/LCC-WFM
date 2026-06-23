@@ -48,7 +48,7 @@ def _refresh_actual_hours(agent_id, coding_date):
         return
     coded_secs = sum(
         c.total_seconds_count()
-        for c in Coding.objects.filter(agent_id=agent_id, date=coding_date)
+        for c in Coding.objects.filter(agent_id=agent_id, date=coding_date, is_admin_coding=False)
     )
     total_secs = dah.login_seconds + coded_secs
     allowance_secs = int(total_secs * 0.125)
@@ -329,7 +329,7 @@ def _build_maps(agents, week_dates):
     records_qs = AdherenceRecord.objects.filter(date__in=week_dates, agent__in=agents)
     record_map = {(r.agent_id, r.date): r for r in records_qs}
 
-    codings_qs = Coding.objects.filter(date__in=week_dates, agent__in=agents)
+    codings_qs = Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=False)
     coded_map = {}
     for c in codings_qs:
         key = (c.agent_id, c.date)
@@ -761,6 +761,7 @@ def add_coding_ajax(request):
             start_time=start_time,
             end_time=end_time,
             notes=notes,
+            is_admin_coding=False,
         )
         coding.refresh_from_db()  # SQLite returns raw strings; refresh to get proper time objects
     except Exception as e:
@@ -792,7 +793,7 @@ def edit_coding_ajax(request):
     end_time   = data.get('end_time', '').strip()
     notes      = data.get('notes', '')
 
-    coding = Coding.objects.filter(pk=coding_id).select_related('agent').first()
+    coding = Coding.objects.filter(pk=coding_id, is_admin_coding=False).select_related('agent').first()
     if not coding:
         return JsonResponse({'ok': False, 'error': 'Not found'}, status=404)
 
@@ -842,7 +843,7 @@ def edit_coding_ajax(request):
 def delete_coding_ajax(request):
     data = json.loads(request.body)
     coding_id = data.get('coding_id')
-    coding = Coding.objects.filter(pk=coding_id).select_related('agent').first()
+    coding = Coding.objects.filter(pk=coding_id, is_admin_coding=False).select_related('agent').first()
     if coding:
         agent_id = coding.agent_id
         coding_date = coding.date
@@ -1023,10 +1024,10 @@ def codings_week(request):
 
         return redirect(reverse('codings_week') + f'?week_start={week_start.isoformat()}')
 
-    # Build coding map: {(agent_id, date): [coding, ...]}
+    # Build coding map: {(agent_id, date): [coding, ...]} — regular codings only
     codings_qs = (
         Coding.objects
-        .filter(date__in=week_dates, agent__in=agents)
+        .filter(date__in=week_dates, agent__in=agents, is_admin_coding=False)
         .select_related('agent__user')
         .order_by('start_time')
     )
@@ -1034,6 +1035,15 @@ def codings_week(request):
     for c in codings_qs:
         key = (c.agent_id, c.date)
         coding_map.setdefault(key, []).append(c)
+
+    # Billable username map for display
+    agent_ids_list = [a.pk for a in agents]
+    billable_username_map = {}
+    for p in Five9Profile.objects.filter(
+        agent__in=agent_ids_list, billable=True
+    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
+        if p['agent_id'] not in billable_username_map:
+            billable_username_map[p['agent_id']] = p['five9_username']
 
     rows = []
     for agent in agents:
@@ -1050,6 +1060,7 @@ def codings_week(request):
             })
         rows.append({
             'agent': agent,
+            'billable_five9_username': billable_username_map.get(agent.pk, ''),
             'cells': cells,
             'total_seconds': agent_total_seconds,
         })
@@ -1098,7 +1109,7 @@ def payroll_export(request):
         if action == 'export_codings':
             codings_qs = (
                 Coding.objects
-                .filter(date__in=week_dates, agent__in=agents)
+                .filter(date__in=week_dates, agent__in=agents, is_admin_coding=False)
                 .select_related('agent__user')
                 .prefetch_related('agent__five9_profiles')
                 .order_by('date', 'agent__user__last_name', 'agent__user__first_name', 'start_time')
@@ -1247,7 +1258,7 @@ def daily_hours_week(request):
     supervisor_id, supervisors = _get_supervisor_filter(request)
 
     codings_map = {}
-    for c in Coding.objects.filter(date__in=week_dates):
+    for c in Coding.objects.filter(date__in=week_dates, is_admin_coding=False):
         key = (c.agent_id, c.date)
         codings_map[key] = codings_map.get(key, 0) + c.total_seconds_count()
 

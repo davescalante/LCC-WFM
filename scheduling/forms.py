@@ -46,7 +46,7 @@ class AgentForm(forms.ModelForm):
             'employer', 'billing_status', 'track_attendance',
             'phone_country_code', 'phone_number',
             'teams_password', 'hourly_rate', 'billing_rate_usd',
-            'is_official_admin', 'admin_bonus_mxn', 'notes',
+            'is_official_admin', 'admin_bonus_mxn', 'is_super_admin', 'notes',
         ]
         widgets = {
             'teams_password': forms.PasswordInput(render_value=True),
