@@ -184,6 +184,8 @@ function _initStickyHeader(container) {
     var ft = document.createElement('table');
     ft.className = table.className;
     ft.style.cssText = (table.getAttribute('style') || '') + ';margin:0;';
+    ft.style.tableLayout = 'fixed';
+    ft.style.borderCollapse = 'collapse';
     var cg = table.querySelector('colgroup');
     if (cg) ft.appendChild(cg.cloneNode(true));
 
@@ -220,8 +222,9 @@ function _initStickyHeader(container) {
         if (tr.bottom < NAV_H && cr.bottom > NAV_H + 30) {
             wrap.style.left = cr.left + 'px';
             wrap.style.width = cr.width + 'px';
+            syncWidths();
             wrap.scrollLeft = container.scrollLeft;
-            if (!active) { syncWidths(); wrap.style.display = 'block'; active = true; }
+            if (!active) { wrap.style.display = 'block'; active = true; }
         } else if (active) {
             wrap.style.display = 'none'; active = false;
         }
