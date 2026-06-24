@@ -11,6 +11,8 @@ from django.db.models import Q, Sum
 from scheduling.models import Agent, Five9Profile, OvertimeShift
 from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, PayrollAdjustment, Coding
 from .models import BillingSettings, BillingSettingsHistory
+from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
+from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
 
 # ─── Access control ───────────────────────────────────────────────────────────
 # Finance is visible only to users with is_super_admin=True, plus Django superusers.
@@ -42,13 +44,7 @@ def finance_access_required(view_func):
 
 def _get_week_start(request):
     """Parse ?week= param (ISO Monday) or default to current Monday."""
-    week_str = request.GET.get('week', '')
-    try:
-        d = date.fromisoformat(week_str)
-        return d - timedelta(days=d.weekday())
-    except (ValueError, TypeError):
-        today = date.today()
-        return today - timedelta(days=today.weekday())
+    return parse_week_param(request.GET.get('week', '')) or get_week_start()
 
 
 def _week_dates(week_start):
@@ -90,15 +86,7 @@ def _get_billable_weekly_data(agents, week_dates, settings):
     week_start = week_dates[0]
 
     # ── Billable username lookup ───────────────────────────────────────────
-    billable_map = {}         # agent_id -> set of usernames (lowercase) for hour filtering
-    primary_billable_map = {} # agent_id -> display username (primary billable, or first billable)
-    for p in Five9Profile.objects.filter(
-        agent__in=agent_ids, billable=True
-    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
-        aid = p['agent_id']
-        billable_map.setdefault(aid, set()).add(p['five9_username'].strip().lower())
-        if aid not in primary_billable_map:
-            primary_billable_map[aid] = p['five9_username']
+    billable_map, primary_billable_map = get_billable_username_map(agent_ids)
 
     # ── Sum login + NR seconds from billable DailyAgentHours ──────────────
     nr_secs_map = {}    # agent_id -> total NR seconds
@@ -121,8 +109,6 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         coded_hrs_map[coding.agent_id] = coded_hrs_map.get(coding.agent_id, Decimal('0')) + Decimal(str(coding.total_hours()))
 
     # ── Adherence bonus (already tracked in adherence tab) ────────────────
-    BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO', 'V'}
-    BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'T+I', 'I', 'LOA', 'S'}
     bonus_map = {}    # agent_id -> True/False/None
     has_status = set()
     records_by_agent = {}

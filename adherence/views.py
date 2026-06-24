@@ -16,6 +16,8 @@ from django.template.loader import render_to_string
 
 from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
+from wfm.constants import BONUS_QUALIFYING as _BONUS_QUALIFYING, BONUS_DISQUALIFYING as _BONUS_DISQUALIFYING
+from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
 
 
 def _refresh_actual_hours(agent_id, coding_date):
@@ -62,8 +64,8 @@ def _refresh_actual_hours(agent_id, coding_date):
     )
 
 
-BONUS_QUALIFYING = {'P', 'OT', 'MUT', 'VTO', 'P+VTO', 'V'}
-BONUS_DISQUALIFYING = {'Absent', 'NCNS', 'T', 'T+VTO', 'T+I', 'I', 'LOA', 'S'}
+BONUS_QUALIFYING = _BONUS_QUALIFYING
+BONUS_DISQUALIFYING = _BONUS_DISQUALIFYING
 VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
 
 STATUS_COLORS = {
@@ -276,24 +278,13 @@ def _calculate_cos(rows, week_dates):
 
 
 def _get_week_start(request):
-    today = timezone.localdate()
-    default = today - timedelta(days=today.weekday())
     raw = request.GET.get('week_start') or request.POST.get('week_start')
-    if raw:
-        try:
-            ws = date.fromisoformat(raw)
-            ws = ws - timedelta(days=ws.weekday())
-            request.session['adh_week_start'] = ws.isoformat()
-            return ws
-        except ValueError:
-            pass
-    saved = request.session.get('adh_week_start')
-    if saved:
-        try:
-            return date.fromisoformat(saved)
-        except ValueError:
-            pass
-    return default
+    ws = parse_week_param(raw)
+    if ws:
+        request.session['adh_week_start'] = ws.isoformat()
+        return ws
+    saved = parse_week_param(request.session.get('adh_week_start'))
+    return saved if saved else get_week_start()
 
 
 def _build_maps(agents, week_dates):
@@ -390,14 +381,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
     # Pre-compute weekly NR seconds from billable DailyAgentHours
     _agent_ids = [a.pk for a in agents]
-    _billable_map = {}          # agent_id -> set of usernames (lowercase)
-    _primary_billable_map = {}  # agent_id -> display username (primary billable first)
-    for _p in _Five9Profile.objects.filter(
-        agent__in=_agent_ids, billable=True
-    ).values('agent_id', 'five9_username', 'is_primary').order_by('agent_id', '-is_primary', 'id'):
-        _billable_map.setdefault(_p['agent_id'], set()).add(_p['five9_username'].strip().lower())
-        if _p['agent_id'] not in _primary_billable_map:
-            _primary_billable_map[_p['agent_id']] = _p['five9_username']
+    _billable_map, _primary_billable_map = get_billable_username_map(_agent_ids)
 
     _weekly_nr_map = {}  # agent_id -> total NR seconds
     for _row in DailyAgentHours.objects.filter(

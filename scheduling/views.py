@@ -2401,7 +2401,7 @@ def _best_shift_template(all_templates, agent_id, d):
     return best
 
 
-_PORTAL_ADMIN_TYPES = frozenset({'cs', 'testing', 'sms_email'})
+from wfm.constants import PORTAL_ADMIN_TYPES as _PORTAL_ADMIN_TYPES
 
 
 def _is_portal_user(agent):

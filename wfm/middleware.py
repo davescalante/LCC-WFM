@@ -1,6 +1,7 @@
 from django.contrib.auth import logout
 from django.http import JsonResponse
 from django.shortcuts import redirect
+from .constants import PORTAL_ADMIN_TYPES
 
 INACTIVITY_TIMEOUT = 4 * 3600   # 4 hours
 ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
@@ -8,9 +9,6 @@ ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 # URL path prefixes agents are allowed to access
 _AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
 _INACTIVE_ALLOWED = ('/agent/inactive/', '/accounts/', '/static/', '/favicon')
-
-# Admin role_types that see the agent portal (not the supervisor dashboard)
-_PORTAL_ADMIN_TYPES = frozenset({'cs', 'testing', 'sms_email'})
 
 
 class SessionTimeoutMiddleware:
@@ -66,7 +64,7 @@ class AgentAccessMiddleware:
             try:
                 profile = request.user.agent
                 is_portal = (profile.role == 'agent' or
-                             (profile.role == 'admin' and profile.role_type in _PORTAL_ADMIN_TYPES))
+                             (profile.role == 'admin' and profile.role_type in PORTAL_ADMIN_TYPES))
                 if is_portal:
                     # Inactive portal users see a "no longer active" page
                     if profile.status == 'inactive':
