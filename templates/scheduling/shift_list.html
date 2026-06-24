@@ -106,6 +106,10 @@ tbody tr.row-b td.fc { background:#f9fafb; }
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
         <a href="?week_start={{ next_week }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}{% if section_filter %}&section={{ section_filter }}{% endif %}"
            class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        {% if not is_current_week %}
+        <a href="?week_start={{ current_week|date:'Y-m-d' }}{% if selected_supervisor %}&supervisor={{ selected_supervisor }}{% endif %}{% if section_filter %}&section={{ section_filter }}{% endif %}"
+           class="btn btn-primary" style="padding:6px 12px;font-size:13px;">Today</a>
+        {% endif %}
         <form method="get" style="display:flex;align-items:center;gap:8px;margin-left:auto;">
             {% if selected_supervisor %}<input type="hidden" name="supervisor" value="{{ selected_supervisor }}">{% endif %}
             {% if section_filter %}<input type="hidden" name="section" value="{{ section_filter }}">{% endif %}

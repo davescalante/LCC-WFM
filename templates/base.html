@@ -81,6 +81,18 @@
         <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
         {% endif %}
         {% endif %}
+        {% if request.user.is_authenticated and not request.is_agent %}
+        <div style="position:relative;margin-left:auto;margin-right:8px;" id="nav-search-wrap">
+            <input type="text" id="nav-search-input" placeholder="Search agents…"
+                autocomplete="off"
+                style="padding:5px 10px;border:1px solid rgba(255,255,255,0.3);border-radius:4px;font-size:13px;background:rgba(255,255,255,0.15);color:white;width:170px;outline:none;"
+                oninput="navSearchInput(this.value)"
+                onfocus="if(this.value.length>=2)navSearchInput(this.value)"
+                onblur="setTimeout(()=>document.getElementById('nav-search-results').style.display='none',200)">
+            <div id="nav-search-results"
+                style="display:none;position:absolute;top:calc(100% + 4px);right:0;width:280px;background:white;border:1px solid #ddd;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:9999;overflow:hidden;"></div>
+        </div>
+        {% endif %}
         {% if request.user.is_authenticated %}
         <div class="nav-user">
             <span class="nav-username">{{ request.user.get_full_name|default:request.user.username }}</span>
@@ -218,6 +230,42 @@ function _initStickyHeader(container) {
     window.addEventListener('resize', function() { active = false; wrap.style.display = 'none'; setTimeout(tick, 60); });
     setTimeout(tick, 80);
 }
+
+// ── Global agent search ───────────────────────────────────────────────────────
+var _navSearchTimer = null;
+function navSearchInput(val) {
+    clearTimeout(_navSearchTimer);
+    var results = document.getElementById('nav-search-results');
+    if (!results) return;
+    if (val.length < 2) { results.style.display = 'none'; return; }
+    _navSearchTimer = setTimeout(function() {
+        fetch('/agents/search/?q=' + encodeURIComponent(val))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.results || data.results.length === 0) {
+                    results.innerHTML = '<div style="padding:12px 16px;color:#888;font-size:13px;">No agents found.</div>';
+                } else {
+                    results.innerHTML = data.results.map(function(a) {
+                        var sub = a.employee_id ? 'ID: ' + a.employee_id : '';
+                        return '<a href="' + a.url + '" style="display:block;padding:9px 16px;text-decoration:none;border-bottom:1px solid #f3f4f6;color:#111;"'
+                            + ' onmouseover="this.style.background=\'#f0f4f8\'" onmouseout="this.style.background=\'\'">'
+                            + '<span style="font-weight:600;font-size:13px;">' + a.name + '</span>'
+                            + (sub ? '<span style="font-size:11px;color:#888;margin-left:8px;">' + sub + '</span>' : '')
+                            + '</a>';
+                    }).join('');
+                }
+                results.style.display = 'block';
+            })
+            .catch(function() { results.style.display = 'none'; });
+    }, 200);
+}
+document.addEventListener('keydown', function(e) {
+    if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        var inp = document.getElementById('nav-search-input');
+        if (inp) { inp.focus(); inp.select(); }
+    }
+});
 </script>
 </body>
 </html>

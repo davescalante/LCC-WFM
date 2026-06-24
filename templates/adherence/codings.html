@@ -17,6 +17,9 @@
         <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
         <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
         <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+        {% if not is_current_week %}
+        <a href="?week_start={{ current_week|date:'Y-m-d' }}" class="btn btn-primary" style="padding:6px 12px;font-size:13px;">Today</a>
+        {% endif %}
         <form method="get" style="display:flex;align-items:center;gap:8px;">
             <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}"
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"

@@ -574,9 +574,9 @@ def shift_list(request):
 
     if 'supervisor' in request.GET:
         supervisor_id = request.GET.get('supervisor', '')
-        request.session['shift_supervisor_filter'] = supervisor_id
+        request.session['supervisor_filter'] = supervisor_id
     else:
-        supervisor_id = request.session.get('shift_supervisor_filter', '')
+        supervisor_id = request.session.get('supervisor_filter', '')
 
     if 'section' in request.GET:
         section_filter = request.GET.get('section', '')
@@ -708,6 +708,7 @@ def shift_list(request):
         else:
             row['show_supervisor_header'] = False
 
+    current_week = today - timedelta(days=today.weekday())
     return render(request, 'scheduling/shift_list.html', {
         'rows': rows,
         'week_dates': week_dates,
@@ -715,6 +716,8 @@ def shift_list(request):
         'week_end': week_end,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
+        'current_week': current_week,
+        'is_current_week': week_start == current_week,
         'has_prev_week': has_prev_week,
         'has_this_week': has_this_week,
         'supervisors': supervisors,
@@ -1128,10 +1131,10 @@ def _get_supervisor_filter(request):
 
     if 'supervisor' in request.GET:
         val = request.GET.get('supervisor', '')
-        request.session['shift_supervisor_filter'] = val
+        request.session['supervisor_filter'] = val
         return val, supervisors
 
-    return request.session.get('shift_supervisor_filter', ''), supervisors
+    return request.session.get('supervisor_filter', ''), supervisors
 
 
 def _apply_supervisor_filter(agents_qs, supervisor_id):
@@ -2004,9 +2007,9 @@ def records_attendance(request):
 
     if 'supervisor' in request.GET:
         supervisor_id = request.GET.get('supervisor', '')
-        request.session['attendance_supervisor_filter'] = supervisor_id
+        request.session['supervisor_filter'] = supervisor_id
     else:
-        supervisor_id = request.session.get('attendance_supervisor_filter', '')
+        supervisor_id = request.session.get('supervisor_filter', '')
     role_type_f   = request.GET.get('role_type', '')
     employer_f    = request.GET.get('employer', '')
     status_f      = request.GET.get('status', '')
@@ -2090,9 +2093,9 @@ def records_hours(request):
 
     if 'supervisor' in request.GET:
         supervisor_id = request.GET.get('supervisor', '')
-        request.session['hours_supervisor_filter'] = supervisor_id
+        request.session['supervisor_filter'] = supervisor_id
     else:
-        supervisor_id = request.session.get('hours_supervisor_filter', '')
+        supervisor_id = request.session.get('supervisor_filter', '')
     role_type_f   = request.GET.get('role_type', '')
     employer_f    = request.GET.get('employer', '')
     billing_f     = request.GET.get('billing', '')
@@ -2609,9 +2612,9 @@ def requests_list(request):
     date_to = request.GET.get('date_to', '').strip()
     if 'supervisor' in request.GET:
         supervisor_filter = request.GET.get('supervisor', '').strip()
-        request.session['requests_supervisor_filter'] = supervisor_filter
+        request.session['supervisor_filter'] = supervisor_filter
     else:
-        supervisor_filter = request.session.get('requests_supervisor_filter', '')
+        supervisor_filter = request.session.get('supervisor_filter', '')
 
     if supervisor_filter:
         try:
@@ -3169,3 +3172,31 @@ def agent_inactive(request):
     """Shown to inactive agents who try to log in to the agent portal."""
     from django.contrib.auth import logout
     return render(request, 'agent/inactive.html', {})
+
+
+@login_required
+def agent_search(request):
+    """Quick agent search for the nav bar — returns JSON list of up to 10 matches."""
+    from django.db.models import Q as _Q
+    q = request.GET.get('q', '').strip()
+    if len(q) < 2:
+        return JsonResponse({'results': []})
+
+    agents = Agent.objects.filter(
+        _Q(agent_name__icontains=q) |
+        _Q(employee_id__icontains=q) |
+        _Q(user__first_name__icontains=q) |
+        _Q(user__last_name__icontains=q) |
+        _Q(five9_profiles__five9_username__icontains=q)
+    ).filter(status='active').distinct().select_related('user')[:10]
+
+    results = [
+        {
+            'pk': a.pk,
+            'name': a.agent_name or a.user.get_full_name() or a.user.username,
+            'employee_id': a.employee_id or '',
+            'url': f'/agents/{a.pk}/',
+        }
+        for a in agents
+    ]
+    return JsonResponse({'results': results})

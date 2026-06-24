@@ -42,4 +42,5 @@ urlpatterns = [
     path('agents/<int:pk>/separation/update/', views.update_separation, name='update_separation'),
     path('records/separations/', views.records_separations, name='records_separations'),
     path('agent/inactive/', views.agent_inactive, name='agent_inactive'),
+    path('agents/search/', views.agent_search, name='agent_search'),
 ]

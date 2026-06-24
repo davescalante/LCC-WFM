@@ -889,11 +889,15 @@ def adherence_week(request):
         return redirect(reverse('adherence_dashboard') + f'?week_start={week_start.isoformat()}')
 
     # GET: return the page shell immediately; rows are fetched async via /adherence/rows/
+    today = timezone.localdate()
+    current_week = today - timedelta(days=today.weekday())
     return render(request, 'adherence/dashboard.html', {
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
-        'today': timezone.localdate(),
+        'today': today,
+        'current_week': current_week,
+        'is_current_week': week_start == current_week,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'status_choices': AdherenceRecord.STATUS_CHOICES,
@@ -1055,12 +1059,16 @@ def codings_week(request):
         })
 
     # Only include rows that have at least one coding OR always show all — show all for adding
+    _today = timezone.localdate()
+    _current_week = _today - timedelta(days=_today.weekday())
     return render(request, 'adherence/codings.html', {
         'rows': rows,
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
-        'today': timezone.localdate(),
+        'today': _today,
+        'current_week': _current_week,
+        'is_current_week': week_start == _current_week,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'supervisors': supervisors,
@@ -1292,10 +1300,15 @@ def daily_hours_week(request):
                 })
         day_slots.append({'date': day_date, 'upload': upload, 'rows': rows})
 
+    _today = timezone.localdate()
+    _current_week = _today - timedelta(days=_today.weekday())
     return render(request, 'adherence/daily_hours.html', {
         'day_slots': day_slots,
         'week_start': week_start,
         'week_end': week_end,
+        'today': _today,
+        'current_week': _current_week,
+        'is_current_week': week_start == _current_week,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'supervisors': supervisors,
