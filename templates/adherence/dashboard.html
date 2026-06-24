@@ -394,6 +394,7 @@ function _loadAdhRowsFull(params) {
             document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
             recomputeCoS();
             _applyAllStatusStyles();
+            requestAnimationFrame(syncColumnWidths);
         });
 }
 
@@ -424,6 +425,7 @@ async function _loadAdhRowsProgressive(params) {
                 const tbody = document.getElementById('adh-tbody');
                 tbody.insertAdjacentHTML('beforeend', data.tbody_html);
                 _applyAllStatusStyles();
+                requestAnimationFrame(syncColumnWidths);
             }
 
             // Tfoot: only set on the last group (overwrite each time; last wins).
@@ -1063,5 +1065,27 @@ document.getElementById('qe-modal').addEventListener('click', function(e) {
     });
 })('adh-table',[0,1,2,3],['group-hdr']);
 </script>
-<script>document.addEventListener('DOMContentLoaded',function(){_initStickyHeader(document.getElementById('tbl-card-adh'));});</script>
+<script>
+// Sync colgroup col widths to match actual rendered th widths so table body
+// columns align exactly with the header row regardless of CSS constraints.
+function syncColumnWidths() {
+    var tbl = document.getElementById('adh-table');
+    if (!tbl) return;
+    var ths = Array.from(tbl.querySelectorAll('thead th'));
+    var cols = Array.from(tbl.querySelectorAll('colgroup col'));
+    if (!cols.length) return;
+    ths.forEach(function(th, i) {
+        if (cols[i]) cols[i].style.width = th.getBoundingClientRect().width + 'px';
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    requestAnimationFrame(syncColumnWidths);
+    _initStickyHeader(document.getElementById('tbl-card-adh'));
+});
+
+window.addEventListener('resize', function() {
+    requestAnimationFrame(syncColumnWidths);
+});
+</script>
 {% endblock %}
