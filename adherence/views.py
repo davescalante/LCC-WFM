@@ -1748,7 +1748,7 @@ def agent_my_adherence(request):
         agent = request.user.agent
     except Exception:
         return redirect('agent_my_shifts')
-    _portal_types = frozenset({'cs', 'testing', 'sms_email'})
+    _portal_types = frozenset({'cs', 'tester', 'sms_email'})
     if not (agent.role == 'agent' or (agent.role == 'admin' and agent.role_type in _portal_types)):
         return redirect('adherence_dashboard')
 

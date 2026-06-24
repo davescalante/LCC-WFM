@@ -12,7 +12,7 @@ from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, Sh
 from .forms import AgentUserForm, AgentForm, ShiftForm
 
 
-_ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'testing', 'sms_email', 'coordinator'}
+_ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'tester', 'sms_email', 'coordinator', 'trainer'}
 
 
 def _sync_pending_schedule(src):
@@ -351,7 +351,7 @@ def agent_create(request):
             changed_by=request.user,
         )
         _save_five9_profiles(request, agent)
-        if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'testing', 'sms_email'):
+        if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email'):
             user.set_unusable_password()
             user.save()
         start_date = request.POST.get('start_date', '').strip()
@@ -433,7 +433,7 @@ def agent_edit(request, pk):
                     billing_status=agent.billing_status,
                     effective_from=today, changed_by=request.user,
                 )
-            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'testing', 'sms_email'):
+            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email'):
                 user.set_unusable_password()
                 user.save()
 

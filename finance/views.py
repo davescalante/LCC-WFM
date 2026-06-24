@@ -323,10 +323,11 @@ def billing_report(request):
         ('training', 'Training'),
         ('qa', 'QA'),
         ('cs', 'CS'),
-        ('testing', 'Testing'),
+        ('tester', 'Testers'),
         ('sms_email', 'SMS / Email'),
         ('supervisor', 'Supervisors'),
         ('coordinator', 'Coordinators'),
+        ('trainer', 'Trainers'),
     ]
 
     infinity_rows = []

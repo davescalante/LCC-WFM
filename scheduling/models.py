@@ -19,9 +19,10 @@ class Agent(models.Model):
         ('supervisor', 'Supervisor'),
         ('qa', 'QA'),
         ('cs', 'CS'),
-        ('testing', 'Testing'),
+        ('tester', 'Tester'),
         ('sms_email', 'SMS/Email'),
         ('coordinator', 'Coordinator'),
+        ('trainer', 'Trainer'),
     ]
     STATUS_CHOICES = [
         ('active', 'Active'),
