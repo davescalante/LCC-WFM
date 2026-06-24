@@ -1118,7 +1118,7 @@ def payroll_export(request):
                 writer.writerow([
                     c.agent.user.get_full_name(),
                     c.agent.agent_name or '',
-                    c.agent.five9_profiles.values_list('five9_username', flat=True).first() or '',
+                    next((p.five9_username for p in c.agent.five9_profiles.all()), '') or '',
                     c.date.strftime('%Y-%m-%d'),
                     c.date.strftime('%A'),
                     c.start_time.strftime('%H:%M'),
@@ -1199,7 +1199,7 @@ def payroll_export(request):
                 agent.user.get_full_name(),
                 agent.agent_name or '',
                 agent.employee_id or '',
-                agent.five9_profiles.values_list('five9_username', flat=True).first() or '',
+                next((p.five9_username for p in agent.five9_profiles.all()), '') or '',
                 supervisor_name,
                 agent.employer,
                 agent.billing_status,
