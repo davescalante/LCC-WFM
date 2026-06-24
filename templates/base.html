@@ -204,8 +204,13 @@ function _initStickyHeader(container) {
         var orig = Array.from(thead.querySelectorAll('th'));
         var clone = Array.from(fth.querySelectorAll('th'));
         orig.forEach(function(th, i) {
-            if (clone[i]) { clone[i].style.width = th.offsetWidth + 'px'; clone[i].style.minWidth = th.offsetWidth + 'px'; }
+            if (clone[i]) {
+                var w = th.getBoundingClientRect().width + 'px';
+                clone[i].style.width = w;
+                clone[i].style.minWidth = w;
+            }
         });
+        ft.style.width = table.getBoundingClientRect().width + 'px';
     }
 
     var active = false;

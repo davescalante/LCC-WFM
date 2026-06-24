@@ -46,6 +46,7 @@
     border-collapse: collapse;
     font-size: 11px;
     width: 100%;
+    min-width: 1402px; /* 828px fixed cols + 7×82px day cols = prevents day cols shrinking below 82px */
 }
 
 /* ── Frozen columns ─────────────────────────────────────────────────────────── */
@@ -73,7 +74,7 @@
 #adh-table thead .fc { z-index: 8; }
 
 /* ── Day header columns ─────────────────────────────────────────────────────── */
-.th-day        { min-width: 82px; }
+.th-day        { /* width auto-distributed by table-layout:fixed */ }
 .day-name      { font-size: 12px; font-weight: 700; }
 .day-date      { font-size: 10px; font-weight: 400; color: #888; margin-top: 1px; }
 .day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
