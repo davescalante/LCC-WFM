@@ -1332,6 +1332,15 @@ def daily_hours_week(request):
         key = (c.agent_id, c.date)
         codings_map[key] = codings_map.get(key, 0) + c.total_seconds_count()
 
+    # Only attribute coded time to the billable Five9 row for each agent.
+    billable_pairs = set(
+        Five9Profile.objects.filter(billable=True)
+        .values_list('agent_id', 'five9_username')
+    )
+    agents_with_profiles = set(
+        Five9Profile.objects.values_list('agent_id', flat=True).distinct()
+    )
+
     upload_map = {u.date: u for u in DailyUpload.objects.filter(date__in=week_dates)}
 
     day_slots = []
@@ -1352,7 +1361,15 @@ def daily_hours_week(request):
                     pass
 
             for dah in dah_qs:
-                coded_secs = codings_map.get((dah.agent_id, day_date), 0) if dah.agent_id else 0
+                if dah.agent_id:
+                    if dah.agent_id in agents_with_profiles:
+                        # Only show coded time on the billable profile row
+                        coded_secs = codings_map.get((dah.agent_id, day_date), 0) if (dah.agent_id, dah.five9_username) in billable_pairs else 0
+                    else:
+                        # Legacy agent with no Five9Profile records — show on any row
+                        coded_secs = codings_map.get((dah.agent_id, day_date), 0)
+                else:
+                    coded_secs = 0
                 total_secs = dah.login_seconds + coded_secs
                 allowance_secs = int(total_secs * _nr_ratio)
                 excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
