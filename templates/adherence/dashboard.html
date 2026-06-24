@@ -203,6 +203,18 @@ tbody td.col-today           { background-color: #eff6ff; box-shadow: inset 1px 
 .th-sortable:hover { filter:brightness(.93); }
 .sort-arrow { font-size:9px; color:#888; margin-left:2px; }
 
+/* ── Clear-status inline confirmation ──────────────────────────────────────── */
+.clear-confirm {
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+    background: rgba(254,242,242,.97); border: 1px solid #fca5a5; border-radius: 4px;
+    padding: 2px 4px; margin-top: 2px; font-size: 9px; color: #374151;
+}
+.clear-confirm button {
+    border: none; border-radius: 3px; padding: 1px 5px; font-size: 9px; cursor: pointer; font-family: inherit;
+}
+.clear-confirm .cc-yes { background: #dc2626; color: white; }
+.clear-confirm .cc-no  { background: #e5e7eb; color: #374151; }
+
 /* ── Skeleton loader ────────────────────────────────────────────────────────── */
 @keyframes adh-skeleton-pulse { 0%,100%{opacity:.35} 50%{opacity:.75} }
 .adh-skel-line { height:12px; border-radius:6px; background:#e5e7eb; animation:adh-skeleton-pulse 1.4s ease-in-out infinite; display:inline-block; }
@@ -383,7 +395,6 @@ function _showLoadError() {
 
 // Full replace load — used by poll and when a supervisor filter is active.
 function _loadAdhRowsFull(params) {
-    typeof window._adhSortInvalidate === 'function' && window._adhSortInvalidate();
     const url = '/adherence/rows/?' + params.toString();
     return fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
         .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -394,6 +405,7 @@ function _loadAdhRowsFull(params) {
             recomputeCoS();
             _applyAllStatusStyles();
             requestAnimationFrame(syncColumnWidths);
+            typeof window._adhSortReapply === 'function' && window._adhSortReapply();
         });
 }
 
@@ -466,7 +478,7 @@ function loadAdhRows() {
         .catch(() => { _showLoadError(); })
         .finally(() => {
             _adhLoading = false;
-            typeof window._adhSortInvalidate === 'function' && window._adhSortInvalidate();
+            typeof window._adhSortReapply === 'function' && window._adhSortReapply();
         });
 }
 loadAdhRows();
@@ -533,7 +545,10 @@ function _applyStatusStyle(sel) {
 }
 
 function _applyAllStatusStyles() {
-    document.querySelectorAll('.cell-status').forEach(_applyStatusStyle);
+    document.querySelectorAll('.cell-status').forEach(function(sel) {
+        sel.dataset.prev = sel.value; // track loaded value so clear-confirm knows previous state
+        _applyStatusStyle(sel);
+    });
 }
 
 function csrfToken() {
@@ -575,12 +590,49 @@ async function saveCell(agentId, dateStr, status) {
     }
 }
 
-function onStatusChange(sel) {
+function _commitStatusChange(sel) {
     const td = sel.closest('td');
-    td.style.background = STATUS_COLORS[sel.value] || '#f5f5f5';
+    // Empty status: clear inline bg so CSS (today-blue, row alternation) can take effect.
+    td.style.background = sel.value ? (STATUS_COLORS[sel.value] || '#f5f5f5') : '';
     saveCell(td.dataset.agent, td.dataset.date, sel.value);
     recomputeCoS();
     _applyStatusStyle(sel);
+    sel.dataset.prev = sel.value;
+}
+
+function onStatusChange(sel) {
+    // Clearing to dash: show inline one-line confirmation before saving.
+    if (sel.value === '' && sel.dataset.prev) {
+        _showClearConfirm(sel);
+        return;
+    }
+    _commitStatusChange(sel);
+}
+
+function _showClearConfirm(sel) {
+    const td = sel.closest('td');
+    td.querySelectorAll('.clear-confirm').forEach(function(e) { e.remove(); });
+    const d = document.createElement('div');
+    d.className = 'clear-confirm';
+    d.dataset.prevStatus = sel.dataset.prev || '';
+    d.innerHTML = '<span>Clear?</span>' +
+        '<button type="button" class="cc-yes" onclick="confirmClear(this)">Yes</button>' +
+        '<button type="button" class="cc-no"  onclick="cancelClear(this)">No</button>';
+    sel.insertAdjacentElement('afterend', d);
+}
+
+function confirmClear(btn) {
+    const td = btn.closest('td');
+    btn.closest('.clear-confirm').remove();
+    _commitStatusChange(td.querySelector('.cell-status'));
+}
+
+function cancelClear(btn) {
+    const d = btn.closest('.clear-confirm');
+    const prev = d.dataset.prevStatus;
+    d.remove();
+    const sel = btn.closest('td').querySelector('.cell-status');
+    if (sel) { sel.value = prev; _applyStatusStyle(sel); }
 }
 
 // ── Note popover ─────────────────────────────────────────────────────────────
@@ -1045,30 +1097,47 @@ document.getElementById('qe-modal').addEventListener('click', function(e) {
     var orig=null; // lazy: captured on first click after rows are loaded
     var div=function(r){return dc.some(function(c){return r.classList.contains(c);});};
     var ac=-1,ad=0;
-    // Expose reset so _loadAdhRowsFull and loadAdhRows can invalidate after data changes.
+    var arrows=[];
+
+    function applySort(){
+        if(!orig)orig=Array.from(tb.children);
+        while(tb.firstChild)tb.removeChild(tb.firstChild);
+        if(ad===0){orig.forEach(function(r){tb.appendChild(r);});return;}
+        var ci=ac,di=ad,v=function(r){
+            var c=r.cells?r.cells[ci]:null;
+            var s=c?c.textContent.replace(/[▲▼]/g,'').trim().replace(/\s+/g,' '):'';
+            return(!s||s==='—')?'￿':s.toLowerCase();
+        };
+        orig.filter(function(r){return!div(r);}).slice()
+            .sort(function(a,b){var cmp=v(a).localeCompare(v(b),undefined,{numeric:true,sensitivity:'base'});return di===1?cmp:-cmp;})
+            .forEach(function(r){tb.appendChild(r);});
+    }
+
+    // Full reset — sort state cleared entirely (kept for safety, not called by normal reloads).
     window._adhSortInvalidate=function(){
         orig=null;ac=-1;ad=0;
-        t.querySelectorAll('.sort-arrow').forEach(function(a){a.textContent='';});
+        arrows.forEach(function(a){a.textContent='';});
     };
+
+    // Soft reapply — reset orig to capture new rows, then re-sort if a sort is active.
+    // Called after every row reload so sort order is preserved across poll-triggered refreshes.
+    window._adhSortReapply=function(){
+        orig=null;
+        if(ac>=0&&ad>0)applySort();
+    };
+
     Array.from(t.querySelectorAll('thead th')).forEach(function(th,i){
         if(sc.indexOf(i)<0)return;
         th.classList.add('th-sortable');
         var sp=document.createElement('span');sp.className='sort-arrow';th.appendChild(sp);
+        arrows.push(sp);
         th.addEventListener('click',function(){
-            if(!orig)orig=Array.from(tb.children); // capture current rows on first click
+            if(!orig)orig=Array.from(tb.children);
             ad=ac===i?(ad+1)%3:(ac=i,1);
-            t.querySelectorAll('.sort-arrow').forEach(function(a){a.textContent='';});
+            if(ad===0)ac=-1;
+            arrows.forEach(function(a){a.textContent='';});
             if(ad>0)sp.textContent=ad===1?' ▲':' ▼';
-            while(tb.firstChild)tb.removeChild(tb.firstChild);
-            if(ad===0){ac=-1;orig.forEach(function(r){tb.appendChild(r);});return;}
-            var ci=ac,di=ad,v=function(r){
-                var c=r.cells?r.cells[ci]:null;
-                var s=c?c.textContent.replace(/[▲▼]/g,'').trim().replace(/\s+/g,' '):'';
-                return(!s||s==='—')?'￿':s.toLowerCase();
-            };
-            orig.filter(function(r){return!div(r);}).slice()
-                .sort(function(a,b){var cmp=v(a).localeCompare(v(b),undefined,{numeric:true,sensitivity:'base'});return di===1?cmp:-cmp;})
-                .forEach(function(r){tb.appendChild(r);});
+            applySort();
         });
     });
 })('adh-table',[0,1,2],['group-hdr']);

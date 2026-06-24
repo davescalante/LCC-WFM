@@ -739,10 +739,15 @@ def save_adherence_cell(request):
         log_action(request.user, 'Set adherence status',
                    f'{agent} — {day_date} → {display}', agent=agent)
     else:
-        # Only delete if there are no system-written hours to preserve
-        AdherenceRecord.objects.filter(
+        # If the record has no logged hours, delete it entirely.
+        # If it has logged hours from Five9, just blank the status field so the hours remain.
+        deleted, _ = AdherenceRecord.objects.filter(
             agent=agent, date=day_date, actual_hours__isnull=True
         ).delete()
+        if not deleted:
+            AdherenceRecord.objects.filter(
+                agent=agent, date=day_date
+            ).update(status='')
         log_action(request.user, 'Cleared adherence status',
                    f'{agent} — {day_date}', agent=agent)
 
