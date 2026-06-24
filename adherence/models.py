@@ -111,6 +111,9 @@ class DailyAgentHours(models.Model):
     class Meta:
         ordering = ['five9_username']
         unique_together = ('upload', 'five9_username')
+        indexes = [
+            models.Index(fields=['agent']),
+        ]
 
     def __str__(self):
         return f"{self.five9_username} — {self.upload.date}"

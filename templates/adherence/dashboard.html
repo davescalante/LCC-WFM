@@ -202,6 +202,10 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 .sort-arrow { font-size:9px; color:#888; margin-left:2px; }
 
 @keyframes adh-spin { to { transform: rotate(360deg); } }
+
+/* ── Skeleton loader ────────────────────────────────────────────────────────── */
+@keyframes adh-skeleton-pulse { 0%,100%{opacity:.35} 50%{opacity:.75} }
+.adh-skel-line { height:12px; border-radius:6px; background:#e5e7eb; animation:adh-skeleton-pulse 1.4s ease-in-out infinite; display:inline-block; }
 </style>
 
 <div id="tbl-card-adh" class="card" style="overflow-x:auto;padding:0;">
@@ -255,13 +259,23 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
     </thead>
     <tbody id="adh-tbody">
         <tr id="adh-loading-row">
-            <td colspan="22" style="padding:48px;text-align:center;color:#999;font-size:13px;">
-                <span style="display:inline-flex;align-items:center;gap:10px;">
-                    <span id="adh-spinner" style="display:inline-block;width:18px;height:18px;border:2px solid #ddd;border-top-color:#1a3a5c;border-radius:50%;animation:adh-spin .7s linear infinite;"></span>
-                    Loading attendance data…
-                </span>
-            </td>
+            <td class="fc fc-1 ai-cell"><span class="adh-skel-line" style="width:70px;"></span></td>
+            <td class="fc fc-2 ai-cell"><span class="adh-skel-line" style="width:110px;"></span></td>
+            <td class="fc fc-3 ai-cell"><span class="adh-skel-line" style="width:90px;"></span></td>
+            <td class="fc fc-4 ai-cell"><span class="adh-skel-line" style="width:36px;"></span></td>
+            {% for d in week_dates %}<td class="day-cell"><span class="adh-skel-line" style="width:60px;"></span></td>{% endfor %}
+            {% for i in "12345678901" %}<td class="sum-cell"><span class="adh-skel-line" style="width:28px;"></span></td>{% endfor %}
         </tr>
+        {% for i in "2345678" %}
+        <tr class="adh-skel-row">
+            <td class="fc fc-1 ai-cell"><span class="adh-skel-line" style="width:70px;"></span></td>
+            <td class="fc fc-2 ai-cell"><span class="adh-skel-line" style="width:110px;"></span></td>
+            <td class="fc fc-3 ai-cell"><span class="adh-skel-line" style="width:90px;"></span></td>
+            <td class="fc fc-4 ai-cell"><span class="adh-skel-line" style="width:36px;"></span></td>
+            {% for d in week_dates %}<td class="day-cell"><span class="adh-skel-line" style="width:60px;"></span></td>{% endfor %}
+            {% for j in "12345678901" %}<td class="sum-cell"><span class="adh-skel-line" style="width:28px;"></span></td>{% endfor %}
+        </tr>
+        {% endfor %}
     </tbody>
     <tfoot id="adh-tfoot"></tfoot>
 </table>
@@ -355,23 +369,101 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 let _adhLastTimestamp = null;
 let _adhLoading = false;
 
+// Supervisor PKs for progressive loading (injected from server context).
+const _ADH_SUPERVISOR_PKS = {{ supervisor_pks_json|safe }};
+
+function _removeSkeleton() {
+    // Remove the initial skeleton rows (loading row + extra skel rows).
+    const loadingRow = document.getElementById('adh-loading-row');
+    if (loadingRow) loadingRow.remove();
+    document.querySelectorAll('.adh-skel-row').forEach(r => r.remove());
+}
+
+function _showLoadError() {
+    _removeSkeleton();
+    document.getElementById('adh-tbody').innerHTML =
+        '<tr><td colspan="22" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
+}
+
+// Full replace load — used by poll and when a supervisor filter is active.
+function _loadAdhRowsFull(params) {
+    const url = '/adherence/rows/?' + params.toString();
+    return fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(data => {
+            if (data.error) throw new Error(data.error);
+            document.getElementById('adh-tbody').innerHTML = data.tbody_html;
+            document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
+            recomputeCoS();
+        });
+}
+
+// Progressive load — loads each supervisor group sequentially, appending rows.
+async function _loadAdhRowsProgressive(params) {
+    // Build list of group param values: each supervisor PK + "__none__" for unsupervised.
+    const groups = _ADH_SUPERVISOR_PKS.concat(['__none__']);
+    let firstGroupDone = false;
+
+    for (const grp of groups) {
+        const grpParams = new URLSearchParams(params.toString());
+        grpParams.set('group', grp);
+        const url = '/adherence/rows/?' + grpParams.toString();
+        try {
+            const r = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+            if (!r.ok) throw new Error(r.status);
+            const data = await r.json();
+            if (data.error) throw new Error(data.error);
+
+            if (!firstGroupDone) {
+                // Remove skeleton rows before inserting real content.
+                _removeSkeleton();
+                firstGroupDone = true;
+            }
+
+            // Append tbody rows (skip empty responses).
+            if (data.tbody_html && data.tbody_html.trim()) {
+                const tbody = document.getElementById('adh-tbody');
+                tbody.insertAdjacentHTML('beforeend', data.tbody_html);
+            }
+
+            // Tfoot: only set on the last group (overwrite each time; last wins).
+            if (data.tfoot_html) {
+                document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
+            }
+
+            recomputeCoS();
+        } catch (e) {
+            if (!firstGroupDone) {
+                _showLoadError();
+                return;
+            }
+            // Partial failure — continue loading other groups.
+        }
+    }
+
+    if (!firstGroupDone) {
+        _removeSkeleton();
+    }
+}
+
 function loadAdhRows() {
     if (_adhLoading) return;
     _adhLoading = true;
     const params = new URLSearchParams(window.location.search);
-    const url = '/adherence/rows/?' + params.toString();
-    fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
-        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-        .then(data => {
-            document.getElementById('adh-tbody').innerHTML = data.tbody_html;
-            document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
-            _adhLoading = false;
-        })
-        .catch(() => {
-            document.getElementById('adh-tbody').innerHTML =
-                '<tr><td colspan="22" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
-            _adhLoading = false;
-        });
+    const selectedSupervisor = params.get('supervisor') || '{{ selected_supervisor|escapejs }}';
+
+    let loader;
+    if (selectedSupervisor) {
+        // Supervisor filter active — single filtered request.
+        loader = _loadAdhRowsFull(params);
+    } else {
+        // No filter — load groups progressively for faster first-paint.
+        loader = _loadAdhRowsProgressive(params);
+    }
+
+    loader
+        .catch(() => { _showLoadError(); })
+        .finally(() => { _adhLoading = false; });
 }
 loadAdhRows();
 
@@ -388,7 +480,9 @@ loadAdhRows();
                 if (_adhLastTimestamp === null) { _adhLastTimestamp = data.latest; return; }
                 if (data.latest && data.latest !== _adhLastTimestamp) {
                     _adhLastTimestamp = data.latest;
-                    loadAdhRows();
+                    // Full replace reload for poll — don't use progressive here.
+                    const allParams = new URLSearchParams(window.location.search);
+                    _loadAdhRowsFull(allParams).catch(() => {});
                 }
             })
             .catch(() => {});

@@ -5,6 +5,7 @@ import io
 import json
 
 from django.db.models import Q, Count as DbCount
+from django.core.cache import cache
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
@@ -272,6 +273,31 @@ def _calculate_cos(rows, week_dates, default_tardy=_DEFAULT_TARDY):
         'ot_offset': float(week_ot_offset),
     }
     return day_data, cos_week
+
+
+def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
+    """
+    Get PKs of agents who should appear in the adherence week view.
+    Uses a two-step query to avoid DISTINCT+ORDER BY on related fields,
+    which fails on PostgreSQL (works on SQLite but not in production).
+    Results are cached for 5 minutes per week/supervisor combination.
+    """
+    cache_key = f'adh_pks_{week_start.isoformat()}_{supervisor_id or "all"}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    pks = set(Agent.objects.filter(
+        Q(status='active', track_attendance=True, is_official_admin=False) |
+        Q(status='inactive', separations__status='finalized',
+          separations__remove_from_adherence_date__gt=week_start)
+    ).filter(
+        Q(shifts__date__in=week_dates) |
+        Q(overtime_shifts__date__in=week_dates) |
+        Q(shift_templates__isnull=False) |
+        Q(adherence_records__date__in=week_dates)
+    ).values_list('pk', flat=True).distinct())
+    cache.set(cache_key, pks, 300)
+    return pks
 
 
 def _get_week_start(request):
@@ -868,20 +894,14 @@ def adherence_week(request):
     supervisor_id, supervisors = _get_supervisor_filter(request)
 
     if request.method == 'POST':
-        agents = Agent.objects.filter(
-            Q(status='active', track_attendance=True, is_official_admin=False) |
-            Q(status='inactive', separations__status='finalized', separations__remove_from_adherence_date__gt=week_start)
-        ).select_related('user', 'supervisor__user').order_by(
+        agent_pks = _get_adherence_agent_pks(week_dates, week_start, supervisor_id)
+        agents = Agent.objects.filter(pk__in=agent_pks).select_related(
+            'user', 'supervisor__user'
+        ).order_by(
             'supervisor__user__last_name', 'supervisor__user__first_name',
             'user__last_name', 'user__first_name'
         )
         agents = _apply_supervisor_filter(agents, supervisor_id)
-        agents = agents.filter(
-            Q(shifts__date__in=week_dates) |
-            Q(overtime_shifts__date__in=week_dates) |
-            Q(shift_templates__isnull=False) |
-            Q(adherence_records__date__in=week_dates)
-        ).distinct()
         shift_map, record_map, *_ = _build_maps(agents, week_dates)
         for agent in agents:
             for day_date in week_dates:
@@ -906,6 +926,10 @@ def adherence_week(request):
     # GET: return the page shell immediately; rows are fetched async via /adherence/rows/
     today = timezone.localdate()
     current_week = today - timedelta(days=today.weekday())
+    # Build a JSON list of supervisor PKs for progressive loading in JS.
+    # Each supervisor group is loaded separately for faster first-paint.
+    supervisor_pks = [str(s.pk) for s in supervisors]
+    supervisor_pks_json = json.dumps(supervisor_pks)
     return render(request, 'adherence/dashboard.html', {
         'week_dates': week_dates,
         'week_start': week_start,
@@ -918,76 +942,96 @@ def adherence_week(request):
         'status_choices': AdherenceRecord.STATUS_CHOICES,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+        'supervisor_pks_json': supervisor_pks_json,
     })
 
 
 @login_required
 def adherence_rows_fragment(request):
     """Return rendered tbody rows + COS tfoot as JSON for async loading."""
-    week_start = _get_week_start(request)
-    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    try:
+        week_start = _get_week_start(request)
+        week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
-    week_end = week_dates[-1]
-    supervisor_id, _ = _get_supervisor_filter(request)
-    # Include: active tracked agents (excluding Official Admins) + separated agents
-    agents = Agent.objects.filter(
-        Q(status='active', track_attendance=True, is_official_admin=False) |
-        Q(status='inactive', separations__status='finalized', separations__remove_from_adherence_date__gt=week_start)
-    ).select_related(
-        'user', 'supervisor__user'
-    ).prefetch_related('five9_profiles').order_by(
-        'supervisor__user__last_name', 'supervisor__user__first_name',
-        'user__last_name', 'user__first_name'
-    )
-    agents = _apply_supervisor_filter(agents, supervisor_id)
-    agents = list(agents.filter(
-        Q(shifts__date__in=week_dates) |
-        Q(overtime_shifts__date__in=week_dates) |
-        Q(shift_templates__isnull=False) |
-        Q(adherence_records__date__in=week_dates)
-    ).distinct())
+        week_end = week_dates[-1]
+        supervisor_id, _ = _get_supervisor_filter(request)
 
-    from finance.models import BillingSettings as _BillingSettings
-    _week_billing = _BillingSettings.get_for_week(week_start)
+        # Two-step query: first get PKs with DISTINCT (no ORDER BY), then
+        # filter by those PKs with ORDER BY (no DISTINCT). This avoids the
+        # PostgreSQL error "for SELECT DISTINCT, ORDER BY expressions must
+        # appear in select list" caused by ordering on related fields.
+        agent_pks = _get_adherence_agent_pks(week_dates, week_start, supervisor_id)
+        agents = Agent.objects.filter(pk__in=agent_pks).select_related(
+            'user', 'supervisor__user'
+        ).prefetch_related('five9_profiles').order_by(
+            'supervisor__user__last_name', 'supervisor__user__first_name',
+            'user__last_name', 'user__first_name'
+        )
+        agents = _apply_supervisor_filter(agents, supervisor_id)
 
-    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
-    rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
-                       extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
-                       tmpl_by_agent_dow=tmpl_by_agent_dow, billing_settings=_week_billing)
+        # Handle optional group parameter for progressive loading.
+        # group=<supervisor_pk> loads only that supervisor's agents.
+        # group=__none__ loads agents with no supervisor.
+        # This overrides the session supervisor filter for this request only.
+        group_param = request.GET.get('group', '')
+        if group_param and not supervisor_id:
+            if group_param == '__none__':
+                agents = agents.filter(supervisor__isnull=True)
+            else:
+                try:
+                    agents = agents.filter(supervisor_id=int(group_param))
+                except ValueError:
+                    pass
 
-    adj_map = {
-        pa.agent_id: pa.commission_deduction
-        for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
-    }
-    note_count_map = {
-        (n['agent_id'], n['date']): n['count']
-        for n in AdherenceNote.objects.filter(
-            agent__in=agents, date__in=week_dates
-        ).values('agent_id', 'date').annotate(count=DbCount('pk'))
-    }
-    for row in rows:
-        row['commission_deduction'] = adj_map.get(row['agent'].pk, Decimal('0'))
-        for cell in row['cells']:
-            cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
+        agents = list(agents)
 
-    show_cos = True
-    cos_days, cos_week = _calculate_cos(rows, week_dates, default_tardy=_week_billing.default_tardy_hours) if show_cos else ([], {})
+        from finance.models import BillingSettings as _BillingSettings
+        _week_billing = _BillingSettings.get_for_week(week_start)
 
-    ctx = {
-        'rows': rows,
-        'week_start': week_start,
-        'today': timezone.localdate(),
-        'status_choices': AdherenceRecord.STATUS_CHOICES,
-        'selected_supervisor': str(supervisor_id) if supervisor_id else '',
-        'show_cos': show_cos,
-        'cos_days': cos_days,
-        'cos_week': cos_week,
-    }
+        shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
+        rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
+                           extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
+                           tmpl_by_agent_dow=tmpl_by_agent_dow, billing_settings=_week_billing)
 
-    tbody_html = render_to_string('adherence/rows_tbody.html', ctx, request=request)
-    tfoot_html = render_to_string('adherence/rows_tfoot.html', ctx, request=request)
+        adj_map = {
+            pa.agent_id: pa.commission_deduction
+            for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
+        }
+        note_count_map = {
+            (n['agent_id'], n['date']): n['count']
+            for n in AdherenceNote.objects.filter(
+                agent__in=agents, date__in=week_dates
+            ).values('agent_id', 'date').annotate(count=DbCount('pk'))
+        }
+        for row in rows:
+            row['commission_deduction'] = adj_map.get(row['agent'].pk, Decimal('0'))
+            for cell in row['cells']:
+                cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
-    return JsonResponse({'tbody_html': tbody_html, 'tfoot_html': tfoot_html})
+        show_cos = True
+        cos_days, cos_week = _calculate_cos(rows, week_dates, default_tardy=_week_billing.default_tardy_hours) if show_cos else ([], {})
+
+        ctx = {
+            'rows': rows,
+            'week_start': week_start,
+            'today': timezone.localdate(),
+            'status_choices': AdherenceRecord.STATUS_CHOICES,
+            'selected_supervisor': str(supervisor_id) if supervisor_id else '',
+            'show_cos': show_cos,
+            'cos_days': cos_days,
+            'cos_week': cos_week,
+        }
+
+        tbody_html = render_to_string('adherence/rows_tbody.html', ctx, request=request)
+        tfoot_html = render_to_string('adherence/rows_tfoot.html', ctx, request=request)
+
+        return JsonResponse({'tbody_html': tbody_html, 'tfoot_html': tfoot_html})
+    except Exception as exc:
+        import traceback
+        return JsonResponse(
+            {'error': str(exc), 'detail': traceback.format_exc()},
+            status=500
+        )
 
 
 @login_required

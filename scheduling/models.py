@@ -88,6 +88,9 @@ class Five9Profile(models.Model):
 
     class Meta:
         ordering = ['id']
+        indexes = [
+            models.Index(fields=['agent', 'billable']),
+        ]
 
     def __str__(self):
         tag = self.label or self.get_role_type_display() or 'Account'
