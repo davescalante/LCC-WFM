@@ -86,6 +86,17 @@
             {% endfor %}
         </tbody>
     </table>
+    {% if page_obj.has_other_pages %}
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid #eee;font-size:13px;">
+        {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}" class="btn btn-cancel" style="padding:4px 12px;">&#8592; Prev</a>
+        {% endif %}
+        <span style="color:#888;">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }} &nbsp;·&nbsp; {{ page_obj.paginator.count }} users</span>
+        {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}" class="btn btn-cancel" style="padding:4px 12px;">Next &#8594;</a>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 <script>
 // Columns: 0=Name 1=Role 2=RoleType 3=Supervisor 4=TrackAttend 5=Status 6=Actions

@@ -370,6 +370,21 @@ def _build_maps(agents, week_dates):
 
 
 def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None, billing_settings=None):
+    """
+    Build the per-agent display rows for the adherence dashboard week view.
+
+    For each agent, iterate over the seven days of the week and produce a 'cell'
+    dict (scheduled hours, actual hours, status, display color) for each day.
+    Accumulate weekly totals, determine bonus eligibility from the agent's status
+    codes, and apply the NR cap: if the agent's total not-ready seconds for the
+    week (summed from billable DailyAgentHours rows) exceed the configured cap,
+    the excess is deducted from the final adjusted hours.
+
+    Returns a list of row dicts, one per agent, each containing:
+      cells, total_present, total_absent, total_tardy, total_incomplete,
+      sched_hours, actual_hours, coded_hours, adjusted_total,
+      nr_cap_adj, final_adjusted, bonus (Yes/No/—), bonus_mxn, bonus_reasons.
+    """
     from scheduling.models import Five9Profile as _Five9Profile
     from finance.models import BillingSettings as _BS
 

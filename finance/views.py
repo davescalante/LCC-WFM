@@ -76,13 +76,20 @@ def _fmt_usd(v):
 
 def _get_billable_weekly_data(agents, week_dates, settings):
     """
-    Returns a dict keyed by agent.pk with:
+    Compute weekly pay and billing figures for a list of billable agents.
+
+    Sums each agent's login seconds and NR seconds from Five9 DailyAgentHours rows,
+    then applies the NR deduction rule (the larger of two independent checks):
+      - check1: deduct any NR hours above the absolute weekly cap (6 h regular, 7 h kill-team)
+      - check2: deduct any NR hours above 12.5% of total worked time (only when pre-NR total ≤ 48 h)
+    Adds any manually coded hours and runs pay calculations (base pay, OT top-ups, bonus, billing).
+
+    Returns a dict keyed by agent.pk, each value containing:
       total_login_hrs, total_coded_hrs, total_nr_hrs,
       nr_cap_hrs, nr_cap_adj_hrs, final_hrs,
       bonus (bool), ot_regular_hrs, ot_1_5_hrs, ot_power_hrs,
       commission_pct, base_pay_mxn, ot_regular_mxn, ot_1_5_mxn,
-      power_hour_usd, bonus_mxn,
-      total_pay_mxn, total_pay_usd, billing_usd
+      power_hour_usd, bonus_mxn, total_pay_mxn, total_pay_usd, billing_usd
     """
     agent_ids = [a.pk for a in agents]
     week_start = week_dates[0]

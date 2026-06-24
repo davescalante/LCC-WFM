@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from django.core.paginator import Paginator
 from django.db.models import Q, F
 from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
@@ -228,8 +229,13 @@ def agent_list(request):
         agents = agents.filter(separations__status='in_progress').distinct()
     # 'all' — no status filter
 
+    paginator = Paginator(agents, 100)
+    page_number = request.GET.get('page', 1)
+    page_obj = paginator.get_page(page_number)
+
     return render(request, 'scheduling/agent_list.html', {
-        'agents': agents,
+        'agents': page_obj,
+        'page_obj': page_obj,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
         'status_filter': status_filter,
