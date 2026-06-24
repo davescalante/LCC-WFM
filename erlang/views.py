@@ -602,6 +602,7 @@ def erlang_save_report(request):
 
     ErlangReport.objects.create(
         name=name,
+        week_start=week_start,
         calls_per_hour=peak['avg_calls'],
         avg_handle_time=_wp.aht_seconds,
         target_service_level=_wp.target_sl,

@@ -60,6 +60,7 @@ class ErlangWeekParams(models.Model):
 
 class ErlangReport(models.Model):
     name = models.CharField(max_length=200)
+    week_start = models.DateField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     calls_per_hour = models.FloatField()
     avg_handle_time = models.FloatField(help_text="Average handle time in seconds")
