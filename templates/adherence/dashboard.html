@@ -49,9 +49,9 @@
 
 /* ── Frozen columns ─────────────────────────────────────────────────────────── */
 .fc           { position: sticky; z-index: 2; background: inherit; }
-.fc-1         { left: 0;     width: 90px;  }
-.fc-2         { left: 90px;  width: 130px; }
-.fc-3         { left: 220px; width: 120px; box-shadow: 2px 0 4px rgba(0,0,0,.07); }
+.fc-1         { left: 0;     width: 80px;  }
+.fc-2         { left: 80px;  width: 120px; }
+.fc-3         { left: 200px; width: 110px; box-shadow: 2px 0 4px rgba(0,0,0,.1); }
 
 /* ── Sticky header ──────────────────────────────────────────────────────────── */
 #adh-table thead th {
@@ -60,8 +60,8 @@
     z-index: 5;
     background: #f0f4f8;
     padding: 6px 4px;
-    border-bottom: 2px solid #c8d4e0;
-    border-right: 1px solid #c8d4e0;
+    border-bottom: 2px solid #94a3b8;
+    border-right: 1px solid #cbd5e1;
     font-size: 11px;
     font-weight: 700;
     color: #555;
@@ -78,78 +78,80 @@
 .day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
 
 /* ── Summary header columns ─────────────────────────────────────────────────── */
-.th-p    { width: 46px; }
-.th-a    { width: 46px; }
-.th-t    { width: 46px; }
-.th-i    { width: 46px; }
-.th-hrs  { width: 62px; }
-.th-bon  { width: 50px; }
-.th-com  { width: 76px; }
+.th-p    { width: 32px; }
+.th-a    { width: 32px; }
+.th-t    { width: 32px; }
+.th-i    { width: 32px; }
+.th-hrs  { width: 54px; }
+.th-bon  { width: 56px; }
+.th-com  { width: 64px; }
 .th-sum  { font-size: 10px; color: #666; line-height: 1.3; }
 
 /* ── Alternating rows ───────────────────────────────────────────────────────── */
 tbody tr.row-a         { background: #fff; }
-tbody tr.row-b         { background: #f9fafb; }
+tbody tr.row-b         { background: #f8fafc; }
 tbody tr.row-a .fc     { background: #fff; }
-tbody tr.row-b .fc     { background: #f9fafb; }
+tbody tr.row-b .fc     { background: #f8fafc; }
 tbody tr.row-a:hover .fc,
 tbody tr.row-b:hover .fc { background: #dbeafe; }
 
 /* ── Agent info cells ───────────────────────────────────────────────────────── */
 .ai-cell {
-    padding: 4px 7px;
+    padding: 3px 6px;
     vertical-align: middle;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    border-right: 1px solid #d1d5db;
-    border-bottom: 1px solid #d1d5db;
+    border-right: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
 }
-.ai-cell.sup-col   { font-size: 10px; color: #888; }
-.ai-cell.name-col  { font-size: 12px; font-weight: 600; color: #1a3a5c; }
-.ai-cell.five9-col { font-size: 10px; color: #777; }
+.ai-cell.sup-col   { font-size: 9px; color: #888; }
+.ai-cell.name-col  { font-size: 12px; font-weight: 700; color: #1a3a5c; }
+.ai-cell.five9-col { font-size: 9px; color: #999; }
 
 /* ── Day cells ──────────────────────────────────────────────────────────────── */
 .day-cell {
     padding: 3px 2px;
     vertical-align: top;
     text-align: center;
-    border-right: 1px solid #d1d5db;
-    border-bottom: 1px solid #d1d5db;
+    border-right: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
 }
 
 /* ── Today column ────────────────────────────────────────────────────────────
- * Header: plain background swap — no conflict with anything.
- * Body:   box-shadow inset border — visible on top of any background-color
- *         set by JS (STATUS_COLORS), does not override it.
+ * Header: blue tint swap.
+ * Body:   subtle blue background-color + thin inset borders.
+ *         STATUS_COLORS JS sets inline style.background which will override
+ *         background-color when a status is selected — that is intentional.
  * ────────────────────────────────────────────────────────────────────────── */
 thead th.col-today           { background: #bfdbfe; color: #1e3a8a; border-bottom-color: #60a5fa !important; }
-tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0 0 0 #60a5fa; }
+tbody td.col-today           { background-color: #eff6ff; box-shadow: inset 1px 0 0 0 #bfdbfe, inset -1px 0 0 0 #bfdbfe; }
 
 /* ── Supervisor divider rows ────────────────────────────────────────────────── */
 .group-hdr td {
-    padding: 3px 10px;
+    padding: 4px 10px;
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: .6px;
-    color: #374151;
-    background: #dde3ec;
-    border-top: 2px solid #b6c2d4;
+    letter-spacing: .8px;
+    color: #1e293b;
+    background: #e2e8f0;
+    border-top: 2px solid #94a3b8;
+    border-bottom: 1px solid #cbd5e1;
 }
 
 /* ── Summary cells ──────────────────────────────────────────────────────────── */
 .sum-cell {
-    padding: 4px 3px;
+    padding: 3px 3px;
     text-align: center;
     vertical-align: middle;
     font-size: 12px;
     color: #555;
-    border-right: 1px solid #d1d5db;
-    border-bottom: 1px solid #d1d5db;
+    border-right: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
 }
 .sum-cell.mono { font-family: monospace; font-size: 10px; }
-.border-l      { border-left: 2px solid #c8d4e0 !important; }
+.border-l      { border-left: 2px solid #94a3b8 !important; }
 
 /* ── Quick-edit button ──────────────────────────────────────────────────────── */
 .sched-cell-wrap { position: relative; display: inline-block; }
@@ -191,8 +193,8 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 .cell-missing { font-size: 9px; color: #c0392b; font-weight: 600; margin-top: 0; }
 
 /* ── OFF day cells ──────────────────────────────────────────────────────── */
-.day-cell.cell-off-day { background: #f0f1f3 !important; }
-.cell-off-label { font-size: 10px; color: #b0b5bc; font-weight: 500; }
+.day-cell.cell-off-day { background: #f1f5f9 !important; }
+.cell-off-label { font-size: 10px; color: #94a3b8; font-weight: 500; letter-spacing: .3px; }
 
 /* ── Column sort ────────────────────────────────────────────────────────── */
 .th-sortable { cursor:pointer; user-select:none; }
@@ -210,23 +212,23 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 <table id="adh-table">
     <colgroup>
         <!-- Frozen columns -->
-        <col style="width:90px;">
-        <col style="width:130px;">
+        <col style="width:80px;">
         <col style="width:120px;">
+        <col style="width:110px;">
         <!-- Day columns (7) -->
         {% for d in week_dates %}<col style="width:98px;">{% endfor %}
         <!-- Summary columns: P A T I SchHrs LogHrs CodHrs NRCap TotHrs Bon ComDed -->
-        <col style="width:46px;">
-        <col style="width:46px;">
-        <col style="width:46px;">
-        <col style="width:46px;">
-        <col style="width:62px;">
-        <col style="width:62px;">
-        <col style="width:62px;">
-        <col style="width:62px;">
-        <col style="width:62px;">
-        <col style="width:50px;">
-        <col style="width:76px;">
+        <col style="width:32px;">
+        <col style="width:32px;">
+        <col style="width:32px;">
+        <col style="width:32px;">
+        <col style="width:54px;">
+        <col style="width:54px;">
+        <col style="width:54px;">
+        <col style="width:54px;">
+        <col style="width:54px;">
+        <col style="width:56px;">
+        <col style="width:64px;">
     </colgroup>
     <thead>
         <tr>
@@ -389,6 +391,7 @@ function _loadAdhRowsFull(params) {
             document.getElementById('adh-tbody').innerHTML = data.tbody_html;
             document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
             recomputeCoS();
+            _applyAllStatusStyles();
         });
 }
 
@@ -418,6 +421,7 @@ async function _loadAdhRowsProgressive(params) {
             if (data.tbody_html && data.tbody_html.trim()) {
                 const tbody = document.getElementById('adh-tbody');
                 tbody.insertAdjacentHTML('beforeend', data.tbody_html);
+                _applyAllStatusStyles();
             }
 
             // Tfoot: only set on the last group (overwrite each time; last wins).
@@ -489,6 +493,43 @@ const STATUS_COLORS = {
     'I':'#fce4ec','T+I':'#fde8d8','Quit':'#eeeeee','Baja':'#eeeeee','V':'#e3f2fd','IMSS':'#e0f2f1',
 };
 
+const STATUS_BADGE_COLORS = {
+    'P':     {bg:'#3b82f6', c:'#fff'},
+    'T':     {bg:'#f59e0b', c:'#fff'},
+    'T+I':   {bg:'#f59e0b', c:'#fff'},
+    'T+VTO': {bg:'#f59e0b', c:'#fff'},
+    'I':     {bg:'#f59e0b', c:'#fff'},
+    'Absent':{bg:'#ef4444', c:'#fff'},
+    'NCNS':  {bg:'#991b1b', c:'#fff'},
+    'S':     {bg:'#ea580c', c:'#fff'},
+    'OT':    {bg:'#16a34a', c:'#fff'},
+    'MUT':   {bg:'#7c3aed', c:'#fff'},
+    'VTO':   {bg:'#0891b2', c:'#fff'},
+    'P+VTO': {bg:'#3b82f6', c:'#fff'},
+    'V':     {bg:'#4ade80', c:'#166534'},
+    'IMSS':  {bg:'#eab308', c:'#713f12'},
+    'LOA':   {bg:'#6b7280', c:'#fff'},
+    'Quit':  {bg:'#374151', c:'#fff'},
+    'Baja':  {bg:'#374151', c:'#fff'},
+};
+
+function _applyStatusStyle(sel) {
+    const s = STATUS_BADGE_COLORS[sel.value];
+    if (s) {
+        sel.style.background = s.bg;
+        sel.style.color = s.c;
+        sel.style.borderColor = s.bg;
+    } else {
+        sel.style.background = 'rgba(255,255,255,0.65)';
+        sel.style.color = '#222';
+        sel.style.borderColor = 'rgba(0,0,0,0.18)';
+    }
+}
+
+function _applyAllStatusStyles() {
+    document.querySelectorAll('.cell-status').forEach(_applyStatusStyle);
+}
+
 function csrfToken() {
     return document.querySelector('meta[name="csrf-token"]').content;
 }
@@ -533,6 +574,7 @@ function onStatusChange(sel) {
     td.style.background = STATUS_COLORS[sel.value] || '#f5f5f5';
     saveCell(td.dataset.agent, td.dataset.date, sel.value);
     recomputeCoS();
+    _applyStatusStyle(sel);
 }
 
 // ── Note popover ─────────────────────────────────────────────────────────────
@@ -825,6 +867,7 @@ function showBonusTooltip(e, el) {
 function hideBonusTooltip() { document.getElementById('bonus-tooltip').style.display = 'none'; }
 
 document.addEventListener('DOMContentLoaded', recomputeCoS);
+document.addEventListener('DOMContentLoaded', _applyAllStatusStyles);
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function saveCommission(agentId, weekStart, inp) {

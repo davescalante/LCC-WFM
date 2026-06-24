@@ -80,11 +80,11 @@
     <td class="sum-cell" style="font-weight:700;{% if row.total_absent > 0 %}color:#c0392b;{% else %}color:#ddd;{% endif %}">{{ row.total_absent }}</td>
     <td class="sum-cell" style="font-weight:700;{% if row.total_tardy > 0 %}color:#e67e22;{% else %}color:#ddd;{% endif %}">{{ row.total_tardy }}</td>
     <td class="sum-cell" style="font-weight:700;{% if row.total_incomplete > 0 %}color:#e74c3c;{% else %}color:#ddd;{% endif %}">{{ row.total_incomplete }}</td>
-    <td class="sum-cell mono">{{ row.sched_hours|to_hhmmss|default:"—" }}</td>
-    <td class="sum-cell mono" style="{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:700;{% else %}color:#e67e22;font-weight:700;{% endif %}{% endif %}">{{ row.actual_hours|to_hhmmss|default:"—" }}</td>
-    <td class="sum-cell mono">{{ row.coded_hours|to_hhmmss|default:"—" }}</td>
+    <td class="sum-cell mono">{{ row.sched_hours|to_hhmm|default:"—" }}</td>
+    <td class="sum-cell mono" style="{% if row.actual_hours and row.sched_hours %}{% if row.actual_hours >= row.sched_hours %}color:#27ae60;font-weight:700;{% else %}color:#e67e22;font-weight:700;{% endif %}{% endif %}">{{ row.actual_hours|to_hhmm|default:"—" }}</td>
+    <td class="sum-cell mono">{{ row.coded_hours|to_hhmm|default:"—" }}</td>
     <td class="sum-cell" style="text-align:right;padding-right:4px;">{% if row.nr_cap_adj and row.nr_cap_adj > 0 %}<span style="color:#b91c1c;font-size:11px;">-{{ row.nr_cap_adj|floatformat:2 }}</span>{% else %}<span style="color:#9ca3af;font-size:11px;">—</span>{% endif %}</td>
-    <td class="sum-cell mono" style="font-weight:700;{% if row.final_adjusted and row.sched_hours %}{% if row.final_adjusted >= row.sched_hours %}color:#27ae60;{% else %}color:#c0392b;{% endif %}{% else %}color:#555;{% endif %}">{{ row.final_adjusted|to_hhmmss|default:"—" }}</td>
+    <td class="sum-cell mono" style="font-weight:700;{% if row.final_adjusted and row.sched_hours %}{% if row.final_adjusted >= row.sched_hours %}color:#27ae60;{% else %}color:#c0392b;{% endif %}{% else %}color:#555;{% endif %}">{{ row.final_adjusted|to_hhmm|default:"—" }}</td>
     <td class="sum-cell">
         {% if row.bonus == 'Yes' %}
         <span class="badge badge-green" style="font-size:10px;padding:1px 5px;">Yes</span>
