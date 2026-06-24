@@ -15,7 +15,6 @@
 <!-- Summary Cards -->
 <div class="grid-4" style="margin-bottom:20px;">
 
-    <!-- Pending Requests -->
     <a href="{% url 'requests_list' %}?status=pending" style="text-decoration:none;">
         <div class="card stat" style="cursor:pointer;transition:box-shadow .15s;position:relative;overflow:hidden;">
             <div class="number" style="color:{% if pending_count > 0 %}#f59e0b{% else %}#1a3a5c{% endif %};">{{ pending_count }}</div>
@@ -28,7 +27,14 @@
         </div>
     </a>
 
-    <!-- Today's Attendance -->
+    <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" style="text-decoration:none;">
+        <div class="card stat" style="cursor:pointer;">
+            <div class="number" style="color:{% if missing_count > 0 %}#dc2626{% else %}#16a34a{% endif %};">{{ missing_count }}</div>
+            <div class="label">Missing Records Today</div>
+            <div style="margin-top:6px;font-size:11px;color:#9ca3af;">of {{ active_agents_count }} active agents</div>
+        </div>
+    </a>
+
     <a href="{% url 'records_attendance' %}" style="text-decoration:none;">
         <div class="card stat" style="cursor:pointer;">
             <div class="number" style="color:#1a3a5c;">{{ attendance_total }}</div>
@@ -44,16 +50,6 @@
         </div>
     </a>
 
-    <!-- Missing Time -->
-    <a href="{% url 'records_attendance' %}" style="text-decoration:none;">
-        <div class="card stat" style="cursor:pointer;">
-            <div class="number" style="color:{% if missing_count > 0 %}#dc2626{% else %}#16a34a{% endif %};">{{ missing_count }}</div>
-            <div class="label">Missing Records Today</div>
-            <div style="margin-top:6px;font-size:11px;color:#9ca3af;">of {{ active_agents_count }} active agents tracked</div>
-        </div>
-    </a>
-
-    <!-- Active Agents -->
     <a href="{% url 'agent_list' %}" style="text-decoration:none;">
         <div class="card stat" style="cursor:pointer;">
             <div class="number" style="color:#1a3a5c;">{{ active_agents_count }}</div>
@@ -63,43 +59,76 @@
 
 </div>
 
-<!-- Quick Links -->
+<!-- Actionable Items -->
 <div class="grid-2">
-    <div class="card">
-        <h2 style="margin-bottom:12px;">Quick Links</h2>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-            <a href="{% url 'adherence_dashboard' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Adherence Dashboard
-            </a>
-            <a href="{% url 'shift_list' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Schedule / Shifts
-            </a>
-            <a href="{% url 'overtime_list' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Overtime Shifts
-            </a>
-            <a href="{% url 'erlang_calculator' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Staffing Calculator (Erlang)
-            </a>
+
+    <!-- Pending Requests -->
+    <div class="card" style="padding:0;">
+        <div style="padding:16px 20px;border-bottom:1px solid #f1f3f5;display:flex;justify-content:space-between;align-items:center;">
+            <h2 style="margin:0;font-size:15px;">Pending Requests</h2>
+            <a href="{% url 'requests_list' %}?status=pending" style="font-size:12px;color:#1a3a5c;">View all →</a>
         </div>
+        {% if pending_top5 %}
+        <table style="width:100%;font-size:13px;">
+            <tbody>
+            {% for req in pending_top5 %}
+            <tr>
+                <td style="padding:10px 20px;border-bottom:1px solid #f8f9fa;">
+                    <div style="font-weight:600;color:#111;">{{ req.agent.agent_name }}</div>
+                    <div style="color:#6b7280;font-size:12px;margin-top:2px;">{{ req.get_request_type_display }} · {{ req.submitted_at|date:"M j" }}</div>
+                </td>
+                <td style="padding:10px 20px;border-bottom:1px solid #f8f9fa;text-align:right;">
+                    <a href="{% url 'request_detail' pk=req.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#1a3a5c;color:white;border:none;">Review</a>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% if pending_count > 5 %}
+        <div style="padding:10px 20px;font-size:12px;color:#9ca3af;border-top:1px solid #f1f3f5;">
+            + {{ pending_count|add:"-5" }} more — <a href="{% url 'requests_list' %}?status=pending" style="color:#1a3a5c;">see all</a>
+        </div>
+        {% endif %}
+        {% else %}
+        <div style="padding:40px 20px;text-align:center;color:#9ca3af;font-size:13px;">No pending requests.</div>
+        {% endif %}
     </div>
 
-    <div class="card">
-        <h2 style="margin-bottom:12px;">Records</h2>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-            <a href="{% url 'records_attendance' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Attendance Records
-            </a>
-            <a href="{% url 'records_hours' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Hours Records
-            </a>
-            <a href="{% url 'records_role_log' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Role Log
-            </a>
-            <a href="{% url 'activity_log' %}" class="btn" style="background:#f0f4f8;color:#1a3a5c;text-align:left;padding:10px 14px;">
-                Activity Log
-            </a>
+    <!-- Missing Attendance Today -->
+    <div class="card" style="padding:0;">
+        <div style="padding:16px 20px;border-bottom:1px solid #f1f3f5;display:flex;justify-content:space-between;align-items:center;">
+            <h2 style="margin:0;font-size:15px;">Missing Records Today</h2>
+            <a href="{% url 'adherence_dashboard' %}?week_start={{ week_start|date:'Y-m-d' }}" style="font-size:12px;color:#1a3a5c;">Go to Adherence →</a>
         </div>
+        {% if missing_top5 %}
+        <table style="width:100%;font-size:13px;">
+            <tbody>
+            {% for agent in missing_top5 %}
+            <tr>
+                <td style="padding:10px 20px;border-bottom:1px solid #f8f9fa;">
+                    <div style="font-weight:600;color:#111;">{{ agent.agent_name }}</div>
+                    <div style="color:#6b7280;font-size:12px;margin-top:2px;">
+                        {{ agent.get_role_type_display|default:agent.role_type }}
+                        {% if agent.supervisor %} · {{ agent.supervisor.agent_name }}{% endif %}
+                    </div>
+                </td>
+                <td style="padding:10px 20px;border-bottom:1px solid #f8f9fa;text-align:right;">
+                    <a href="{% url 'agent_detail' pk=agent.pk %}" style="font-size:12px;color:#1a3a5c;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% if missing_count > 5 %}
+        <div style="padding:10px 20px;font-size:12px;color:#9ca3af;border-top:1px solid #f1f3f5;">
+            + {{ missing_count|add:"-5" }} more without records today
+        </div>
+        {% endif %}
+        {% else %}
+        <div style="padding:40px 20px;text-align:center;color:#16a34a;font-size:13px;">All tracked agents have records for today.</div>
+        {% endif %}
     </div>
+
 </div>
 
 {% endblock %}

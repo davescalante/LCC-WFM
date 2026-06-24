@@ -203,6 +203,18 @@ var _REQ_REQUIRED = {
     'schedule_change': ['schedule_new_start_time', 'schedule_new_end_time', 'schedule_effective_date'],
 };
 
+document.getElementById('request-form').addEventListener('submit', function(e) {
+    var type = document.getElementById('req-type').value;
+    if (type === 'schedule_change') {
+        var checked = document.querySelectorAll('[name="schedule_change_days"]:checked');
+        if (checked.length === 0) {
+            e.preventDefault();
+            alert('Please select at least one working day for the schedule change.');
+            return false;
+        }
+    }
+});
+
 function updateReqForm() {
     var type = document.getElementById('req-type').value;
     // Hide all sections and remove required from all optional fields

@@ -349,7 +349,12 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
 </div>
 
 <script>
-(function loadAdhRows() {
+let _adhLastTimestamp = null;
+let _adhLoading = false;
+
+function loadAdhRows() {
+    if (_adhLoading) return;
+    _adhLoading = true;
     const params = new URLSearchParams(window.location.search);
     const url = '/adherence/rows/?' + params.toString();
     fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
@@ -357,11 +362,34 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
         .then(data => {
             document.getElementById('adh-tbody').innerHTML = data.tbody_html;
             document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
+            _adhLoading = false;
         })
         .catch(() => {
             document.getElementById('adh-tbody').innerHTML =
                 '<tr><td colspan="22" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
+            _adhLoading = false;
         });
+}
+loadAdhRows();
+
+// Poll for remote changes every 30 seconds and reload the table if anything changed.
+(function _startPoll() {
+    const params = new URLSearchParams(window.location.search);
+    const weekStart = params.get('week_start') || '';
+    setInterval(function() {
+        if (pendingSaves > 0) return; // don't reload while the user has unsaved edits
+        fetch('/adherence/poll/?week_start=' + encodeURIComponent(weekStart))
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (!data) return;
+                if (_adhLastTimestamp === null) { _adhLastTimestamp = data.latest; return; }
+                if (data.latest && data.latest !== _adhLastTimestamp) {
+                    _adhLastTimestamp = data.latest;
+                    loadAdhRows();
+                }
+            })
+            .catch(() => {});
+    }, 30000);
 })();
 
 const STATUS_COLORS = {

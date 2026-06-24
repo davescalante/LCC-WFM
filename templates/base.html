@@ -74,16 +74,11 @@
         <a href="{% url 'adherence_dashboard' %}">Adherence</a>
         <a href="{% url 'codings_week' %}">Codings</a>
         <a href="{% url 'daily_hours' %}">Daily Hours</a>
-        <a href="{% url 'erlang_calculator' %}">Erlang Calculator</a>
-        <a href="{% url 'erlang_reports' %}">Reports</a>
+        <a href="{% url 'erlang_calculator' %}">Staffing</a>
         <a href="{% url 'requests_list' %}" style="position:relative;">Requests{% if request.supervisor_request_badge %}<span class="nav-badge">{{ request.supervisor_request_badge }}</span>{% endif %}</a>
         <a href="{% url 'records_attendance' %}">Records</a>
-        <a href="{% url 'records_separations' %}">Separations</a>
-        <a href="{% url 'activity_log' %}">Activity</a>
         {% if request.has_finance_access %}
         <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
-        <a href="{% url 'admin_codings' %}" style="color:#0f766e;">Admin Codings</a>
-        <a href="{% url 'admin_adherence' %}" style="color:#0f766e;">Admin Adherence</a>
         {% endif %}
         {% endif %}
         {% if request.user.is_authenticated %}

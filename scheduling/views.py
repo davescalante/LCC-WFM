@@ -144,9 +144,13 @@ def dashboard(request):
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
 
-    # Pending requests
-    pending_count = AgentRequest.objects.filter(status='pending').count()
+    # Pending requests — fetch top 5 for actionable list
+    pending_qs = AgentRequest.objects.filter(
+        status='pending'
+    ).select_related('agent__user').order_by('-submitted_at')
+    pending_count = pending_qs.count()
     pending_unread = AgentRequest.objects.filter(status='pending', supervisor_read=False).count()
+    pending_top5 = list(pending_qs[:5])
 
     # Today's attendance from AdherenceRecord
     today_records = list(AdherenceRecord.objects.filter(
@@ -158,14 +162,16 @@ def dashboard(request):
     attendance_vto     = sum(1 for s in today_records if s == 'vto')
     attendance_total   = len(today_records)
 
-    # Missing time: tracked agents with no adherence record today
-    tracked_ids = set(Agent.objects.filter(
+    # Agents with no adherence record today (up to 5 for the actionable list)
+    tracked_agents = Agent.objects.filter(
         track_attendance=True, status='active'
-    ).values_list('pk', flat=True))
+    ).select_related('user').order_by('user__last_name', 'user__first_name')
     recorded_ids = set(AdherenceRecord.objects.filter(
         date=today
     ).values_list('agent_id', flat=True))
-    missing_count = len(tracked_ids - recorded_ids)
+    missing_agents = [a for a in tracked_agents if a.pk not in recorded_ids]
+    missing_count = len(missing_agents)
+    missing_top5 = missing_agents[:5]
 
     # Active agents (for context)
     active_agents_count = Agent.objects.filter(status='active').count()
@@ -176,12 +182,14 @@ def dashboard(request):
         'week_end': week_end,
         'pending_count': pending_count,
         'pending_unread': pending_unread,
+        'pending_top5': pending_top5,
         'attendance_on_time': attendance_on_time,
         'attendance_tardy': attendance_tardy,
         'attendance_absent': attendance_absent,
         'attendance_vto': attendance_vto,
         'attendance_total': attendance_total,
         'missing_count': missing_count,
+        'missing_top5': missing_top5,
         'active_agents_count': active_agents_count,
     })
 
@@ -2538,17 +2546,26 @@ def agent_my_requests(request):
             ar.loa_start = request.POST.get('loa_start') or None
             ar.loa_end = request.POST.get('loa_end') or None
         elif req_type == 'schedule_change':
+            days_raw = request.POST.getlist('schedule_change_days')
+            if not days_raw:
+                messages.error(request, "Please select at least one working day for the schedule change.")
+                return redirect('agent_my_requests')
+            if not request.POST.get('schedule_new_start_time') or not request.POST.get('schedule_new_end_time'):
+                messages.error(request, "Please enter both a start time and end time for the new schedule.")
+                return redirect('agent_my_requests')
+            if not request.POST.get('schedule_effective_date'):
+                messages.error(request, "Please enter an effective date for the schedule change.")
+                return redirect('agent_my_requests')
             ar.current_schedule_desc = request.POST.get('current_schedule_desc', '').strip()
             ar.requested_schedule_desc = request.POST.get('requested_schedule_desc', '').strip()
-            ar.schedule_new_start_time = request.POST.get('schedule_new_start_time') or None
-            ar.schedule_new_end_time = request.POST.get('schedule_new_end_time') or None
-            ar.schedule_effective_date = request.POST.get('schedule_effective_date') or None
-            days_raw = request.POST.getlist('schedule_change_days')
-            if days_raw:
-                try:
-                    ar.schedule_change_days = [int(d) for d in days_raw]
-                except (ValueError, TypeError):
-                    pass
+            ar.schedule_new_start_time = request.POST.get('schedule_new_start_time')
+            ar.schedule_new_end_time = request.POST.get('schedule_new_end_time')
+            ar.schedule_effective_date = request.POST.get('schedule_effective_date')
+            try:
+                ar.schedule_change_days = [int(d) for d in days_raw]
+            except (ValueError, TypeError):
+                messages.error(request, "Invalid day selection. Please try again.")
+                return redirect('agent_my_requests')
 
         ar.save()
         log_action(request.user, f'Submitted agent request: {ar.get_request_type_display()}',

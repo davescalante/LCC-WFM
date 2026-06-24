@@ -75,6 +75,8 @@
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
         <a href="{% url 'billing_report' %}?week={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Billing Report</a>
         <a href="{% url 'payroll_report' %}?week={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Payroll Report</a>
+        <a href="{% url 'admin_codings' %}?week={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#e5e7eb;color:#374151;">Admin Codings</a>
+        <a href="{% url 'admin_adherence' %}?week={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#e5e7eb;color:#374151;">Admin Adherence</a>
         <a href="{% url 'finance_settings' %}" class="btn" style="background:#e5e7eb;color:#374151;">Settings</a>
     </div>
 </div>
