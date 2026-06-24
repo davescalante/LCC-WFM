@@ -7,7 +7,7 @@
     <a href="{% url 'overtime_list' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">Cancel</a>
 </div>
 
-{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+{% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Step 1: Pick agent and week -->
 <div class="card" style="margin-bottom:20px;">
@@ -56,7 +56,7 @@
                 background:{% if day.has_ot %}#f0fdf4{% else %}#fafafa{% endif %};">
                 <div>
                     <span style="font-weight:700;font-size:14px;color:#1a3a5c;">{{ day.name }}</span>
-                    <span style="font-size:12px;color:#888;margin-left:8px;">{{ day.date|date:"M d" }}</span>
+                    <span style="font-size:12px;color:#888;margin-left:8px;">{{ day.date|date:"M j" }}</span>
                     {% if day.has_ot %}
                     <span style="font-size:10px;color:#16a34a;font-weight:600;margin-left:8px;">OT scheduled</span>
                     {% endif %}

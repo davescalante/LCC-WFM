@@ -4,7 +4,7 @@
 
 {% if messages %}
 {% for msg in messages %}
-<div class="alert {% if 'error' in msg.tags %}badge-red{% endif %}" style="margin-bottom:16px;">{{ msg }}</div>
+<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>
 {% endfor %}
 {% endif %}
 
@@ -78,7 +78,7 @@
                     <form method="post" action="{% url 'erlang_delete_report' pk=report.pk %}" style="display:inline;"
                           onsubmit="return confirm('Delete this report?');">
                         {% csrf_token %}
-                        <button type="submit" class="btn" style="padding:4px 10px;font-size:12px;background:#fee2e2;color:#dc2626;border:none;">Delete</button>
+                        <button type="submit" class="btn btn-danger" style="padding:4px 10px;font-size:12px;">Delete</button>
                     </form>
                 </td>
             </tr>

@@ -61,11 +61,11 @@
             </tr>
             <tr>
                 <td style="font-size:13px;"><strong>Last Day Worked</strong></td>
-                <td style="font-size:13px;">{{ agent.separation.last_day_worked|date:"M d, Y" }}</td>
+                <td style="font-size:13px;">{{ agent.separation.last_day_worked|date:"M j, Y" }}</td>
             </tr>
             <tr>
                 <td style="font-size:13px;"><strong>Separation Date</strong></td>
-                <td style="font-size:13px;color:#6b7280;">{{ agent.separation.separation_date|date:"M d, Y" }}</td>
+                <td style="font-size:13px;color:#6b7280;">{{ agent.separation.separation_date|date:"M j, Y" }}</td>
             </tr>
             <tr>
                 <td style="font-size:13px;"><strong>Processed By</strong></td>
@@ -73,7 +73,7 @@
             </tr>
             <tr>
                 <td style="font-size:13px;"><strong>Processed On</strong></td>
-                <td style="font-size:13px;color:#6b7280;">{{ agent.separation.processed_at|date:"M d, Y" }}</td>
+                <td style="font-size:13px;color:#6b7280;">{{ agent.separation.processed_at|date:"M j, Y" }}</td>
             </tr>
             {% if agent.separation.notes %}
             <tr>
@@ -110,8 +110,8 @@
             <tbody>
                 {% for rh in role_history %}
                 <tr>
-                    <td style="font-size:12px;">{{ rh.effective_from|date:"M d, Y" }}</td>
-                    <td style="font-size:12px;">{% if rh.effective_to %}{{ rh.effective_to|date:"M d, Y" }}{% else %}<span style="color:#15803d;font-weight:600;">Present</span>{% endif %}</td>
+                    <td style="font-size:12px;">{{ rh.effective_from|date:"M j, Y" }}</td>
+                    <td style="font-size:12px;">{% if rh.effective_to %}{{ rh.effective_to|date:"M j, Y" }}{% else %}<span style="color:#15803d;font-weight:600;">Present</span>{% endif %}</td>
                     <td style="font-size:12px;">{{ rh.role }}</td>
                     <td style="font-size:12px;">{{ rh.role_type|default:"—" }}</td>
                     <td style="font-size:12px;">{{ rh.supervisor|default:"—" }}</td>
@@ -139,7 +139,7 @@
         {% for eff_from, tmpl_list in schedule_history %}
         <div style="margin-bottom:16px;">
             <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #eee;">
-                Effective from: {% if eff_from.year == 2000 and eff_from.month == 1 and eff_from.day == 1 %}(legacy){% else %}{{ eff_from|date:"M d, Y" }}{% endif %}
+                Effective from: {% if eff_from.year == 2000 and eff_from.month == 1 and eff_from.day == 1 %}(legacy){% else %}{{ eff_from|date:"M j, Y" }}{% endif %}
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 {% for t in tmpl_list %}
@@ -189,7 +189,7 @@
             <tbody>
                 {% for wk in attendance_weeks %}
                 <tr>
-                    <td style="font-size:11px;white-space:nowrap;">{{ wk.week_start|date:"M d" }}</td>
+                    <td style="font-size:11px;white-space:nowrap;">{{ wk.week_start|date:"M j" }}</td>
                     {% for d in wk.days %}
                     <td style="font-size:11px;text-align:center;">
                         {% if d.status %}
@@ -247,7 +247,7 @@
             <tbody>
                 {% for c in codings %}
                 <tr>
-                    <td style="font-size:11px;">{{ c.date|date:"M d, Y" }}</td>
+                    <td style="font-size:11px;">{{ c.date|date:"M j, Y" }}</td>
                     <td style="font-size:11px;">{{ c.start_time|time:"H:i" }}</td>
                     <td style="font-size:11px;">{{ c.end_time|time:"H:i" }}</td>
                     <td style="font-size:11px;">{{ c.total_hhmmss }}</td>
@@ -289,7 +289,7 @@
             <tbody>
                 {% for s in ot_shifts %}
                 <tr>
-                    <td style="font-size:11px;">{{ s.date|date:"M d, Y" }}</td>
+                    <td style="font-size:11px;">{{ s.date|date:"M j, Y" }}</td>
                     <td style="font-size:11px;">{{ s.start_time|time:"H:i" }}</td>
                     <td style="font-size:11px;">{{ s.end_time|time:"H:i" }}</td>
                     <td style="font-size:11px;text-align:right;">{{ s.total_shift_hours }}</td>

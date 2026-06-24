@@ -12,7 +12,7 @@
 
 {% if messages %}
 {% for msg in messages %}
-<div class="alert {% if msg.tags == 'error' %}badge-red{% endif %}" style="margin-bottom:16px;">{{ msg }}</div>
+<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>
 {% endfor %}
 {% endif %}
 
@@ -125,7 +125,7 @@
             <textarea name="notes" rows="3" placeholder="Explain your request in your own words..."></textarea>
             <div style="display:flex;gap:10px;margin-top:4px;">
                 <button type="submit" class="btn btn-primary">Submit Request</button>
-                <button type="button" class="btn" style="background:#e2e8f0;color:#374151;" onclick="hideRequestForm()">Cancel</button>
+                <button type="button" class="btn btn-cancel" onclick="hideRequestForm()">Cancel</button>
             </div>
         </div>
     </form>
@@ -213,6 +213,8 @@ document.getElementById('request-form').addEventListener('submit', function(e) {
             return false;
         }
     }
+    var btn = this.querySelector('button[type=submit]');
+    if (btn) btn.disabled = true;
 });
 
 function updateReqForm() {

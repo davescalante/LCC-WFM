@@ -237,7 +237,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="th-day {% if d == today %}col-today{% endif %}">
                 {% if d == today %}<div class="day-today-label">TODAY</div>{% endif %}
                 <div class="day-name">{{ d|date:"D" }}</div>
-                <div class="day-date">{{ d|date:"M d" }}</div>
+                <div class="day-date">{{ d|date:"M j" }}</div>
             </th>
             {% endfor %}
             <th class="th-sum th-p border-l" style="color:#27ae60;">P</th>

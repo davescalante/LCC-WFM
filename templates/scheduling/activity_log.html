@@ -57,7 +57,7 @@
         {% for entry in logs %}
         <tr style="border-bottom:1px solid #f0f0f0;">
             <td style="padding:9px 14px;font-size:12px;color:#888;white-space:nowrap;font-family:monospace;">
-                {{ entry.timestamp|date:"M d, Y" }}<br>
+                {{ entry.timestamp|date:"M j, Y" }}<br>
                 <span style="color:#aaa;">{{ entry.timestamp|date:"H:i:s" }}</span>
             </td>
             <td style="padding:9px 14px;font-size:13px;font-weight:600;color:#1a3a5c;white-space:nowrap;">

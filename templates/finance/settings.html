@@ -17,7 +17,7 @@
 <div class="card" style="margin-bottom:20px;">
     <h2 style="margin-bottom:6px;">Current Settings</h2>
     <p style="font-size:13px;color:#888;margin-bottom:20px;">
-        Effective from week of {{ settings.week_start|date:"M d, Y"|default:"(legacy)" }}.
+        Effective from week of {{ settings.week_start|date:"M j, Y"|default:"(legacy)" }}.
         Changes take effect for the week you specify below — past weeks always use the rates that were active then.
     </p>
 
@@ -145,7 +145,7 @@
             <tbody>
                 {% for h in history %}
                 <tr>
-                    <td>{{ h.week_start|date:"M d, Y" }}</td>
+                    <td>{{ h.week_start|date:"M j, Y" }}</td>
                     <td>${{ h.billing_rate_usd }}</td>
                     <td>{{ h.usd_to_mxn }}</td>
                     <td>${{ h.adherence_bonus_max_mxn }}</td>

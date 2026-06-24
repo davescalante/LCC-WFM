@@ -64,7 +64,7 @@ tbody tr.row-b td.fc { background:#f9fafb; }
     <a href="{% url 'shift_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">+ Add / Edit Weekly Schedule</a>
 </div>
 
-{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+{% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Filters -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
@@ -144,7 +144,7 @@ tbody tr.row-b td.fc { background:#f9fafb; }
             {% for d in week_dates %}
             <th {% if d == today %}class="col-today"{% endif %}>
                 <div>{{ d|date:"D" }}</div>
-                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+                <div style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M j" }}</div>
             </th>
             {% endfor %}
             <th class="act-hdr">Actions</th>

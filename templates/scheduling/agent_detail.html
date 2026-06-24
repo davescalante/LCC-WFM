@@ -9,14 +9,14 @@
        style="padding:8px 20px;font-size:13px;font-weight:600;color:#888;text-decoration:none;">History</a>
 </div>
 
-{% if messages %}{% for msg in messages %}<div class="alert" {% if 'error' in msg.tags %}style="background:#fee2e2;color:#991b1b;"{% endif %}>{{ msg }}</div>{% endfor %}{% endif %}
+{% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
 
 {% if agent.separation and agent.separation.status == 'in_progress' %}
 <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:flex-start;gap:14px;">
     <span style="font-size:20px;line-height:1;">&#9888;</span>
     <div style="flex:1;">
         <div style="font-weight:600;font-size:14px;color:#92400e;margin-bottom:2px;">Separation In Progress &mdash; {{ agent.separation.get_separation_type_display }}</div>
-        <div style="font-size:13px;color:#78350f;">Last Day Worked: {{ agent.separation.last_day_worked|date:"M d, Y" }} &middot; Opened by {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username }}</div>
+        <div style="font-size:13px;color:#78350f;">Last Day Worked: {{ agent.separation.last_day_worked|date:"M j, Y" }} &middot; Opened by {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username }}</div>
         {% if agent.separation.notes %}<div style="font-size:12px;color:#a16207;margin-top:3px;font-style:italic;">{{ agent.separation.notes }}</div>{% endif %}
     </div>
     <a href="{% url 'agent_history' agent.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#fef3c7;color:#92400e;white-space:nowrap;">View History</a>
@@ -29,14 +29,14 @@
         <div style="font-size:13px;color:#6b7280;line-height:1.6;">
             <strong>Type:</strong> {{ agent.separation.get_separation_type_display }}
             &nbsp;&middot;&nbsp;
-            <strong>Last Day Worked:</strong> {{ agent.separation.last_day_worked|date:"M d, Y" }}
+            <strong>Last Day Worked:</strong> {{ agent.separation.last_day_worked|date:"M j, Y" }}
             {% if agent.separation.remove_from_adherence_date %}
             &nbsp;&middot;&nbsp;
-            <strong>Off Adherence From:</strong> {{ agent.separation.remove_from_adherence_date|date:"M d, Y" }}
+            <strong>Off Adherence From:</strong> {{ agent.separation.remove_from_adherence_date|date:"M j, Y" }}
             {% endif %}
             &nbsp;&middot;&nbsp;
             <strong>Processed by:</strong> {{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username|default:"&mdash;" }}
-            on {{ agent.separation.processed_at|date:"M d, Y" }}
+            on {{ agent.separation.processed_at|date:"M j, Y" }}
         </div>
         {% if agent.separation.notes %}
         <div style="font-size:12px;color:#9ca3af;margin-top:4px;font-style:italic;">{{ agent.separation.notes }}</div>
@@ -391,7 +391,7 @@
         </div>
         <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
             Separation type: <strong>{{ agent.separation.get_separation_type_display }}</strong><br>
-            Last day worked: <strong>{{ agent.separation.last_day_worked|date:"M d, Y" }}</strong>
+            Last day worked: <strong>{{ agent.separation.last_day_worked|date:"M j, Y" }}</strong>
         </p>
         <form method="post" action="{% url 'update_separation' agent.pk %}" id="finalize-form">
             {% csrf_token %}

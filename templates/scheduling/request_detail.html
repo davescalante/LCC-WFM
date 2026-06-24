@@ -8,7 +8,7 @@
 
 {% if messages %}
 {% for msg in messages %}
-<div class="alert {% if 'error' in msg.tags %}badge-red{% elif 'warning' in msg.tags %}badge-yellow{% endif %}" style="margin-bottom:16px;">{{ msg }}</div>
+<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>
 {% endfor %}
 {% endif %}
 
@@ -34,7 +34,7 @@
         <div style="font-size:13px;color:#555;line-height:2;">
             <div><strong>Agent:</strong> {{ ar.agent }}</div>
             <div><strong>Type:</strong> {{ ar.get_request_type_display }}</div>
-            <div><strong>Submitted:</strong> {{ ar.submitted_at|date:"M j, Y g:i A" }}</div>
+            <div><strong>Submitted:</strong> {{ ar.submitted_at|date:"M j, Y" }} at {{ ar.submitted_at|time:"H:i" }}</div>
         </div>
 
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:12px 0;">
@@ -73,7 +73,7 @@
         {% elif ar.request_type == 'schedule_change' %}
             <div style="font-size:13px;color:#555;line-height:1.8;">
                 {% if ar.schedule_new_start_time %}
-                <div><strong>New Shift:</strong> {{ ar.schedule_new_start_time|time:"g:i A" }} – {{ ar.schedule_new_end_time|time:"g:i A" }}</div>
+                <div><strong>New Shift:</strong> {{ ar.schedule_new_start_time|time:"H:i" }} – {{ ar.schedule_new_end_time|time:"H:i" }}</div>
                 {% endif %}
                 {% if ar.schedule_change_days %}
                 <div><strong>Working Days:</strong>
@@ -127,18 +127,18 @@
         {% if ar.status == 'pending' %}
         <div class="card">
             <h2>Actions</h2>
-            <form method="post" action="{% url 'request_approve' pk=ar.pk %}" style="display:inline;">
+            <form method="post" action="{% url 'request_approve' pk=ar.pk %}" style="display:inline;" onsubmit="this.querySelector('button').disabled=true;">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-primary" style="margin-right:8px;margin-bottom:8px;">Approve</button>
             </form>
-            <button class="btn" style="background:#fee2e2;color:#dc2626;margin-bottom:8px;" onclick="document.getElementById('reject-section').style.display='block';this.style.display='none';">Reject</button>
+            <button class="btn btn-danger" style="margin-bottom:8px;" onclick="document.getElementById('reject-section').style.display='block';this.style.display='none';">Reject</button>
 
             <div id="reject-section" style="display:none;margin-top:12px;">
-                <form method="post" action="{% url 'request_reject' pk=ar.pk %}">
+                <form method="post" action="{% url 'request_reject' pk=ar.pk %}" onsubmit="this.querySelector('button[type=submit]').disabled=true;">
                     {% csrf_token %}
                     <label style="font-size:13px;">Rejection Reason <span style="font-weight:400;color:#888;">(optional)</span></label>
                     <textarea name="rejection_reason" rows="3" placeholder="Explain why this request was rejected…" style="font-size:13px;"></textarea>
-                    <button type="submit" class="btn" style="background:#dc2626;color:white;">Confirm Rejection</button>
+                    <button type="submit" class="btn btn-danger-solid">Confirm Rejection</button>
                 </form>
             </div>
         </div>
@@ -156,7 +156,7 @@
         </div>
         {% elif ar.status == 'approved' %}
         <div class="card">
-            <form method="post" action="{% url 'request_mark_done' pk=ar.pk %}">
+            <form method="post" action="{% url 'request_mark_done' pk=ar.pk %}" onsubmit="this.querySelector('button').disabled=true;">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-primary">Mark as Done</button>
             </form>

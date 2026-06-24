@@ -96,10 +96,10 @@
                         {{ sep.status }}
                     {% endif %}
                 </td>
-                <td style="font-size:13px;white-space:nowrap;">{{ sep.last_day_worked|date:"M d, Y" }}</td>
-                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.remove_from_adherence_date|date:"M d, Y"|default:"&mdash;" }}</td>
+                <td style="font-size:13px;white-space:nowrap;">{{ sep.last_day_worked|date:"M j, Y" }}</td>
+                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.remove_from_adherence_date|date:"M j, Y"|default:"&mdash;" }}</td>
                 <td style="font-size:13px;">{{ sep.processed_by.get_full_name|default:sep.processed_by.username|default:"&mdash;" }}</td>
-                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.processed_at|date:"M d, Y" }}</td>
+                <td style="font-size:13px;white-space:nowrap;color:#6b7280;">{{ sep.processed_at|date:"M j, Y" }}</td>
                 <td style="font-size:12px;color:#6b7280;max-width:200px;">{{ sep.notes|truncatechars:60|default:"&mdash;" }}</td>
                 <td><a href="{% url 'agent_history' sep.agent.pk %}" class="btn" style="padding:4px 10px;font-size:12px;background:#f0f4f8;color:#1a3a5c;">History</a></td>
             </tr>

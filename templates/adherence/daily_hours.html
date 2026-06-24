@@ -40,7 +40,7 @@
         <div style="display:flex;align-items:center;gap:12px;">
             <div>
                 <span style="font-size:15px;font-weight:700;color:#1a3a5c;">{{ slot.date|date:"l" }}</span>
-                <span style="font-size:13px;color:#888;margin-left:6px;">{{ slot.date|date:"M d, Y" }}</span>
+                <span style="font-size:13px;color:#888;margin-left:6px;">{{ slot.date|date:"M j, Y" }}</span>
             </div>
             {% if slot.upload %}
                 {% if slot.upload.unmatched_count > 0 %}
@@ -51,7 +51,7 @@
                 </button>
                 {% endif %}
                 <span class="badge badge-green">✓ {{ slot.upload.row_count }} agents</span>
-                <span style="font-size:11px;color:#888;">{{ slot.upload.filename }} &nbsp;·&nbsp; uploaded {{ slot.upload.uploaded_at|date:"M d \a\t g:i A" }}</span>
+                <span style="font-size:11px;color:#888;">{{ slot.upload.filename }} &nbsp;·&nbsp; uploaded {{ slot.upload.uploaded_at|date:"M j" }} at {{ slot.upload.uploaded_at|time:"H:i" }}</span>
             {% else %}
                 <span style="font-size:13px;color:#aaa;">No file uploaded</span>
             {% endif %}

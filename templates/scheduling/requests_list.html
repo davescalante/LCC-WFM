@@ -44,7 +44,7 @@
 </div>
 
 {% if messages %}
-{% for msg in messages %}<div class="alert" style="margin-bottom:12px;">{{ msg }}</div>{% endfor %}
+{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}
 {% endif %}
 
 {% if pending %}

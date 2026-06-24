@@ -6,7 +6,7 @@
     <div>
         <h1 style="margin:0;">Finance Dashboard</h1>
         <div style="font-size:13px;color:#888;margin-top:4px;">
-            Week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }}
+            Week of {{ week_start|date:"M j" }} &ndash; {{ week_end|date:"M j, Y" }}
         </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -63,7 +63,7 @@
         <div class="number" style="font-size:28px;color:#1a3a5c;">{{ settings.usd_to_mxn }}</div>
         <div class="label">Exchange Rate</div>
         <div style="margin-top:6px;font-size:12px;color:#9ca3af;">
-            MXN/USD &nbsp;&middot;&nbsp; Rate saved on {{ settings.usd_to_mxn_updated|date:"M d, Y"|default:"Not set" }}
+            MXN/USD &nbsp;&middot;&nbsp; Rate saved on {{ settings.usd_to_mxn_updated|date:"M j, Y"|default:"Not set" }}
         </div>
     </div>
 
@@ -85,7 +85,7 @@
     {% if week_start|date:"Y-m-d" == current_week %}
     Data shown is for the current week to date and may be incomplete. Final reports are available after the week closes.
     {% else %}
-    Showing data for week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }} using rates effective that week.
+    Showing data for week of {{ week_start|date:"M j" }} &ndash; {{ week_end|date:"M j, Y" }} using rates effective that week.
     {% endif %}
 </div>
 

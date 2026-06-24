@@ -8,7 +8,7 @@
         <a href="?week_start={{ prev_week|date:'Y-m-d' }}"
             style="padding:6px 14px;border:1px solid #ddd;border-radius:4px;font-size:13px;color:#333;text-decoration:none;background:#fff;">← Prev</a>
         <span style="font-size:14px;font-weight:600;color:#1a3a5c;white-space:nowrap;">
-            {{ week_start|date:"M d" }} – {{ week_end|date:"M d, Y" }}
+            {{ week_start|date:"M j" }} – {{ week_end|date:"M j, Y" }}
         </span>
         <a href="?week_start={{ next_week|date:'Y-m-d' }}"
             style="padding:6px 14px;border:1px solid #ddd;border-radius:4px;font-size:13px;color:#333;text-decoration:none;background:#fff;">Next →</a>
@@ -164,7 +164,7 @@
     <div style="margin-top:12px;border-top:1px solid #f0f4f8;padding-top:10px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
         <div style="font-size:11px;color:#6b7280;">
             <span style="font-weight:600;color:#374151;">Last calculated:</span>
-            {{ week_params.updated_at|date:"M j, Y" }} at {{ week_params.updated_at|time:"g:i A" }}
+            {{ week_params.updated_at|date:"M j, Y" }} at {{ week_params.updated_at|time:"H:i" }}
             by <strong style="color:#1a3a5c;">{{ week_params.calculated_by.get_full_name|default:week_params.calculated_by.username }}</strong>
             &nbsp;&mdash;&nbsp;
             AHT <strong>{{ week_params.aht_seconds }}s</strong>
@@ -175,7 +175,7 @@
         {% if week_params.csv_uploaded_at %}
         <div style="font-size:11px;color:#6b7280;">
             <span style="font-weight:600;color:#374151;">Last upload:</span>
-            {{ week_params.csv_uploaded_at|date:"M j, Y" }} at {{ week_params.csv_uploaded_at|time:"g:i A" }}
+            {{ week_params.csv_uploaded_at|date:"M j, Y" }} at {{ week_params.csv_uploaded_at|time:"H:i" }}
             by <strong style="color:#1a3a5c;">{{ week_params.csv_uploaded_by.get_full_name|default:week_params.csv_uploaded_by.username }}</strong>
         </div>
         {% endif %}
@@ -331,7 +331,7 @@
                     style="width:280px;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
                 <button type="submit" class="btn btn-primary" style="padding:7px 16px;font-size:13px;">Save</button>
                 <button type="button" onclick="toggleSaveReport()"
-                    class="btn" style="background:#e2e8f0;color:#374151;padding:7px 12px;font-size:13px;">Cancel</button>
+                    class="btn btn-cancel" style="padding:7px 12px;font-size:13px;">Cancel</button>
             </form>
         </div>
     </div>

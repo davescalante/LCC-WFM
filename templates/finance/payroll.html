@@ -11,7 +11,7 @@
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
         <a href="?week={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; {{ prev_week }}</a>
-        <strong style="font-size:16px;">Week of {{ week_start|date:"M d" }} &ndash; {{ week_end|date:"M d, Y" }}</strong>
+        <strong style="font-size:16px;">Week of {{ week_start|date:"M j" }} &ndash; {{ week_end|date:"M j, Y" }}</strong>
         <a href="?week={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">{{ next_week }} &#8594;</a>
     </div>
 </div>

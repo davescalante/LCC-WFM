@@ -71,7 +71,7 @@
         <tbody>
             {% for e in entries %}
             <tr>
-                <td style="font-size:11px;white-space:nowrap;color:#888;">{{ e.changed_at|date:"M d, Y" }}</td>
+                <td style="font-size:11px;white-space:nowrap;color:#888;">{{ e.changed_at|date:"M j, Y" }}</td>
                 <td style="font-size:12px;">
                     <a href="{% url 'agent_history' e.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ e.agent }}</a>
                 </td>
@@ -80,10 +80,10 @@
                 <td style="font-size:12px;color:#555;">{{ e.role_type|default:"—" }}</td>
                 <td style="font-size:12px;color:#555;">{{ e.employer|default:"—" }}</td>
                 <td style="font-size:12px;color:#555;">{{ e.billing_status|default:"—" }}</td>
-                <td style="font-size:12px;white-space:nowrap;">{{ e.effective_from|date:"M d, Y" }}</td>
+                <td style="font-size:12px;white-space:nowrap;">{{ e.effective_from|date:"M j, Y" }}</td>
                 <td style="font-size:12px;white-space:nowrap;">
                     {% if e.effective_to %}
-                    {{ e.effective_to|date:"M d, Y" }}
+                    {{ e.effective_to|date:"M j, Y" }}
                     {% else %}
                     <span style="color:#15803d;font-weight:600;">Present</span>
                     {% endif %}

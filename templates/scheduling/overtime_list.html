@@ -73,7 +73,7 @@
     </div>
 </div>
 
-{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+{% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Filters -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
@@ -140,7 +140,7 @@
                 {% if d == today %}class="col-today-th"{% endif %}>
                 {% if d == today %}<span class="col-today-label">TODAY</span>{% endif %}
                 <div class="ot-day-name" style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
-                <div class="ot-day-date" style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M d" }}</div>
+                <div class="ot-day-date" style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M j" }}</div>
             </th>
             {% endfor %}
             <th style="min-width:90px;padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:12px;">Offered</th>

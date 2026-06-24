@@ -96,7 +96,7 @@
         <tbody>
             {% for r in rows %}
             <tr>
-                <td style="font-size:12px;white-space:nowrap;">{{ r.week_start|date:"M d, Y" }}</td>
+                <td style="font-size:12px;white-space:nowrap;">{{ r.week_start|date:"M j, Y" }}</td>
                 <td style="font-size:12px;">
                     <a href="{% url 'agent_history' r.agent.pk %}" style="color:#1a3a5c;text-decoration:none;">{{ r.agent }}</a>
                 </td>

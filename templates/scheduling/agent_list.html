@@ -11,7 +11,7 @@
     <h1>Users</h1>
     <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add User</a>
 </div>
-{% if messages %}{% for msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
+{% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Filters -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
