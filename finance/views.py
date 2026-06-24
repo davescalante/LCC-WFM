@@ -1,4 +1,6 @@
-from datetime import date, timedelta
+import json
+from datetime import date, timedelta, time as time_cls
+from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
@@ -736,9 +738,6 @@ def finance_settings(request):
 @finance_access_required
 def admin_codings(request):
     """Codings for Official Admins and coordinators against their billable Five9 user."""
-    from django.utils import timezone
-    from adherence.models import Coding
-
     week_start = _get_week_start(request)
     week_dates = _week_dates(week_start)
     week_end = week_dates[-1]
@@ -800,11 +799,7 @@ def admin_codings(request):
 @finance_access_required
 @require_POST
 def add_admin_coding_ajax(request):
-    import json as _json
-    from adherence.models import Coding
-    from datetime import time as time_cls
-
-    data = _json.loads(request.body)
+    data = json.loads(request.body)
     agent_id = data.get('agent_id')
     date_str = data.get('date')
     start_time = data.get('start_time', '').strip()
@@ -859,11 +854,7 @@ def add_admin_coding_ajax(request):
 @finance_access_required
 @require_POST
 def edit_admin_coding_ajax(request):
-    import json as _json
-    from adherence.models import Coding
-    from datetime import time as time_cls
-
-    data = _json.loads(request.body)
+    data = json.loads(request.body)
     coding_id = data.get('coding_id')
     start_time = data.get('start_time', '').strip()
     end_time = data.get('end_time', '').strip()
@@ -910,10 +901,7 @@ def edit_admin_coding_ajax(request):
 @finance_access_required
 @require_POST
 def delete_admin_coding_ajax(request):
-    import json as _json
-    from adherence.models import Coding
-
-    data = _json.loads(request.body)
+    data = json.loads(request.body)
     coding_id = data.get('coding_id')
     deleted, _ = Coding.objects.filter(pk=coding_id, is_admin_coding=True).delete()
     if deleted:
@@ -928,8 +916,7 @@ def delete_admin_coding_ajax(request):
 def admin_adherence(request):
     """Adherence tab for Official Admins only — super admin access."""
     from adherence.views import _build_maps, _build_rows
-    from adherence.models import AdherenceRecord, AdherenceNote, Coding as _Coding
-    from django.utils import timezone as _tz
+    from adherence.models import AdherenceNote
     from django.db.models import Count as _Count
 
     week_start = _get_week_start(request)
@@ -949,7 +936,7 @@ def admin_adherence(request):
 
     # Coded map uses admin codings, not regular codings
     coded_map = {}
-    for c in _Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
+    for c in Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
         coded_map[(c.agent_id, c.date)] = coded_map.get((c.agent_id, c.date), Decimal('0')) + Decimal(str(c.total_hours()))
 
     rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
@@ -992,7 +979,7 @@ def admin_adherence(request):
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
-        'today': _tz.localdate(),
+        'today': timezone.localdate(),
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'status_choices': AdherenceRecord.STATUS_CHOICES,
@@ -1007,7 +994,6 @@ def admin_adherence_export(request):
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
     from adherence.views import _build_maps, _build_rows
-    from adherence.models import Coding as _Coding
 
     week_start = _get_week_start(request)
     billing_settings = BillingSettings.get_for_week(week_start)
@@ -1025,7 +1011,7 @@ def admin_adherence_export(request):
     shift_map, record_map, _, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
 
     coded_map = {}
-    for c in _Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
+    for c in Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
         coded_map[(c.agent_id, c.date)] = coded_map.get((c.agent_id, c.date), Decimal('0')) + Decimal(str(c.total_hours()))
 
     rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,

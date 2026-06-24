@@ -52,8 +52,8 @@ class Agent(models.Model):
     ]
     phone_country_code = models.CharField(max_length=5, choices=COUNTRY_CODE_CHOICES, default='+1', blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
-    five9_username = models.CharField(max_length=150, blank=True)
-    five9_password = models.CharField(max_length=150, blank=True)
+    five9_username = models.CharField(max_length=150, blank=True)  # legacy; superseded by Five9Profile
+    five9_password = models.CharField(max_length=150, blank=True)  # legacy; superseded by Five9Profile
     teams_password = models.CharField(max_length=150, blank=True)
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name='direct_reports'
