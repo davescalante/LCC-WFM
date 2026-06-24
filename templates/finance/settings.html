@@ -82,6 +82,30 @@
             </div>
 
             <div>
+                <label for="id_nr_ratio">NR Allowance Ratio</label>
+                <input type="number" id="id_nr_ratio" name="nr_ratio"
+                    step="0.0001" min="0" max="1"
+                    value="{{ settings.nr_ratio|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Fraction of (login + codings) time allowed as NR before deduction kicks in (default 0.125 = 12.5%)</p>
+            </div>
+
+            <div>
+                <label for="id_nr_ratio_max_hours">NR Ratio Check — Max Hours</label>
+                <input type="number" id="id_nr_ratio_max_hours" name="nr_ratio_max_hours"
+                    step="1" min="0"
+                    value="{{ settings.nr_ratio_max_hours|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">NR ratio deduction only applies when weekly pre-NR hours &le; this value (default 48)</p>
+            </div>
+
+            <div>
+                <label for="id_default_tardy_hours">Default Tardy Hours</label>
+                <input type="number" id="id_default_tardy_hours" name="default_tardy_hours"
+                    step="0.25" min="0"
+                    value="{{ settings.default_tardy_hours|default:'' }}">
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">Hours assumed lost for a Tardy day when no actual login was recorded (default 0.25 = 15 min)</p>
+            </div>
+
+            <div>
                 <label for="id_effective_week">Effective From Week</label>
                 <input type="date" id="id_effective_week" name="effective_week"
                     value="{{ current_week|date:'Y-m-d' }}">
@@ -111,6 +135,9 @@
                     <th>Admin Bonus</th>
                     <th>NR Cap Regular</th>
                     <th>NR Cap Kill Team</th>
+                    <th>NR Ratio</th>
+                    <th>NR Ratio Max Hrs</th>
+                    <th>Default Tardy Hrs</th>
                     <th>Saved By</th>
                     <th>Saved At</th>
                 </tr>
@@ -126,6 +153,9 @@
                     <td>${{ h.default_admin_bonus_mxn }}</td>
                     <td>{{ h.nr_cap_regular_hours }}h</td>
                     <td>{{ h.nr_cap_kill_team_hours }}h</td>
+                    <td>{{ h.nr_ratio }}</td>
+                    <td>{{ h.nr_ratio_max_hours }}h</td>
+                    <td>{{ h.default_tardy_hours }}h</td>
                     <td>{{ h.changed_by.get_full_name|default:h.changed_by.username|default:"(seed)" }}</td>
                     <td style="white-space:nowrap;font-size:12px;color:#888;">{{ h.changed_at|date:"M d, Y H:i" }}</td>
                 </tr>
@@ -170,7 +200,10 @@ var _current = {
     adherence_bonus_max_mxn: "{{ settings.adherence_bonus_max_mxn }}",
     adherence_bonus_full_hours: "{{ settings.adherence_bonus_full_hours }}",
     nr_cap_regular_hours: "{{ settings.nr_cap_regular_hours }}",
-    nr_cap_kill_team_hours: "{{ settings.nr_cap_kill_team_hours }}"
+    nr_cap_kill_team_hours: "{{ settings.nr_cap_kill_team_hours }}",
+    nr_ratio: "{{ settings.nr_ratio }}",
+    nr_ratio_max_hours: "{{ settings.nr_ratio_max_hours }}",
+    default_tardy_hours: "{{ settings.default_tardy_hours }}"
 };
 
 var _labels = {
@@ -180,7 +213,10 @@ var _labels = {
     adherence_bonus_max_mxn: 'Adherence Bonus Max (MXN)',
     adherence_bonus_full_hours: 'Adh. Bonus Full Hours',
     nr_cap_regular_hours: 'NR Cap — Regular (hrs)',
-    nr_cap_kill_team_hours: 'NR Cap — Kill Team (hrs)'
+    nr_cap_kill_team_hours: 'NR Cap — Kill Team (hrs)',
+    nr_ratio: 'NR Allowance Ratio',
+    nr_ratio_max_hours: 'NR Ratio Max Hours',
+    default_tardy_hours: 'Default Tardy Hours'
 };
 
 function reviewChanges() {

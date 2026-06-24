@@ -160,8 +160,8 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         total_nr_hrs = Decimal(str(nr_secs_map.get(aid, 0))) / Decimal('3600')
         nr_cap = settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team' else settings.nr_cap_regular_hours
         check1_ded = max(Decimal('0'), total_nr_hrs - nr_cap)
-        if pre_total <= Decimal('48'):
-            check2_ded = max(Decimal('0'), total_nr_hrs - raw_login_hrs * Decimal('0.125'))
+        if pre_total <= settings.nr_ratio_max_hours:
+            check2_ded = max(Decimal('0'), total_nr_hrs - raw_login_hrs * settings.nr_ratio)
         else:
             check2_ded = Decimal('0')
         nr_deduction = max(check1_ded, check2_ded)
@@ -693,6 +693,9 @@ def finance_settings(request):
                 'default_admin_bonus_mxn':Decimal(request.POST.get('default_admin_bonus_mxn', str(singleton.default_admin_bonus_mxn))),
                 'adherence_bonus_max_mxn':Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn))),
                 'adherence_bonus_full_hours': Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours))),
+                'nr_ratio':               Decimal(request.POST.get('nr_ratio', str(singleton.nr_ratio))),
+                'nr_ratio_max_hours':     Decimal(request.POST.get('nr_ratio_max_hours', str(singleton.nr_ratio_max_hours))),
+                'default_tardy_hours':    Decimal(request.POST.get('default_tardy_hours', str(singleton.default_tardy_hours))),
             }
 
             with transaction.atomic():

@@ -21,13 +21,7 @@ from wfm.utils import get_week_start, parse_week_param, get_billable_username_ma
 
 
 def _refresh_actual_hours(agent_id, coding_date):
-    """Recalculate AdherenceRecord.actual_hours after a coding change.
-
-    When codings are added or removed for a date that already has a daily
-    upload, the not-ready allowance (12.5% of login+codings) changes, so the
-    stored actual_hours must be recomputed to stay consistent with the Daily
-    Hours tab.
-    """
+    """Recalculate AdherenceRecord.actual_hours after a coding change."""
     billable_usernames = list(
         Five9Profile.objects.filter(agent_id=agent_id, billable=True)
         .values_list('five9_username', flat=True)
@@ -48,12 +42,15 @@ def _refresh_actual_hours(agent_id, coding_date):
         ).first()
     if not dah:
         return
+    from finance.models import BillingSettings as _BillingSettings
+    _week = coding_date - timedelta(days=coding_date.weekday())
+    _settings = _BillingSettings.get_for_week(_week)
     coded_secs = sum(
         c.total_seconds_count()
         for c in Coding.objects.filter(agent_id=agent_id, date=coding_date, is_admin_coding=False)
     )
     total_secs = dah.login_seconds + coded_secs
-    allowance_secs = int(total_secs * 0.125)
+    allowance_secs = int(total_secs * float(_settings.nr_ratio))
     excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
     login_final_secs = max(0, dah.login_seconds - excess_secs)
     final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
@@ -195,7 +192,7 @@ def _cos_color(pct):
     return '#dc2626'
 
 
-def _calculate_cos(rows, week_dates):
+def _calculate_cos(rows, week_dates, default_tardy=_DEFAULT_TARDY):
     """
     Returns (day_data list, cos_week dict) for Cost of Schedule.
     day_data has one entry per day with pct, breakdown, and color.
@@ -231,7 +228,7 @@ def _calculate_cos(rows, week_dates):
                 raw_loss += sched_hrs
                 absent_count += 1
             elif status in ('T', 'T+I'):
-                lost = max(Decimal('0'), sched_hrs - actual_hrs) if actual_hrs > 0 else _DEFAULT_TARDY
+                lost = max(Decimal('0'), sched_hrs - actual_hrs) if actual_hrs > 0 else default_tardy
                 raw_loss += lost
                 tardy_loss += lost
                 tardy_count += 1
@@ -955,7 +952,7 @@ def adherence_rows_fragment(request):
             cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
     show_cos = True
-    cos_days, cos_week = _calculate_cos(rows, week_dates) if show_cos else ([], {})
+    cos_days, cos_week = _calculate_cos(rows, week_dates, default_tardy=_week_billing.default_tardy_hours) if show_cos else ([], {})
 
     ctx = {
         'rows': rows,
@@ -1249,6 +1246,10 @@ def daily_hours_week(request):
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     week_end = week_dates[-1]
 
+    from finance.models import BillingSettings as _BS
+    _settings = _BS.get_for_week(week_start)
+    _nr_ratio = float(_settings.nr_ratio)
+
     supervisor_id, supervisors = _get_supervisor_filter(request)
 
     codings_map = {}
@@ -1278,7 +1279,7 @@ def daily_hours_week(request):
             for dah in dah_qs:
                 coded_secs = codings_map.get((dah.agent_id, day_date), 0) if dah.agent_id else 0
                 total_secs = dah.login_seconds + coded_secs
-                allowance_secs = int(total_secs * 0.125)
+                allowance_secs = int(total_secs * _nr_ratio)
                 excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
                 final_secs = max(0, total_secs - excess_secs)
                 rows.append({
@@ -1381,6 +1382,10 @@ def upload_daily_file(request):
 
     # Build lookup from Five9 username → Agent using Five9Profile table
     # so agents with multiple Five9 accounts all resolve to the same person
+    from finance.models import BillingSettings as _BillingSettings
+    _upload_week = upload_date - timedelta(days=upload_date.weekday())
+    _upload_nr_ratio = float(_BillingSettings.get_for_week(_upload_week).nr_ratio)
+
     agent_map = {
         p.five9_username.strip().lower(): p.agent
         for p in Five9Profile.objects.filter(
@@ -1446,7 +1451,7 @@ def upload_daily_file(request):
             for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
         )
         total_secs = dah.login_seconds + coded_secs
-        allowance_secs = int(total_secs * 0.125)
+        allowance_secs = int(total_secs * _upload_nr_ratio)
         excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
         login_final_secs = max(0, dah.login_seconds - excess_secs)
         final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
@@ -1486,6 +1491,10 @@ def rematch_daily_upload(request):
     if not upload:
         return JsonResponse({'ok': False, 'error': 'No upload found for this date'}, status=404)
 
+    from finance.models import BillingSettings as _BillingSettings
+    _rematch_week = upload_date - timedelta(days=upload_date.weekday())
+    _rematch_nr_ratio = float(_BillingSettings.get_for_week(_rematch_week).nr_ratio)
+
     agent_map = {
         p.five9_username.strip().lower(): p.agent
         for p in Five9Profile.objects.filter(
@@ -1518,7 +1527,7 @@ def rematch_daily_upload(request):
             for c in Coding.objects.filter(agent=agent, date=upload_date)
         )
         total_secs = dah.login_seconds + coded_secs
-        allowance_secs = int(total_secs * 0.125)
+        allowance_secs = int(total_secs * _rematch_nr_ratio)
         excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
         login_final_secs = max(0, dah.login_seconds - excess_secs)
         final_hours = Decimal(str(round(login_final_secs / 3600, 6)))

@@ -37,6 +37,18 @@ class BillingSettings(models.Model):
         max_digits=5, decimal_places=2, default=Decimal('40.00'),
         help_text="Hours threshold for full bonus — agents below this receive a proportional amount"
     )
+    nr_ratio = models.DecimalField(
+        max_digits=6, decimal_places=4, default=Decimal('0.1250'),
+        help_text="NR allowance as a fraction of login+codings time (default 0.125 = 12.5%)"
+    )
+    nr_ratio_max_hours = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('48.00'),
+        help_text="NR ratio deduction only applies when weekly pre-NR hours ≤ this value (default 48)"
+    )
+    default_tardy_hours = models.DecimalField(
+        max_digits=4, decimal_places=2, default=Decimal('0.25'),
+        help_text="Hours assumed lost for a Tardy day when no actual login was recorded (default 0.25 = 15 min)"
+    )
 
     class Meta:
         verbose_name = 'Billing Settings'
@@ -78,6 +90,9 @@ class BillingSettingsHistory(models.Model):
     default_admin_bonus_mxn = models.DecimalField(max_digits=8, decimal_places=2)
     adherence_bonus_max_mxn = models.DecimalField(max_digits=8, decimal_places=2)
     adherence_bonus_full_hours = models.DecimalField(max_digits=5, decimal_places=2)
+    nr_ratio = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.1250'))
+    nr_ratio_max_hours = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('48.00'))
+    default_tardy_hours = models.DecimalField(max_digits=4, decimal_places=2, default=Decimal('0.25'))
 
     class Meta:
         ordering = ['-week_start', '-changed_at']
