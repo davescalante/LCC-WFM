@@ -275,6 +275,12 @@ document.addEventListener('keydown', function(e) {
         var inp = document.getElementById('nav-search-input');
         if (inp) { inp.focus(); inp.select(); }
     }
+    if (e.key === 'Escape') {
+        var results = document.getElementById('nav-search-results');
+        var inp = document.getElementById('nav-search-input');
+        if (results) results.style.display = 'none';
+        if (inp) inp.blur();
+    }
 });
 </script>
 </body>

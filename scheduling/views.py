@@ -3184,9 +3184,10 @@ def agent_inactive(request):
 def agent_search(request):
     """Quick agent search for the nav bar — returns JSON list of up to 10 matches."""
     from django.db.models import Q as _Q
+    from django.http import JsonResponse as _JsonResponse
     q = request.GET.get('q', '').strip()
     if len(q) < 2:
-        return JsonResponse({'results': []})
+        return _JsonResponse({'results': []})
 
     agents = Agent.objects.filter(
         _Q(agent_name__icontains=q) |
@@ -3205,4 +3206,4 @@ def agent_search(request):
         }
         for a in agents
     ]
-    return JsonResponse({'results': results})
+    return _JsonResponse({'results': results})

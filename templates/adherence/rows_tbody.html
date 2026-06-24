@@ -113,5 +113,7 @@
 </tr>
 
 {% empty %}
+{% if not is_group_request %}
 <tr><td colspan="22" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+{% endif %}
 {% endfor %}

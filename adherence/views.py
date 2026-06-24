@@ -1020,6 +1020,9 @@ def adherence_rows_fragment(request):
             'show_cos': show_cos,
             'cos_days': cos_days,
             'cos_week': cos_week,
+            # Suppress the {% empty %} "No active agents found" row for group
+            # requests — an empty group is normal and should render nothing.
+            'is_group_request': bool(group_param),
         }
 
         tbody_html = render_to_string('adherence/rows_tbody.html', ctx, request=request)
