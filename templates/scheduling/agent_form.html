@@ -9,10 +9,15 @@
     {% csrf_token %}
 
     <div class="grid-2">
+        <!-- Basic Info -->
         <div class="card">
-            <h2>Personal Info</h2>
+            <h2>Basic Info</h2>
             <label>Legal Name</label>
             {{ user_form.legal_name }}
+            <label>Agent Name <span style="font-size:11px;font-weight:400;color:#888;">shown throughout the system</span></label>
+            {{ agent_form.agent_name }}
+            <label>Employee ID</label>
+            {{ agent_form.employee_id }}
             <label>Email</label>
             {{ user_form.email }}
             <label>Phone Number</label>
@@ -20,14 +25,15 @@
                 <div style="width:160px;flex-shrink:0;">{{ agent_form.phone_country_code }}</div>
                 <div style="flex:1;">{{ agent_form.phone_number }}</div>
             </div>
+            {% if not agent %}
+            <label>Start Date</label>
+            <input type="date" name="start_date" style="margin-bottom:14px;">
+            {% endif %}
         </div>
 
+        <!-- Role & Access -->
         <div class="card">
-            <h2>User Details</h2>
-            <label>Agent Name</label>
-            {{ agent_form.agent_name }}
-            <label>Employee ID</label>
-            {{ agent_form.employee_id }}
+            <h2>Role & Access</h2>
             <label>Role</label>
             {{ agent_form.role }}
             <label>Role Type</label>
@@ -50,11 +56,6 @@
                 <label for="{{ agent_form.is_official_admin.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Official Admin</label>
                 <span style="font-size:11px;color:#888;">Receives admin bonus instead of adherence bonus</span>
             </div>
-            <div id="admin-bonus-row" style="margin-bottom:14px;{% if not agent.is_official_admin %}display:none;{% endif %}">
-                <label>Admin Bonus (MXN)</label>
-                {{ agent_form.admin_bonus_mxn }}
-                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:0;">Leave blank to use global default (${{ default_admin_bonus_mxn }} MXN)</p>
-            </div>
             {% if request.has_finance_access or request.user.is_superuser %}
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
                 {{ agent_form.is_super_admin }}
@@ -63,14 +64,11 @@
             </div>
             {% endif %}
             {% endif %}
-            {% if not agent %}
-            <label>Start Date</label>
-            <input type="date" name="start_date" style="margin-bottom:14px;">
-            {% endif %}
         </div>
     </div>
 
     <div class="grid-2">
+        <!-- System Login -->
         <div class="card">
             <h2>System Login</h2>
             <label>Username</label>
@@ -80,25 +78,36 @@
                 {{ user_form.password }}
                 {% if user_form.password.help_text %}<p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:14px;">{{ user_form.password.help_text }}</p>{% endif %}
             </div>
-            <div id="no-login-notice" style="display:none;background:#fff3cd;color:#856404;padding:10px 14px;border-radius:4px;font-size:13px;">
+            <div id="no-login-notice" style="display:none;background:#fff3cd;color:#856404;padding:10px 14px;border-radius:4px;font-size:13px;margin-bottom:14px;">
                 Website login is not available for this role type. This user will not be able to log in.
             </div>
+            <label>Teams Password <span style="font-size:11px;font-weight:400;color:#888;">for Microsoft Teams access</span></label>
+            {{ agent_form.teams_password }}
         </div>
 
+        <!-- Finance -->
         <div class="card">
-            <h2>Teams</h2>
-            <label>Teams Password</label>
-            {{ agent_form.teams_password }}
+            <h2>Finance</h2>
             <label>Hourly Rate (MXN)</label>
             {{ agent_form.hourly_rate }}
-            <label style="margin-top:12px;">Billing Rate (USD) <span style="font-weight:400;font-size:12px;color:#888;">— Leave blank to use global rate</span></label>
+            <label>Billing Rate (USD) <span style="font-weight:400;font-size:12px;color:#888;">— Leave blank to use global rate</span></label>
             {{ agent_form.billing_rate_usd }}
+            {% if not request.is_agent %}
+            <div id="admin-bonus-row" style="margin-bottom:14px;{% if not agent.is_official_admin %}display:none;{% endif %}">
+                <label>Admin Bonus (MXN)</label>
+                {{ agent_form.admin_bonus_mxn }}
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:0;">Leave blank to use global default (${{ default_admin_bonus_mxn }} MXN)</p>
+            </div>
+            {% endif %}
         </div>
     </div>
 
     <div class="card" id="five9-accounts-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <h2 style="margin:0;">Five9 Accounts</h2>
+            <div>
+                <h2 style="margin:0;">Five9 Accounts</h2>
+                <p style="margin:4px 0 0;font-size:12px;color:#888;">Billable accounts count toward hours, billing, and payroll. Primary account is used for attendance tracking.</p>
+            </div>
             <button type="button" onclick="addFive9Row()"
                 style="padding:6px 16px;background:#1a3a5c;color:white;border:none;border-radius:4px;font-size:13px;cursor:pointer;">
                 + Add Account
@@ -176,7 +185,10 @@
     {% if agent %}
     <div class="card" id="employment-history-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <h2 style="margin:0;">Employment History</h2>
+            <div>
+                <h2 style="margin:0;">Employment History</h2>
+                <p style="margin:4px 0 0;font-size:12px;color:#888;">Track start and end dates for each period of employment. Leave End Date blank for the current active period.</p>
+            </div>
             <button type="button" onclick="addPeriodRow()"
                 style="padding:6px 16px;background:#1a3a5c;color:white;border:none;border-radius:4px;font-size:13px;cursor:pointer;">
                 + Add Period
@@ -242,7 +254,6 @@
 
     <div class="card">
         <h2>Notes</h2>
-        <label>Notes</label>
         {{ agent_form.notes }}
     </div>
 
@@ -253,7 +264,7 @@
         {% if field.errors %}<div style="color:#c0392b;font-size:13px;margin-bottom:4px;"><strong>{{ field.label }}:</strong> {{ field.errors }}</div>{% endif %}
     {% endfor %}
 
-    <button type="submit" class="btn btn-primary" style="margin-top:12px;">Save User</button>
+    <button type="submit" class="btn btn-primary" style="margin-top:12px;">Save</button>
 </form>
 
 <style>
@@ -261,7 +272,7 @@
         width: 100%; padding: 8px 10px; border: 1px solid #ddd;
         border-radius: 4px; font-size: 14px; margin-bottom: 14px;
     }
-    input[type="checkbox"] {
+    input[type="checkbox"], input[type="radio"] {
         width: auto; padding: 0; margin: 0; cursor: pointer;
     }
     label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #555; }
@@ -367,115 +378,110 @@ function removePeriod(pk) {
     row.style.opacity = '0.35';
     row.style.textDecoration = 'line-through';
     row.querySelectorAll('input, select, button').forEach(el => el.disabled = true);
-    // Re-enable the hidden delete input so it submits
     document.getElementById('del-' + pk).disabled = false;
 }
 
 // ── Role Type ─────────────────────────────────────────────────────────────────
-    const ROLE_TYPES = {
-        agent: [
-            ['training', 'Training'],
-            ['incubation', 'Incubation'],
-            ['regular_agent', 'Regular Agent'],
-            ['kill_team', 'Kill Team'],
-            ['night_shift', 'Night Shift'],
-        ],
-        admin: [
-            ['supervisor', 'Supervisor'],
-            ['qa', 'QA'],
-            ['cs', 'CS'],
-            ['testing', 'Testing'],
-            ['sms_email', 'SMS/Email'],
-            ['coordinator', 'Coordinator'],
-        ]
-    };
+const ROLE_TYPES = {
+    agent: [
+        ['training', 'Training'],
+        ['incubation', 'Incubation'],
+        ['regular_agent', 'Regular Agent'],
+        ['kill_team', 'Kill Team'],
+        ['night_shift', 'Night Shift'],
+    ],
+    admin: [
+        ['supervisor', 'Supervisor'],
+        ['qa', 'QA'],
+        ['cs', 'CS'],
+        ['testing', 'Testing'],
+        ['sms_email', 'SMS/Email'],
+        ['coordinator', 'Coordinator'],
+    ]
+};
 
-    const CURRENT_ROLE_TYPE = "{{ agent_form.instance.role_type }}";
+const CURRENT_ROLE_TYPE = "{{ agent_form.instance.role_type }}";
+const LOGIN_ELIGIBLE_TYPES = ['supervisor', 'coordinator', 'cs', 'testing', 'sms_email'];
 
-    const LOGIN_ELIGIBLE_TYPES = ['supervisor', 'coordinator', 'cs', 'testing', 'sms_email'];
-
-    function updateRoleTypes() {
-        const role = document.getElementById('id_role').value;
-        const select = document.getElementById('id_role_type');
-        select.innerHTML = '<option value="">---------</option>';
-        (ROLE_TYPES[role] || []).forEach(function([val, label]) {
-            const opt = document.createElement('option');
-            opt.value = val;
-            opt.textContent = label;
-            if (val === CURRENT_ROLE_TYPE) opt.selected = true;
-            select.appendChild(opt);
-        });
-        updateLoginAccess();
-    }
-
-    function updateLoginAccess() {
-        const role = document.getElementById('id_role').value;
-        const roleType = document.getElementById('id_role_type').value;
-        // Agents always get login; admins only if supervisor/coordinator
-        const eligible = role === 'agent' || (role === 'admin' && LOGIN_ELIGIBLE_TYPES.includes(roleType));
-        document.getElementById('password-section').style.display = eligible ? '' : 'none';
-        document.getElementById('no-login-notice').style.display = eligible ? 'none' : '';
-    }
-
-    var EYE_OPEN  = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-    var EYE_SHUT = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
-
-    function applyPwToggle(inp) {
-        if (inp.dataset.pwToggled) return;
-        inp.dataset.pwToggled = '1';
-        inp.style.paddingRight = '32px';
-        var inTable = !!inp.closest('td');
-        var wrap = document.createElement('div');
-        wrap.style.cssText = 'position:relative;' + (inTable ? 'display:inline-block;' : 'display:block;margin-bottom:14px;');
-        inp.parentNode.insertBefore(wrap, inp);
-        wrap.appendChild(inp);
-        if (!inTable) inp.style.marginBottom = '0';
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.setAttribute('aria-label', 'Show password');
-        btn.style.cssText = 'position:absolute;right:7px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:#888;line-height:0;';
-        btn.innerHTML = EYE_OPEN;
-        btn.onmouseenter = function() { btn.style.color='#1a3a5c'; };
-        btn.onmouseleave = function() { btn.style.color='#888'; };
-        btn.onclick = function() {
-            if (inp.type === 'password') { inp.type = 'text';     btn.innerHTML = EYE_SHUT; }
-            else                         { inp.type = 'password'; btn.innerHTML = EYE_OPEN; }
-        };
-        wrap.appendChild(btn);
-    }
-
-    // Official Admin toggle
-    var officialAdminCb = document.getElementById('id_is_official_admin');
-    var adminBonusRow = document.getElementById('admin-bonus-row');
-    if (officialAdminCb && adminBonusRow) {
-        officialAdminCb.addEventListener('change', function() {
-            adminBonusRow.style.display = this.checked ? '' : 'none';
-            if (this.checked) {
-                var bonusInput = document.getElementById('id_admin_bonus_mxn');
-                if (bonusInput && !bonusInput.value) {
-                    bonusInput.value = '{{ default_admin_bonus_mxn }}';
-                }
-            }
-        });
-    }
-
-    document.addEventListener('DOMContentLoaded', function() {
-        document.querySelectorAll('input[type="password"]').forEach(applyPwToggle);
-        updateRoleTypes();
-        document.getElementById('id_role').addEventListener('change', updateRoleTypes);
-        document.getElementById('id_role_type').addEventListener('change', updateLoginAccess);
-
-        // Prevent browser from autofilling logged-in user's own credentials
-        // into fields meant for a different person. Only allow for own-profile edits.
-        var usernameEl = document.getElementById('id_username');
-        var passwordEl = document.getElementById('id_password');
-        {% if is_own_profile %}
-        if (usernameEl) usernameEl.setAttribute('autocomplete', 'username');
-        if (passwordEl) passwordEl.setAttribute('autocomplete', 'current-password');
-        {% else %}
-        if (usernameEl) usernameEl.setAttribute('autocomplete', 'off');
-        if (passwordEl) passwordEl.setAttribute('autocomplete', 'new-password');
-        {% endif %}
+function updateRoleTypes() {
+    const role = document.getElementById('id_role').value;
+    const select = document.getElementById('id_role_type');
+    select.innerHTML = '<option value="">---------</option>';
+    (ROLE_TYPES[role] || []).forEach(function([val, label]) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        if (val === CURRENT_ROLE_TYPE) opt.selected = true;
+        select.appendChild(opt);
     });
+    updateLoginAccess();
+}
+
+function updateLoginAccess() {
+    const role = document.getElementById('id_role').value;
+    const roleType = document.getElementById('id_role_type').value;
+    const eligible = role === 'agent' || (role === 'admin' && LOGIN_ELIGIBLE_TYPES.includes(roleType));
+    document.getElementById('password-section').style.display = eligible ? '' : 'none';
+    document.getElementById('no-login-notice').style.display = eligible ? 'none' : '';
+}
+
+var EYE_OPEN  = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+var EYE_SHUT = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+function applyPwToggle(inp) {
+    if (inp.dataset.pwToggled) return;
+    inp.dataset.pwToggled = '1';
+    inp.style.paddingRight = '32px';
+    var inTable = !!inp.closest('td');
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;' + (inTable ? 'display:inline-block;' : 'display:block;margin-bottom:14px;');
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    if (!inTable) inp.style.marginBottom = '0';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Show password');
+    btn.style.cssText = 'position:absolute;right:7px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:#888;line-height:0;';
+    btn.innerHTML = EYE_OPEN;
+    btn.onmouseenter = function() { btn.style.color='#1a3a5c'; };
+    btn.onmouseleave = function() { btn.style.color='#888'; };
+    btn.onclick = function() {
+        if (inp.type === 'password') { inp.type = 'text';     btn.innerHTML = EYE_SHUT; }
+        else                         { inp.type = 'password'; btn.innerHTML = EYE_OPEN; }
+    };
+    wrap.appendChild(btn);
+}
+
+// Official Admin toggle shows/hides the admin bonus field
+var officialAdminCb = document.getElementById('id_is_official_admin');
+var adminBonusRow = document.getElementById('admin-bonus-row');
+if (officialAdminCb && adminBonusRow) {
+    officialAdminCb.addEventListener('change', function() {
+        adminBonusRow.style.display = this.checked ? '' : 'none';
+        if (this.checked) {
+            var bonusInput = document.getElementById('id_admin_bonus_mxn');
+            if (bonusInput && !bonusInput.value) {
+                bonusInput.value = '{{ default_admin_bonus_mxn }}';
+            }
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('input[type="password"]').forEach(applyPwToggle);
+    updateRoleTypes();
+    document.getElementById('id_role').addEventListener('change', updateRoleTypes);
+    document.getElementById('id_role_type').addEventListener('change', updateLoginAccess);
+
+    var usernameEl = document.getElementById('id_username');
+    var passwordEl = document.getElementById('id_password');
+    {% if is_own_profile %}
+    if (usernameEl) usernameEl.setAttribute('autocomplete', 'username');
+    if (passwordEl) passwordEl.setAttribute('autocomplete', 'current-password');
+    {% else %}
+    if (usernameEl) usernameEl.setAttribute('autocomplete', 'off');
+    if (passwordEl) passwordEl.setAttribute('autocomplete', 'new-password');
+    {% endif %}
+});
 </script>
 {% endblock %}

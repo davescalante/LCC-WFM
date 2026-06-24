@@ -3,7 +3,10 @@
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <h1>Separation Records</h1>
+    <div>
+        <h1 style="margin:0;">Separation Records</h1>
+        <div style="font-size:13px;color:#888;margin-top:4px;">Agents who have left or are in the process of separating from the team.</div>
+    </div>
     <div style="display:flex;gap:8px;">
         <a href="{% url 'records_attendance' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Attendance</a>
         <a href="{% url 'records_hours' %}" class="btn" style="background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px;">Hours</a>

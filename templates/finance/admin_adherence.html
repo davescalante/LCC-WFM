@@ -4,9 +4,12 @@
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <div style="display:flex;align-items:center;gap:16px;">
-        <h1 style="margin:0;">Admin Adherence</h1>
-        <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+    <div>
+        <div style="display:flex;align-items:center;gap:16px;">
+            <h1 style="margin:0;">Admin Adherence</h1>
+            <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+        </div>
+        <div style="font-size:13px;color:#888;margin-top:4px;">Weekly adherence and bonuses for Official Admins — separate from the main agent adherence track.</div>
     </div>
     <div style="display:flex;gap:10px;">
         <a href="{% url 'admin_codings' %}?week={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">+ Admin Codings</a>

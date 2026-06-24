@@ -4,11 +4,17 @@
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-    <div style="display:flex;align-items:center;gap:16px;">
-        <h1 style="margin:0;">Admin Codings</h1>
-        <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+    <div>
+        <div style="display:flex;align-items:center;gap:16px;">
+            <h1 style="margin:0;">Admin Codings</h1>
+            <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
+        </div>
+        <div style="font-size:13px;color:#888;margin-top:4px;">Coded hours for Official Admins and coordinators — used in admin billing and payroll.</div>
     </div>
-    <a href="{% url 'finance_dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Finance</a>
+    <div style="display:flex;gap:8px;">
+        <a href="{% url 'admin_adherence' %}?week={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">Admin Adherence</a>
+        <a href="{% url 'finance_dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Finance</a>
+    </div>
 </div>
 
 <!-- Week navigation -->
