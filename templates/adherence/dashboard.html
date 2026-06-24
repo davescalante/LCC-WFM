@@ -45,6 +45,7 @@
     table-layout: fixed;
     border-collapse: collapse;
     font-size: 11px;
+    width: 100%;
 }
 
 /* ── Frozen columns ─────────────────────────────────────────────────────────── */
@@ -72,7 +73,7 @@
 #adh-table thead .fc { z-index: 8; }
 
 /* ── Day header columns ─────────────────────────────────────────────────────── */
-.th-day        { width: 98px; }
+.th-day        { min-width: 82px; }
 .day-name      { font-size: 12px; font-weight: 700; }
 .day-date      { font-size: 10px; font-weight: 400; color: #888; margin-top: 1px; }
 .day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
@@ -209,14 +210,14 @@ tbody td.col-today           { background-color: #eff6ff; box-shadow: inset 1px 
 </style>
 
 <div id="tbl-card-adh" class="card" style="overflow-x:auto;padding:0;">
-<table id="adh-table">
+<table id="adh-table" style="width:100%;">
     <colgroup>
         <!-- Frozen columns -->
         <col style="width:80px;">
         <col style="width:120px;">
         <col style="width:110px;">
-        <!-- Day columns (7) -->
-        {% for d in week_dates %}<col style="width:98px;">{% endfor %}
+        <!-- Day columns flex to fill remaining width -->
+        {% for d in week_dates %}<col>{% endfor %}
         <!-- Summary columns: P A T I SchHrs LogHrs CodHrs NRCap TotHrs Bon ComDed -->
         <col style="width:32px;">
         <col style="width:32px;">
