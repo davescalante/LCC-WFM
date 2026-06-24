@@ -8,7 +8,7 @@ from django.views.decorators.http import require_POST
 from django.db import transaction
 from django.db.models import Q, Sum
 
-from scheduling.models import Agent, Five9Profile, OvertimeShift
+from scheduling.models import Agent, Five9Profile, OvertimeShift, log_action
 from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, PayrollAdjustment, Coding
 from .models import BillingSettings, BillingSettingsHistory
 from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
@@ -508,6 +508,7 @@ def billing_export(request):
         f'attachment; filename="billing_{week_start.isoformat()}.xlsx"'
     )
     wb.save(response)
+    log_action(request.user, 'Billing report exported', f'Week {week_start.isoformat()}')
     return response
 
 
@@ -666,6 +667,7 @@ def payroll_export(request):
         f'attachment; filename="payroll_{week_start.isoformat()}.xlsx"'
     )
     wb.save(response)
+    log_action(request.user, 'Payroll report exported', f'Week {week_start.isoformat()}')
     return response
 
 
@@ -708,6 +710,9 @@ def finance_settings(request):
                     setattr(singleton, field, value)
                 singleton.save()
 
+            log_action(request.user, 'Finance settings changed',
+                       f'Effective week {effective_week.isoformat()}: ' +
+                       ', '.join(f'{k}={v}' for k, v in new_vals.items()))
             messages.success(request, f"Settings saved — effective from week of {effective_week.strftime('%b %d, %Y')}.")
         except Exception as e:
             messages.error(request, f"Error saving settings: {e}")
@@ -837,6 +842,8 @@ def add_admin_coding_ajax(request):
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=400)
 
+    log_action(request.user, 'Admin coding added',
+               f'Agent {agent_id} on {date_str}: {start_time}–{end_time}')
     return JsonResponse({
         'ok': True, 'id': coding.pk,
         'hhmmss': coding.total_hhmmss(),
@@ -886,6 +893,8 @@ def edit_admin_coding_ajax(request):
     coding.notes = notes
     coding.save()
 
+    log_action(request.user, 'Admin coding edited',
+               f'Coding #{coding_id}: {start_t}–{end_t}')
     return JsonResponse({
         'ok': True, 'id': coding.pk,
         'hhmmss': coding.total_hhmmss(),
@@ -906,7 +915,9 @@ def delete_admin_coding_ajax(request):
 
     data = _json.loads(request.body)
     coding_id = data.get('coding_id')
-    Coding.objects.filter(pk=coding_id, is_admin_coding=True).delete()
+    deleted, _ = Coding.objects.filter(pk=coding_id, is_admin_coding=True).delete()
+    if deleted:
+        log_action(request.user, 'Admin coding deleted', f'Coding #{coding_id}')
     return JsonResponse({'ok': True})
 
 
