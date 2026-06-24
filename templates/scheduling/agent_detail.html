@@ -142,7 +142,19 @@
     <div class="card">
         <h2>System Credentials</h2>
         <table>
-            <tr><td><strong>Teams Password</strong></td><td>{{ agent.teams_password|default:"—" }}</td></tr>
+            <tr>
+                <td><strong>Teams Password</strong></td>
+                <td>
+                    {% if agent.teams_password %}
+                    <span id="teams-pw-mask" style="font-family:monospace;letter-spacing:2px;">••••••••</span>
+                    <span id="teams-pw-text" style="display:none;font-family:monospace;">{{ agent.teams_password }}</span>
+                    <button type="button" onclick="toggleTeamsPw()" id="teams-pw-btn"
+                        style="margin-left:8px;padding:2px 8px;font-size:12px;border:1px solid #d1d5db;border-radius:4px;background:#f9fafb;cursor:pointer;">Show</button>
+                    <button type="button" onclick="copyTeamsPw()" title="Copy to clipboard"
+                        style="margin-left:4px;padding:2px 8px;font-size:12px;border:1px solid #d1d5db;border-radius:4px;background:#f9fafb;cursor:pointer;">Copy</button>
+                    {% else %}—{% endif %}
+                </td>
+            </tr>
         </table>
         {% if agent.five9_profiles.all %}
         <h3 style="font-size:14px;margin:16px 0 8px;">Five9 Accounts</h3>
@@ -535,5 +547,22 @@
         });
     }
 })();
+
+var _teamsPwVisible = false;
+function toggleTeamsPw() {
+    _teamsPwVisible = !_teamsPwVisible;
+    document.getElementById('teams-pw-mask').style.display = _teamsPwVisible ? 'none' : '';
+    document.getElementById('teams-pw-text').style.display = _teamsPwVisible ? '' : 'none';
+    document.getElementById('teams-pw-btn').textContent = _teamsPwVisible ? 'Hide' : 'Show';
+}
+function copyTeamsPw() {
+    var pw = document.getElementById('teams-pw-text').textContent;
+    if (!pw) return;
+    navigator.clipboard.writeText(pw).then(function() {
+        var btn = event.target;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+    });
+}
 </script>
 {% endblock %}
