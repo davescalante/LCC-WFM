@@ -51,8 +51,7 @@
 .fc           { position: sticky; z-index: 2; background: inherit; }
 .fc-1         { left: 0;     width: 90px;  }
 .fc-2         { left: 90px;  width: 130px; }
-.fc-3         { left: 220px; width: 120px; }
-.fc-4         { left: 340px; width: 58px;  box-shadow: 2px 0 4px rgba(0,0,0,.07); }
+.fc-3         { left: 220px; width: 120px; box-shadow: 2px 0 4px rgba(0,0,0,.07); }
 
 /* ── Sticky header ──────────────────────────────────────────────────────────── */
 #adh-table thead th {
@@ -109,7 +108,6 @@ tbody tr.row-b:hover .fc { background: #dbeafe; }
 .ai-cell.sup-col   { font-size: 10px; color: #888; }
 .ai-cell.name-col  { font-size: 12px; font-weight: 600; color: #1a3a5c; }
 .ai-cell.five9-col { font-size: 10px; color: #777; }
-.ai-cell.id-col    { font-size: 10px; color: #999; text-align: center; }
 
 /* ── Day cells ──────────────────────────────────────────────────────────────── */
 .day-cell {
@@ -215,7 +213,6 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
         <col style="width:90px;">
         <col style="width:130px;">
         <col style="width:120px;">
-        <col style="width:58px;">
         <!-- Day columns (7) -->
         {% for d in week_dates %}<col style="width:98px;">{% endfor %}
         <!-- Summary columns: P A T I SchHrs LogHrs CodHrs NRCap TotHrs Bon ComDed -->
@@ -236,7 +233,6 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="fc fc-1 th-left">Supervisor</th>
             <th class="fc fc-2 th-left">Agent</th>
             <th class="fc fc-3 th-left">Five9</th>
-            <th class="fc fc-4" style="text-align:center;">ID</th>
             {% for d in week_dates %}
             <th class="th-day {% if d == today %}col-today{% endif %}">
                 {% if d == today %}<div class="day-today-label">TODAY</div>{% endif %}
@@ -262,7 +258,6 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <td class="fc fc-1 ai-cell"><span class="adh-skel-line" style="width:70px;"></span></td>
             <td class="fc fc-2 ai-cell"><span class="adh-skel-line" style="width:110px;"></span></td>
             <td class="fc fc-3 ai-cell"><span class="adh-skel-line" style="width:90px;"></span></td>
-            <td class="fc fc-4 ai-cell"><span class="adh-skel-line" style="width:36px;"></span></td>
             {% for d in week_dates %}<td class="day-cell"><span class="adh-skel-line" style="width:60px;"></span></td>{% endfor %}
             {% for i in "12345678901" %}<td class="sum-cell"><span class="adh-skel-line" style="width:28px;"></span></td>{% endfor %}
         </tr>
@@ -271,7 +266,6 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <td class="fc fc-1 ai-cell"><span class="adh-skel-line" style="width:70px;"></span></td>
             <td class="fc fc-2 ai-cell"><span class="adh-skel-line" style="width:110px;"></span></td>
             <td class="fc fc-3 ai-cell"><span class="adh-skel-line" style="width:90px;"></span></td>
-            <td class="fc fc-4 ai-cell"><span class="adh-skel-line" style="width:36px;"></span></td>
             {% for d in week_dates %}<td class="day-cell"><span class="adh-skel-line" style="width:60px;"></span></td>{% endfor %}
             {% for j in "12345678901" %}<td class="sum-cell"><span class="adh-skel-line" style="width:28px;"></span></td>{% endfor %}
         </tr>
@@ -382,7 +376,7 @@ function _removeSkeleton() {
 function _showLoadError() {
     _removeSkeleton();
     document.getElementById('adh-tbody').innerHTML =
-        '<tr><td colspan="22" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
+        '<tr><td colspan="21" style="padding:30px;text-align:center;color:#c0392b;">Failed to load data. <a href="" style="color:#1a3a5c;">Reload</a></td></tr>';
 }
 
 // Full replace load — used by poll and when a supervisor filter is active.

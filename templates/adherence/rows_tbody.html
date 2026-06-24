@@ -4,7 +4,7 @@
 {% if not selected_supervisor %}
 {% ifchanged row.agent.supervisor_id %}
 <tr class="group-hdr">
-    <td colspan="22">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
+    <td colspan="21">{{ row.agent.supervisor|default:"No Supervisor" }}</td>
 </tr>
 {% endifchanged %}
 {% endif %}
@@ -13,7 +13,6 @@
     <td class="ai-cell sup-col  fc fc-1">{{ row.agent.supervisor|default:"—" }}</td>
     <td class="ai-cell name-col fc fc-2">{{ row.agent }}</td>
     <td class="ai-cell five9-col fc fc-3">{{ row.billable_five9_username|default:"—" }}</td>
-    <td class="ai-cell id-col   fc fc-4">{{ row.agent.employee_id|default:"—" }}</td>
 
     {% for cell in row.cells %}
     <td id="cell-{{ row.agent.pk }}-{{ cell.date|date:'Y-m-d' }}"
@@ -102,11 +101,11 @@
     </td>
     <td class="sum-cell">
         <div style="display:flex;align-items:center;justify-content:center;gap:1px;">
-            <input type="number" min="0" max="100" step="0.1"
-                value="{% if row.commission_deduction %}{{ row.commission_deduction }}{% endif %}"
+            <input type="text" inputmode="numeric" pattern="[0-9]*"
+                value="{% if row.commission_deduction %}{{ row.commission_deduction|floatformat:0 }}{% endif %}"
                 placeholder="0"
                 onblur="saveCommission('{{ row.agent.pk }}', '{{ week_start|date:'Y-m-d' }}', this)"
-                style="width:46px;text-align:center;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:4px;">
+                style="width:40px;text-align:center;font-size:11px;padding:2px 3px;border:1px solid #ddd;border-radius:4px;">
             <span style="font-size:10px;color:#999;">%</span>
         </div>
     </td>
@@ -114,6 +113,6 @@
 
 {% empty %}
 {% if not is_group_request %}
-<tr><td colspan="22" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+<tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
 {% endif %}
 {% endfor %}
