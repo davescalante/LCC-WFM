@@ -38,10 +38,13 @@ def _build_scheduled_map(week_start):
 
     CALL_ROLES = {'regular_agent', 'night_shift'}
 
-    # Base call agents (current role)
-    base_call_ids = set(Five9Profile.objects.filter(
-        role_type__in=CALL_ROLES
-    ).values_list('agent_id', flat=True).distinct())
+    # Base call agents (current role) — use Agent.role_type as the authoritative source.
+    # Five9Profile.role_type is per-account and can be 'regular_agent' on a Kill Team
+    # agent's OT account, which would incorrectly include them in regular scheduled staff.
+    base_call_ids = set(Agent.objects.filter(
+        role_type__in=CALL_ROLES,
+        status='active',
+    ).values_list('pk', flat=True))
 
     # Pending role changes that take effect within this week — adjust per date
     pending = list(ScheduledRoleChange.objects.filter(
@@ -53,9 +56,9 @@ def _build_scheduled_map(week_start):
 
     if pending:
         affected_ids = {p['agent_id'] for p in pending}
-        cur_roles = dict(Five9Profile.objects.filter(
-            agent_id__in=affected_ids
-        ).values_list('agent_id', 'role_type'))
+        cur_roles = dict(Agent.objects.filter(
+            pk__in=affected_ids
+        ).values_list('pk', 'role_type'))
     else:
         cur_roles = {}
 
