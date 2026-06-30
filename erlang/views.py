@@ -46,6 +46,41 @@ def _build_scheduled_map(week_start):
         status='active',
     ).values_list('pk', flat=True))
 
+    # For completed past weeks: correct base_call_ids using RoleHistory.
+    # base_call_ids reflects each agent's CURRENT role, which is wrong when an agent's
+    # role changed AFTER the viewed week ended (e.g. incubation→regular_agent today
+    # while viewing last week — they should not count as regular_agent last week).
+    today = date.today()
+    if week_dates[-1] < today:
+        from scheduling.models import RoleHistory as _RH
+        # Agents who have any RoleHistory entry dated after this week ended
+        post_week_changers = set(
+            _RH.objects.filter(
+                agent__status='active',
+                effective_from__gt=week_dates[-1],
+            ).values_list('agent_id', flat=True).distinct()
+        )
+        if post_week_changers:
+            # Find each agent's role that was active AT the end of this week:
+            # the entry whose effective_to closed AFTER week_end (i.e. was still open
+            # on week_end but was subsequently closed by the post-week change).
+            week_end_roles = {
+                e['agent_id']: e['role_type']
+                for e in _RH.objects.filter(
+                    agent_id__in=post_week_changers,
+                    effective_from__lte=week_dates[-1],
+                    effective_to__gt=week_dates[-1],
+                ).values('agent_id', 'role_type')
+            }
+            for aid in post_week_changers:
+                role_then = week_end_roles.get(aid)
+                in_call_now = aid in base_call_ids
+                in_call_then = role_then in CALL_ROLES if role_then else False
+                if in_call_now and not in_call_then:
+                    base_call_ids.discard(aid)   # wasn't a call agent during this week
+                elif not in_call_now and in_call_then:
+                    base_call_ids.add(aid)        # was a call agent during this week
+
     # Pending role changes that take effect within this week — adjust per date
     pending = list(ScheduledRoleChange.objects.filter(
         effective_date__range=(week_dates[0], week_dates[-1]),
