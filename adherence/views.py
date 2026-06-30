@@ -712,6 +712,8 @@ def save_commission(request):
         week_start=week_start,
         defaults={'commission_deduction': amount},
     )
+    log_action(request.user, 'Set commission deduction',
+               f'{agent} — week of {week_start}: {amount}%', agent=agent)
     return JsonResponse({'ok': True})
 
 @login_required
@@ -729,6 +731,11 @@ def save_adherence_cell(request):
 
     agent = get_object_or_404(Agent, pk=agent_id)
 
+    # Capture previous status before any change
+    _existing = AdherenceRecord.objects.filter(agent=agent, date=day_date).first()
+    _prev_status = _existing.status if _existing else ''
+    _prev_display = ('A' if _prev_status == 'Absent' else _prev_status) if _prev_status else '—'
+
     if status:
         AdherenceRecord.objects.update_or_create(
             agent=agent,
@@ -737,7 +744,7 @@ def save_adherence_cell(request):
         )
         display = 'A' if status == 'Absent' else status
         log_action(request.user, 'Set adherence status',
-                   f'{agent} — {day_date} → {display}', agent=agent)
+                   f'{agent} — {day_date}: {_prev_display} → {display}', agent=agent)
     else:
         # If the record has no logged hours, delete it entirely.
         # If it has logged hours from Five9, just blank the status field so the hours remain.
@@ -749,7 +756,7 @@ def save_adherence_cell(request):
                 agent=agent, date=day_date
             ).update(status='')
         log_action(request.user, 'Cleared adherence status',
-                   f'{agent} — {day_date}', agent=agent)
+                   f'{agent} — {day_date}: {_prev_display} → blank', agent=agent)
 
     return JsonResponse({'ok': True})
 
@@ -1201,6 +1208,8 @@ def payroll_export(request):
                     c.total_hhmmss(),
                     c.notes,
                 ])
+            log_action(request.user, 'Exported codings CSV',
+                       f'Week {week_start.isoformat()} to {week_end.isoformat()}')
             return response
 
         # Default: export payroll summary
@@ -1287,6 +1296,8 @@ def payroll_export(request):
                 suspended_days,
             ])
 
+        log_action(request.user, 'Exported payroll CSV',
+                   f'Week {week_start.isoformat()} to {week_end.isoformat()}')
         return response
 
     # GET — show preview with editable deductions
@@ -1671,6 +1682,8 @@ def edit_adherence_note(request):
     note = get_object_or_404(AdherenceNote, pk=note_id)
     note.body = body
     note.save()
+    log_action(request.user, 'Edited adherence note',
+               f'{note.agent} — {note.date}', agent=note.agent)
     return JsonResponse({'ok': True, 'body': note.body})
 
 
@@ -1679,7 +1692,9 @@ def edit_adherence_note(request):
 def delete_adherence_note(request):
     note_id = request.POST.get('note_id')
     note = get_object_or_404(AdherenceNote, pk=note_id)
-    agent_id, date_val = note.agent_id, note.date
+    agent_id, date_val, _agent = note.agent_id, note.date, note.agent
+    log_action(request.user, 'Deleted adherence note',
+               f'{_agent} — {date_val}', agent=_agent)
     note.delete()
     new_count = AdherenceNote.objects.filter(agent_id=agent_id, date=date_val).count()
     return JsonResponse({'ok': True, 'new_count': new_count})
@@ -1712,6 +1727,8 @@ def adherence_notes(request):
             body=body,
         )
         new_count = AdherenceNote.objects.filter(agent_id=agent_id, date=date_val).count()
+        log_action(request.user, 'Added adherence note',
+                   f'{note.agent} — {date_val}', agent=note.agent)
         return JsonResponse({
             'ok': True,
             'id': note.pk,
