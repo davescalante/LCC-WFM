@@ -390,6 +390,12 @@ def agent_edit(request, pk):
         user_form = AgentUserForm(request.POST, instance=agent.user)
         agent_form = AgentForm(request.POST, instance=agent)
         if user_form.is_valid() and agent_form.is_valid():
+            # Capture user-level values before save
+            _old_user = {
+                'username': agent.user.username,
+                'legal_name': f"{agent.user.first_name} {agent.user.last_name}".strip(),
+                'email': agent.user.email,
+            }
             user = user_form.save(commit=False)
             password = user_form.cleaned_data.get('password')
             if password:
@@ -400,6 +406,7 @@ def agent_edit(request, pk):
                 'role': agent.role, 'role_type': agent.role_type,
                 'supervisor_id': agent.supervisor_id,
                 'employer': agent.employer, 'billing_status': agent.billing_status,
+                'agent_name': agent.agent_name,
             }
             agent = agent_form.save()
             # Record role history if tracked fields changed
@@ -407,6 +414,7 @@ def agent_edit(request, pk):
                 'role': agent.role, 'role_type': agent.role_type,
                 'supervisor_id': agent.supervisor_id,
                 'employer': agent.employer, 'billing_status': agent.billing_status,
+                'agent_name': agent.agent_name,
             }
             if _old['role_type'] != _new['role_type'] and _old['role_type']:
                 agent.five9_profiles.filter(role_type=_old['role_type']).update(role_type=_new['role_type'])
@@ -465,7 +473,30 @@ def agent_edit(request, pk):
                 i += 1
 
             _save_five9_profiles(request, agent)
-            log_action(request.user, 'Edited agent profile', f'Edited {user.get_full_name()}', agent=agent)
+            # Build detailed change description
+            _change_parts = []
+            _new_user = {
+                'username': user.username,
+                'legal_name': f"{user.first_name} {user.last_name}".strip(),
+                'email': user.email,
+            }
+            for _field, _old_val, _new_val in [
+                ('username', _old_user['username'], _new_user['username']),
+                ('legal name', _old_user['legal_name'], _new_user['legal_name']),
+                ('email', _old_user['email'], _new_user['email']),
+                ('display name', _old['agent_name'], _new['agent_name']),
+                ('role', _old['role'], _new['role']),
+                ('role type', _old['role_type'], _new['role_type']),
+                ('employer', _old['employer'], _new['employer']),
+                ('billing status', _old['billing_status'], _new['billing_status']),
+            ]:
+                if str(_old_val or '') != str(_new_val or ''):
+                    _change_parts.append(f'{_field}: "{_old_val}" → "{_new_val}"')
+            if password:
+                _change_parts.append('password changed')
+            _detail = '; '.join(_change_parts) if _change_parts else 'no tracked fields changed'
+            log_action(request.user, 'Edited agent profile',
+                       f'Edited {user.get_full_name()} — {_detail}', agent=agent)
             messages.success(request, f"User {user.get_full_name()} updated successfully.")
             return redirect('agent_detail', pk=agent.pk)
     else:
@@ -1034,8 +1065,16 @@ def shift_edit(request, pk):
     shift = get_object_or_404(Shift, pk=pk)
     form = ShiftForm(request.POST or None, instance=shift)
     if request.method == 'POST' and form.is_valid():
-        form.save()
+        old_start = shift.start_time.strftime('%H:%M') if shift.start_time else '—'
+        old_end = shift.end_time.strftime('%H:%M') if shift.end_time else '—'
+        saved = form.save()
+        new_start = saved.start_time.strftime('%H:%M') if saved.start_time else '—'
+        new_end = saved.end_time.strftime('%H:%M') if saved.end_time else '—'
         week_start = shift.date - timedelta(days=shift.date.weekday())
+        log_action(request.user, 'Edited shift override',
+                   f'{shift.agent} on {shift.date.isoformat()}: '
+                   f'{old_start}–{old_end} → {new_start}–{new_end}',
+                   agent=shift.agent)
         messages.success(request, "Shift updated successfully.")
         return redirect(f"{reverse('shift_list')}?week_start={week_start.isoformat()}")
     return render(request, 'scheduling/shift_form.html', {
@@ -1476,11 +1515,16 @@ def overtime_week(request):
                                    f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
                     except OvertimeShift.DoesNotExist:
                         pass
+                    except Exception as _e:
+                        messages.error(request, f"Error saving OT shift for {day_date.strftime('%A, %b %d')} ({start}–{end}): {_e}")
                 else:
-                    ot_obj = OvertimeShift.objects.create(agent=agent, date=day_date, **defaults)
-                    submitted_pks.add(ot_obj.pk)
-                    log_action(request.user, 'Added OT shift',
-                               f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
+                    try:
+                        ot_obj = OvertimeShift.objects.create(agent=agent, date=day_date, **defaults)
+                        submitted_pks.add(ot_obj.pk)
+                        log_action(request.user, 'Added OT shift',
+                                   f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
+                    except Exception as _e:
+                        messages.error(request, f"Error saving OT shift for {day_date.strftime('%A, %b %d')} ({start}–{end}): {_e}")
 
         messages.success(request, f"OT shifts saved for {agent} — week of {week_start.strftime('%B %d, %Y')}.")
         return redirect(f"{reverse('overtime_list')}?week_start={week_start.isoformat()}")

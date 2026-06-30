@@ -334,6 +334,29 @@ function closeDeleteModal() {
     document.getElementById('delete-modal').style.display = 'none';
 }
 
+function _showOTError(msg) {
+    var el = document.getElementById('ot-ajax-error');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'ot-ajax-error';
+        el.className = 'alert alert-error';
+        el.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:9999;min-width:340px;max-width:600px;text-align:center;';
+        document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(function() { el.style.display = 'none'; }, 8000);
+}
+
+function _handleOTFetchError(r) {
+    if (r && r.redirected && r.url && r.url.includes('/login')) {
+        _showOTError('Your session has expired. Please log in again — your unsaved changes may need to be re-entered.');
+        setTimeout(function() { window.location.href = r.url; }, 2000);
+        return true;
+    }
+    return false;
+}
+
 function executeDelete() {
     if (!pendingDeletePk) return;
     const pk = pendingDeletePk;
@@ -345,15 +368,24 @@ function executeDelete() {
         method: 'POST',
         headers: {'X-CSRFToken': csrfToken, 'X-Requested-With': 'XMLHttpRequest'},
     })
-    .then(r => r.json())
+    .then(r => {
+        if (_handleOTFetchError(r)) { closeDeleteModal(); return null; }
+        if (!r.ok) throw new Error('Server error ' + r.status);
+        return r.json();
+    })
     .then(data => {
+        if (!data) return;
         if (data.deleted) {
             closeDeleteModal();
             removeOTEntryFromDOM(pk);
+        } else if (data.error) {
+            closeDeleteModal();
+            _showOTError('Delete failed: ' + data.error);
         }
     })
-    .catch(() => {
+    .catch(err => {
         closeDeleteModal();
+        _showOTError('Delete failed — please try again. (' + (err.message || 'Network error') + ')');
     })
     .finally(() => {
         const btn = document.getElementById('delete-modal-confirm');
@@ -479,8 +511,14 @@ function doSetOTStatus(pk, newStatus, cancellationReason) {
         headers: {'X-CSRFToken': csrfToken, 'Content-Type': 'application/json'},
         body: JSON.stringify(body),
     })
-    .then(r => r.json())
+    .then(r => {
+        if (_handleOTFetchError(r)) return null;
+        if (!r.ok) throw new Error('Server error ' + r.status);
+        return r.json();
+    })
     .then(data => {
+        if (!data) return;
+        if (data.error) { _showOTError('Status update failed: ' + data.error); return; }
         if (!data.status || !wrap) return;
         const p = OT_PILL[data.status] || OT_PILL.pending;
         const pill = wrap.querySelector('.ot-pill');
@@ -527,7 +565,9 @@ function doSetOTStatus(pk, newStatus, cancellationReason) {
             recalcAgentTotals(entry.closest('tr'));
         }
     })
-    .catch(() => {});
+    .catch(err => {
+        _showOTError('Status update failed — please try again. (' + (err.message || 'Network error') + ')');
+    });
 }
 
 function recalcAgentTotals(row) {

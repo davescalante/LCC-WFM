@@ -14,7 +14,7 @@
     <form method="get" style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;">
         <div style="flex:1;min-width:200px;">
             <label>User</label>
-            <select name="agent" id="agent-select" onchange="this.form.submit()">
+            <select name="agent" id="agent-select" onchange="onAgentOrWeekChange(this)">
                 <option value="">— Select a user —</option>
                 {% for agent in agents %}
                 <option value="{{ agent.pk }}" {% if agent.pk == selected_agent_id %}selected{% endif %}>
@@ -25,7 +25,7 @@
         </div>
         <div style="flex:1;min-width:180px;">
             <label>Week of</label>
-            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}" onchange="this.form.submit()">
+            <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}" onchange="onAgentOrWeekChange(this)">
         </div>
         {% if selected_agent_id %}
         <div style="display:flex;gap:8px;align-items:flex-end;">
@@ -410,6 +410,44 @@ document.addEventListener('DOMContentLoaded', function() {
     {% for day in days %}{% for entry in day.ot_entries %}
     setIncentive({{ day.index }}, {{ entry.j }}, '{{ entry.incentive_type }}');
     {% endfor %}{% endfor %}
+});
+
+function hasUnsavedOTEntries() {
+    // New entries (no pk) with at least one time filled in
+    const newPks = document.querySelectorAll('input[name$="_pk"][value=""]');
+    for (const pkEl of newPks) {
+        const name = pkEl.name; // e.g. day_0_ot_2_pk
+        const prefix = name.replace(/_pk$/, '');
+        const startEl = document.querySelector(`input[name="${prefix}_start"]`);
+        const endEl = document.querySelector(`input[name="${prefix}_end"]`);
+        if ((startEl && startEl.value) || (endEl && endEl.value)) return true;
+    }
+    return false;
+}
+
+function onAgentOrWeekChange(el) {
+    if (hasUnsavedOTEntries()) {
+        if (!confirm('You have unsaved OT shifts. Changing the agent or week will discard them.\n\nClick OK to discard, or Cancel to go back and save first.')) {
+            // Revert the element to its previous value
+            el.value = el.defaultValue || '';
+            return;
+        }
+    }
+    el.form.submit();
+}
+
+// Warn on page unload if there are unsaved OT shifts
+var _otFormSubmitting = false;
+window.addEventListener('beforeunload', function(e) {
+    if (!_otFormSubmitting && hasUnsavedOTEntries()) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+
+// Suppress beforeunload when intentionally submitting the OT form
+document.getElementById('ot-form').addEventListener('submit', function() {
+    _otFormSubmitting = true;
 });
 </script>
 {% endblock %}
