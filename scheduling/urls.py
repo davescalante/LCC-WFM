@@ -33,6 +33,7 @@ urlpatterns = [
     path('agent/my-shifts/', views.agent_my_shifts, name='agent_my_shifts'),
     path('agent/my-ot-shifts/', views.agent_my_ot_shifts, name='agent_my_ot_shifts'),
     path('requests/', views.requests_list, name='requests_list'),
+    path('requests/mine/', views.staff_my_requests, name='staff_my_requests'),
     path('requests/<int:pk>/', views.request_detail, name='request_detail'),
     path('requests/<int:pk>/approve/', views.request_approve, name='request_approve'),
     path('requests/<int:pk>/reject/', views.request_reject, name='request_reject'),

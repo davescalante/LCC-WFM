@@ -58,6 +58,7 @@ class AgentAccessMiddleware:
         request.is_agent = False
         request.agent_request_badge = 0
         request.supervisor_request_badge = 0
+        request.staff_own_request_badge = 0
         request.has_finance_access = False
 
         if request.user.is_authenticated:
@@ -79,9 +80,17 @@ class AgentAccessMiddleware:
                         agent=profile, agent_read=False
                     ).count()
                 else:
+                    from django.db.models import Q
                     from scheduling.models import AgentRequest
+                    # Staff requests only badge their assigned supervisor
                     request.supervisor_request_badge = AgentRequest.objects.filter(
                         status='pending', supervisor_read=False
+                    ).filter(
+                        Q(is_staff_request=False) | Q(assigned_supervisor=profile)
+                    ).count()
+                    # Staff member's own requests with unread responses
+                    request.staff_own_request_badge = AgentRequest.objects.filter(
+                        agent=profile, agent_read=False
                     ).count()
                     request.has_finance_access = getattr(profile, 'is_super_admin', False)
             except Exception:

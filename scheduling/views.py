@@ -2556,6 +2556,80 @@ def agent_my_ot_shifts(request):
 
 # ── Agent Request views ────────────────────────────────────────────────────────
 
+def _fill_request_from_post(ar, request):
+    """Populate the per-type fields of an AgentRequest from POST data.
+
+    Returns an error message to show the user, or None on success.
+    """
+    from django.utils.dateparse import parse_time
+
+    req_type = ar.request_type
+    if req_type == 'coding':
+        # Parse to time objects so summary()/strftime work on the fresh instance
+        ar.coding_date = request.POST.get('coding_date') or None
+        ar.coding_start_time = parse_time(request.POST.get('coding_start_time') or '')
+        ar.coding_end_time = parse_time(request.POST.get('coding_end_time') or '')
+    elif req_type == 'vacation':
+        ar.vacation_start = request.POST.get('vacation_start') or None
+        ar.vacation_end = request.POST.get('vacation_end') or request.POST.get('vacation_start') or None
+    elif req_type == 'day_off_change':
+        ar.day_off_type = request.POST.get('day_off_type', '')
+        try:
+            ar.current_day_off = int(request.POST.get('current_day_off', ''))
+        except (ValueError, TypeError):
+            pass
+        try:
+            ar.requested_day_off = int(request.POST.get('requested_day_off', ''))
+        except (ValueError, TypeError):
+            pass
+        ar.effective_date = request.POST.get('effective_date') or None
+    elif req_type == 'vto':
+        ar.vto_date = request.POST.get('vto_date') or None
+    elif req_type == 'loa':
+        ar.loa_start = request.POST.get('loa_start') or None
+        ar.loa_end = request.POST.get('loa_end') or None
+    elif req_type == 'schedule_change':
+        days_raw = request.POST.getlist('schedule_change_days')
+        if not days_raw:
+            return "Please select at least one working day for the schedule change."
+        if not request.POST.get('schedule_new_start_time') or not request.POST.get('schedule_new_end_time'):
+            return "Please enter both a start time and end time for the new schedule."
+        if not request.POST.get('schedule_effective_date'):
+            return "Please enter an effective date for the schedule change."
+        ar.current_schedule_desc = request.POST.get('current_schedule_desc', '').strip()
+        ar.requested_schedule_desc = request.POST.get('requested_schedule_desc', '').strip()
+        ar.schedule_new_start_time = request.POST.get('schedule_new_start_time')
+        ar.schedule_new_end_time = request.POST.get('schedule_new_end_time')
+        ar.schedule_effective_date = request.POST.get('schedule_effective_date')
+        try:
+            ar.schedule_change_days = [int(d) for d in days_raw]
+        except (ValueError, TypeError):
+            return "Invalid day selection. Please try again."
+    return None
+
+
+def _request_action_block_reason(ar, viewer):
+    """Why `viewer` (an Agent or None) may NOT action this request; None if allowed.
+
+    Agent-submitted requests stay actionable by any staff user, except the
+    requester themselves. Staff-submitted requests are only actionable by the
+    requester's assigned supervisor (snapshotted at submission).
+    """
+    if viewer is not None and ar.agent_id == viewer.pk:
+        return "You cannot action your own request. Another approver is required."
+    if not ar.is_staff_request:
+        return None
+    sup = ar.assigned_supervisor
+    if sup is None:
+        return ("This staff request has no assigned supervisor. "
+                "An admin must set a supervisor on the requester's profile.")
+    if ar.agent_id == sup.pk:
+        return f"{sup} is their own assigned supervisor — another approver is required."
+    if viewer is None or viewer.pk != sup.pk:
+        return f"Only {sup} can action this request."
+    return None
+
+
 @login_required
 def agent_my_requests(request):
     try:
@@ -2575,50 +2649,10 @@ def agent_my_requests(request):
                           notes=request.POST.get('notes', '').strip(),
                           supervisor_read=False, agent_read=True)
 
-        if req_type == 'coding':
-            ar.coding_date = request.POST.get('coding_date') or None
-            ar.coding_start_time = request.POST.get('coding_start_time') or None
-            ar.coding_end_time = request.POST.get('coding_end_time') or None
-        elif req_type == 'vacation':
-            ar.vacation_start = request.POST.get('vacation_start') or None
-            ar.vacation_end = request.POST.get('vacation_end') or request.POST.get('vacation_start') or None
-        elif req_type == 'day_off_change':
-            ar.day_off_type = request.POST.get('day_off_type', '')
-            try:
-                ar.current_day_off = int(request.POST.get('current_day_off', ''))
-            except (ValueError, TypeError):
-                pass
-            try:
-                ar.requested_day_off = int(request.POST.get('requested_day_off', ''))
-            except (ValueError, TypeError):
-                pass
-            ar.effective_date = request.POST.get('effective_date') or None
-        elif req_type == 'vto':
-            ar.vto_date = request.POST.get('vto_date') or None
-        elif req_type == 'loa':
-            ar.loa_start = request.POST.get('loa_start') or None
-            ar.loa_end = request.POST.get('loa_end') or None
-        elif req_type == 'schedule_change':
-            days_raw = request.POST.getlist('schedule_change_days')
-            if not days_raw:
-                messages.error(request, "Please select at least one working day for the schedule change.")
-                return redirect('agent_my_requests')
-            if not request.POST.get('schedule_new_start_time') or not request.POST.get('schedule_new_end_time'):
-                messages.error(request, "Please enter both a start time and end time for the new schedule.")
-                return redirect('agent_my_requests')
-            if not request.POST.get('schedule_effective_date'):
-                messages.error(request, "Please enter an effective date for the schedule change.")
-                return redirect('agent_my_requests')
-            ar.current_schedule_desc = request.POST.get('current_schedule_desc', '').strip()
-            ar.requested_schedule_desc = request.POST.get('requested_schedule_desc', '').strip()
-            ar.schedule_new_start_time = request.POST.get('schedule_new_start_time')
-            ar.schedule_new_end_time = request.POST.get('schedule_new_end_time')
-            ar.schedule_effective_date = request.POST.get('schedule_effective_date')
-            try:
-                ar.schedule_change_days = [int(d) for d in days_raw]
-            except (ValueError, TypeError):
-                messages.error(request, "Invalid day selection. Please try again.")
-                return redirect('agent_my_requests')
+        err = _fill_request_from_post(ar, request)
+        if err:
+            messages.error(request, err)
+            return redirect('agent_my_requests')
 
         ar.save()
         log_action(request.user, f'Submitted agent request: {ar.get_request_type_display()}',
@@ -2632,6 +2666,62 @@ def agent_my_requests(request):
 
     return render(request, 'agent/my_requests.html', {
         'agent': agent,
+        'requests': reqs,
+        'today': timezone.localdate(),
+    })
+
+
+@login_required
+def staff_my_requests(request):
+    """Self-service requests for staff users (supervisors, coordinators, admins).
+
+    Mirrors the agent portal experience but routes approval to the staff
+    member's assigned supervisor.
+    """
+    try:
+        agent = request.user.agent
+    except Exception:
+        return redirect('dashboard')
+    if _is_portal_user(agent):
+        return redirect('agent_my_requests')
+
+    supervisor = agent.supervisor
+
+    if request.method == 'POST':
+        if supervisor is None:
+            messages.error(request, "You need a supervisor assigned to your profile before you can "
+                                    "submit requests. Please contact an admin.")
+            return redirect('staff_my_requests')
+
+        req_type = request.POST.get('request_type', '').strip()
+        if not req_type:
+            messages.error(request, "Please select a request type.")
+            return redirect('staff_my_requests')
+
+        ar = AgentRequest(agent=agent, request_type=req_type,
+                          notes=request.POST.get('notes', '').strip(),
+                          supervisor_read=False, agent_read=True,
+                          is_staff_request=True, assigned_supervisor=supervisor)
+
+        err = _fill_request_from_post(ar, request)
+        if err:
+            messages.error(request, err)
+            return redirect('staff_my_requests')
+
+        ar.save()
+        log_action(request.user, f'Submitted staff request: {ar.get_request_type_display()}',
+                   ar.summary(), agent=agent)
+        messages.success(request, "Your request has been submitted and is pending review "
+                                  f"by {supervisor}.")
+        return redirect('staff_my_requests')
+
+    # Mark this staff member's unread responses as seen
+    AgentRequest.objects.filter(agent=agent, agent_read=False).update(agent_read=True)
+    reqs = AgentRequest.objects.filter(agent=agent).order_by('-submitted_at')
+
+    return render(request, 'scheduling/staff_my_requests.html', {
+        'agent': agent,
+        'supervisor': supervisor,
         'requests': reqs,
         'today': timezone.localdate(),
     })
@@ -2694,8 +2784,14 @@ def requests_list(request):
         except ValueError:
             pass
 
-    # Mark all visible pending requests as seen by supervisor
+    # Mark visible pending requests as seen by supervisor. Staff requests only
+    # count as seen when their assigned supervisor views the list — other staff
+    # opening the page must not clear the approver's badge.
     mark_read = qs.filter(status='pending', supervisor_read=False)
+    if viewer is not None:
+        mark_read = mark_read.filter(Q(is_staff_request=False) | Q(assigned_supervisor=viewer))
+    else:
+        mark_read = mark_read.filter(is_staff_request=False)
     mark_read.update(supervisor_read=True)
 
     rows = list(qs)
@@ -2726,6 +2822,7 @@ def requests_list(request):
 @login_required
 def request_detail(request, pk):
     ar = get_object_or_404(AgentRequest, pk=pk)
+    viewer = None
     try:
         viewer = request.user.agent
         if viewer.role == 'agent':
@@ -2735,6 +2832,7 @@ def request_detail(request, pk):
     return render(request, 'scheduling/request_detail.html', {
         'ar': ar,
         'DAY_NAMES': _DAY_NAMES,
+        'action_block': _request_action_block_reason(ar, viewer),
     })
 
 
@@ -2744,12 +2842,18 @@ def request_approve(request, pk):
         return redirect('requests_list')
 
     ar = get_object_or_404(AgentRequest, pk=pk)
+    viewer = None
     try:
         viewer = request.user.agent
         if viewer.role == 'agent':
             return redirect('agent_my_requests')
     except Exception:
         pass
+
+    block = _request_action_block_reason(ar, viewer)
+    if block:
+        messages.error(request, block)
+        return redirect('request_detail', pk=pk)
 
     if ar.status != 'pending':
         messages.error(request, "This request has already been reviewed.")
@@ -2761,15 +2865,22 @@ def request_approve(request, pk):
     if ar.request_type == 'coding':
         from adherence.models import Coding
         from adherence.views import _refresh_actual_hours
+        # Official Admins are tracked on the Admin Adherence tab, which reads
+        # admin codings; everyone else gets a regular coding.
+        is_admin_coding = agent.is_official_admin
         Coding.objects.create(
             agent=agent,
             date=ar.coding_date,
             start_time=ar.coding_start_time,
             end_time=ar.coding_end_time,
             notes=ar.notes or '',
+            is_admin_coding=is_admin_coding,
         )
-        _refresh_actual_hours(agent.pk, ar.coding_date)
-        actions.append(f"Coding entry created: {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
+        if is_admin_coding:
+            actions.append(f"Admin coding entry created (Admin Adherence): {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
+        else:
+            _refresh_actual_hours(agent.pk, ar.coding_date)
+            actions.append(f"Coding entry created: {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
 
     elif ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
         from adherence.models import AdherenceRecord
@@ -2881,7 +2992,8 @@ def request_approve(request, pk):
     ar.agent_read = False
     ar.save()
 
-    log_action(request.user, f'Approved agent request: {ar.get_request_type_display()}',
+    kind = 'staff' if ar.is_staff_request else 'agent'
+    log_action(request.user, f'Approved {kind} request: {ar.get_request_type_display()}',
                ar.summary(), agent=agent)
 
     if ar.request_type == 'schedule_change' and 'Manual action required' in ar.auto_action_log:
@@ -2897,12 +3009,18 @@ def request_reject(request, pk):
         return redirect('requests_list')
 
     ar = get_object_or_404(AgentRequest, pk=pk)
+    viewer = None
     try:
         viewer = request.user.agent
         if viewer.role == 'agent':
             return redirect('agent_my_requests')
     except Exception:
         pass
+
+    block = _request_action_block_reason(ar, viewer)
+    if block:
+        messages.error(request, block)
+        return redirect('request_detail', pk=pk)
 
     if ar.status != 'pending':
         messages.error(request, "This request has already been reviewed.")
@@ -2915,7 +3033,8 @@ def request_reject(request, pk):
     ar.agent_read = False
     ar.save()
 
-    log_action(request.user, f'Rejected agent request: {ar.get_request_type_display()}',
+    kind = 'staff' if ar.is_staff_request else 'agent'
+    log_action(request.user, f'Rejected {kind} request: {ar.get_request_type_display()}',
                ar.summary(), agent=ar.agent)
     messages.success(request, "Request rejected.")
     return redirect('request_detail', pk=pk)
@@ -2927,12 +3046,18 @@ def request_mark_done(request, pk):
         return redirect('requests_list')
 
     ar = get_object_or_404(AgentRequest, pk=pk)
+    viewer = None
     try:
         viewer = request.user.agent
         if viewer.role == 'agent':
             return redirect('agent_my_requests')
     except Exception:
         pass
+
+    block = _request_action_block_reason(ar, viewer)
+    if block:
+        messages.error(request, block)
+        return redirect('request_detail', pk=pk)
 
     if ar.status != 'approved':
         messages.error(request, "Only approved requests can be marked as done.")
@@ -2943,7 +3068,8 @@ def request_mark_done(request, pk):
     ar.done_at = timezone.now()
     ar.save()
 
-    log_action(request.user, f'Marked agent request as done: {ar.get_request_type_display()}',
+    kind = 'staff' if ar.is_staff_request else 'agent'
+    log_action(request.user, f'Marked {kind} request as done: {ar.get_request_type_display()}',
                ar.summary(), agent=ar.agent)
     messages.success(request, "Request marked as done.")
     return redirect('request_detail', pk=pk)

@@ -432,6 +432,15 @@ class AgentRequest(models.Model):
     submitted_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True)
 
+    # Staff self-service: set when a supervisor/coordinator/admin submits for themselves.
+    # assigned_supervisor is a snapshot of their profile supervisor at submission time —
+    # only that person can approve/reject/mark done (agent requests stay open to all staff).
+    is_staff_request = models.BooleanField(default=False)
+    assigned_supervisor = models.ForeignKey(
+        Agent, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='assigned_staff_requests'
+    )
+
     # Coding
     coding_date = models.DateField(null=True, blank=True)
     coding_start_time = models.TimeField(null=True, blank=True)

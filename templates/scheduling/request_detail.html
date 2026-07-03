@@ -32,9 +32,12 @@
         <h2>Request Details</h2>
 
         <div style="font-size:13px;color:#555;line-height:2;">
-            <div><strong>Agent:</strong> {{ ar.agent }}</div>
+            <div><strong>{% if ar.is_staff_request %}Staff Member{% else %}Agent{% endif %}:</strong> {{ ar.agent }}{% if ar.is_staff_request %} <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:10px;vertical-align:middle;">Staff</span>{% endif %}</div>
             <div><strong>Type:</strong> {{ ar.get_request_type_display }}</div>
             <div><strong>Submitted:</strong> {{ ar.submitted_at|date:"M j, Y" }} at {{ ar.submitted_at|time:"H:i" }}</div>
+            {% if ar.is_staff_request %}
+            <div><strong>Assigned Approver:</strong> {{ ar.assigned_supervisor|default:"— none —" }}</div>
+            {% endif %}
         </div>
 
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:12px 0;">
@@ -124,6 +127,14 @@
             {% endif %}
         </div>
 
+        {% if action_block %}
+        {% if ar.status == 'pending' or ar.status == 'approved' %}
+        <div class="card" style="border-left:4px solid #94a3b8;background:#f8fafc;">
+            <div style="font-size:13px;color:#475569;">{{ action_block }}</div>
+        </div>
+        {% endif %}
+        {% else %}
+
         {% if ar.status == 'pending' %}
         <div class="card">
             <h2>Actions</h2>
@@ -161,6 +172,8 @@
                 <button type="submit" class="btn btn-primary">Mark as Done</button>
             </form>
         </div>
+        {% endif %}
+
         {% endif %}
     </div>
 </div>

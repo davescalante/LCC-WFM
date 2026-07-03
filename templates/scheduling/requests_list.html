@@ -1,7 +1,12 @@
 {% extends 'base.html' %}
-{% block title %} - Agent Requests{% endblock %}
+{% block title %} - Requests{% endblock %}
 {% block content %}
-<h1>Agent Requests</h1>
+<h1>Requests</h1>
+
+<div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:2px solid #e5e7eb;">
+    <a href="{% url 'requests_list' %}" style="padding:8px 18px;font-size:14px;font-weight:600;color:#1a3a5c;border-bottom:2px solid #1a3a5c;margin-bottom:-2px;text-decoration:none;">Team Requests</a>
+    <a href="{% url 'staff_my_requests' %}" style="padding:8px 18px;font-size:14px;font-weight:600;color:#6b7280;text-decoration:none;">My Requests{% if request.staff_own_request_badge %} <span style="background:#ef4444;color:white;border-radius:10px;font-size:11px;font-weight:700;padding:1px 7px;">{{ request.staff_own_request_badge }}</span>{% endif %}</a>
+</div>
 
 <div class="card" style="margin-bottom:16px;">
     <form method="get" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
@@ -64,7 +69,7 @@
         <tbody>
         {% for req in pending %}
         <tr>
-            <td style="font-weight:600;">{{ req.agent }}</td>
+            <td style="font-weight:600;">{{ req.agent }}{% if req.is_staff_request %} <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:10px;vertical-align:middle;" title="Staff request — only {{ req.assigned_supervisor|default:'the assigned supervisor' }} can action it">Staff</span>{% endif %}</td>
             <td style="font-size:13px;white-space:nowrap;">{{ req.get_request_type_display }}</td>
             <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ req.submitted_at|date:"M j, Y" }}</td>
             <td style="font-size:13px;">{{ req.summary }}</td>
@@ -87,7 +92,7 @@
         <tbody>
         {% for req in approved %}
         <tr>
-            <td style="font-weight:600;">{{ req.agent }}</td>
+            <td style="font-weight:600;">{{ req.agent }}{% if req.is_staff_request %} <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:10px;vertical-align:middle;" title="Staff request — only {{ req.assigned_supervisor|default:'the assigned supervisor' }} can action it">Staff</span>{% endif %}</td>
             <td style="font-size:13px;white-space:nowrap;">{{ req.get_request_type_display }}</td>
             <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ req.submitted_at|date:"M j, Y" }}</td>
             <td style="font-size:13px;">{{ req.summary }}</td>
@@ -111,7 +116,7 @@
         <tbody>
         {% for req in rejected %}
         <tr>
-            <td style="font-weight:600;">{{ req.agent }}</td>
+            <td style="font-weight:600;">{{ req.agent }}{% if req.is_staff_request %} <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:10px;vertical-align:middle;" title="Staff request — only {{ req.assigned_supervisor|default:'the assigned supervisor' }} can action it">Staff</span>{% endif %}</td>
             <td style="font-size:13px;white-space:nowrap;">{{ req.get_request_type_display }}</td>
             <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ req.submitted_at|date:"M j, Y" }}</td>
             <td style="font-size:13px;">{{ req.summary }}</td>
@@ -135,7 +140,7 @@
         <tbody>
         {% for req in done %}
         <tr>
-            <td style="font-weight:600;">{{ req.agent }}</td>
+            <td style="font-weight:600;">{{ req.agent }}{% if req.is_staff_request %} <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:10px;vertical-align:middle;" title="Staff request — only {{ req.assigned_supervisor|default:'the assigned supervisor' }} can action it">Staff</span>{% endif %}</td>
             <td style="font-size:13px;white-space:nowrap;">{{ req.get_request_type_display }}</td>
             <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ req.submitted_at|date:"M j, Y" }}</td>
             <td style="font-size:13px;">{{ req.summary }}</td>
