@@ -5,6 +5,12 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>OT Shifts</h1>
     <div style="display:flex;gap:8px;">
+        {% if is_ot_approver %}
+        <button type="button" onclick="togglePostOpenPanel()"
+            class="btn" style="background:#faf5ff;color:#7c3aed;border:1px dashed #c4b5fd;padding:6px 14px;font-size:13px;">
+            + Post Open Shift
+        </button>
+        {% endif %}
         <button type="button" onclick="toggleVerifyPanel()"
             class="btn" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:6px 14px;font-size:13px;">
             &#10003; Verify OT Shifts
@@ -74,6 +80,129 @@
 </div>
 
 {% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
+
+{% if is_ot_approver %}
+<!-- Post open shift panel -->
+<div id="post-open-panel" style="display:none;margin-bottom:16px;">
+    <div class="card" style="padding:16px 20px;background:#faf5ff;border:1px dashed #c4b5fd;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div>
+                <div style="font-size:14px;font-weight:600;color:#7c3aed;">Post Open OT Shift{% if not editing %}s{% endif %}</div>
+                <div style="font-size:12px;color:#555;margin-top:2px;">Anyone can request an open shift; a supervisor or coordinator approves and it becomes theirs. Each posting is for one person.</div>
+            </div>
+            <button type="button" onclick="togglePostOpenPanel()" style="background:none;border:none;color:#888;font-size:18px;cursor:pointer;padding:0 4px;">&#215;</button>
+        </div>
+        <form method="post" action="{% url 'open_ot_create' %}" style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;">
+            {% csrf_token %}
+            <div>
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Date</label>
+                <input type="date" name="date" required value="{{ week_start|date:'Y-m-d' }}"
+                    style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+            </div>
+            <div>
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Start</label>
+                <input type="time" name="start_time" required
+                    style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+            </div>
+            <div>
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">End</label>
+                <input type="time" name="end_time" required
+                    style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+            </div>
+            <div>
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Incentive</label>
+                <select name="incentive_type" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                    {% for val, lbl in incentive_choices %}<option value="{{ val }}">{{ lbl }}</option>{% endfor %}
+                </select>
+            </div>
+            <div style="flex:1;min-width:180px;">
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Note (optional)</label>
+                <input type="text" name="notes" maxlength="300" placeholder="e.g. Need coverage for the 5pm spike"
+                    style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:100%;box-sizing:border-box;margin:0;">
+            </div>
+            <div>
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;" title="Identical postings — one per person needed">Number of identical shifts to post</label>
+                <input type="number" name="count" value="1" min="1" max="20"
+                    style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:70px;margin:0;">
+            </div>
+            <button type="submit" class="btn btn-primary" style="padding:7px 18px;font-size:13px;">Post</button>
+        </form>
+    </div>
+</div>
+
+{% if pending_claims or pending_cancels %}
+<!-- Approver inbox: shift claim + cancellation requests -->
+<div class="card" style="margin-bottom:16px;padding:0;">
+    <div style="padding:12px 16px;background:#fef9c3;border-bottom:1px solid #fde68a;display:flex;align-items:center;gap:10px;">
+        <span style="font-weight:700;color:#92400e;font-size:14px;">OT SHIFT REQUESTS</span>
+        <span style="background:#f59e0b;color:white;border-radius:10px;font-size:11px;font-weight:700;padding:1px 8px;">{% with c1=pending_claims|length c2=pending_cancels|length %}{{ c1|add:c2 }}{% endwith %}</span>
+    </div>
+
+    {% if pending_claims %}
+    <div style="padding:10px 16px 4px;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:.5px;">SHIFT CLAIM REQUESTS</div>
+    <table>
+        <thead><tr><th>Shift</th><th>Incentive</th><th>Note</th><th>Requested By</th><th>Submitted</th><th></th></tr></thead>
+        <tbody>
+        {% for c in pending_claims %}
+        <tr>
+            <td style="font-weight:600;font-size:13px;white-space:nowrap;">{{ c.open_shift.date|date:"D, M j" }} · {{ c.open_shift.time_label }}</td>
+            <td style="font-size:12px;white-space:nowrap;">
+                {% if c.open_shift.incentive_type == 'time_and_a_half' %}<span style="background:#fef9c3;color:#854d0e;border:1px solid #fbbf24;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;">1.5x</span>
+                {% elif c.open_shift.incentive_type == 'power_hour' %}<span style="background:#ffedd5;color:#9a3412;border:1px solid #f97316;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;">2x</span>
+                {% else %}<span style="color:#9ca3af;">—</span>{% endif %}
+            </td>
+            <td style="font-size:12px;color:#6b7280;">{{ c.open_shift.notes|truncatechars:40|default:"—" }}</td>
+            <td style="font-size:13px;font-weight:600;">{{ c.requester }}</td>
+            <td style="font-size:12px;color:#6b7280;white-space:nowrap;">{{ c.submitted_at|date:"M j, H:i" }}</td>
+            <td style="white-space:nowrap;text-align:right;">
+                {% if viewer and c.requester_id == viewer.pk %}
+                <span style="font-size:11px;color:#9ca3af;font-style:italic;">Your request — another supervisor or coordinator must action it</span>
+                {% else %}
+                <form method="post" action="{% url 'ot_claim_approve' pk=c.pk %}" style="display:inline;" onsubmit="this.querySelector('button').disabled=true;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-primary" style="padding:4px 12px;font-size:12px;">Approve</button>
+                </form>
+                <button type="button" class="btn" onclick="openRejectModal('{% url 'ot_claim_reject' pk=c.pk %}', 'rejection_reason')"
+                    style="padding:4px 12px;font-size:12px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;">Reject</button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if pending_cancels %}
+    <div style="padding:10px 16px 4px;font-size:12px;font-weight:700;color:#6b7280;letter-spacing:.5px;">CANCELLATION REQUESTS</div>
+    <table>
+        <thead><tr><th>Shift</th><th>Assigned To</th><th>Reason</th><th>Submitted</th><th></th></tr></thead>
+        <tbody>
+        {% for cr in pending_cancels %}
+        <tr>
+            <td style="font-weight:600;font-size:13px;white-space:nowrap;">{{ cr.shift.date|date:"D, M j" }} · {{ cr.shift.start_time|time:"H:i" }}&ndash;{{ cr.shift.end_time|time:"H:i" }}</td>
+            <td style="font-size:13px;font-weight:600;">{{ cr.shift.agent }}</td>
+            <td style="font-size:12px;color:#374151;">{{ cr.reason }}</td>
+            <td style="font-size:12px;color:#6b7280;white-space:nowrap;">{{ cr.submitted_at|date:"M j, H:i" }}</td>
+            <td style="white-space:nowrap;text-align:right;">
+                {% if viewer and cr.requester_id == viewer.pk %}
+                <span style="font-size:11px;color:#9ca3af;font-style:italic;">Your request — another supervisor or coordinator must action it</span>
+                {% else %}
+                <form method="post" action="{% url 'ot_cancel_approve' pk=cr.pk %}" style="display:inline;" onsubmit="this.querySelector('button').disabled=true;return confirm('Approve cancellation? The shift will stop counting toward hours and staffing.');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn" style="padding:4px 12px;font-size:12px;background:#6b7280;color:white;">Approve Cancellation</button>
+                </form>
+                <button type="button" class="btn" onclick="openRejectModal('{% url 'ot_cancel_reject' pk=cr.pk %}', 'review_note')"
+                    style="padding:4px 12px;font-size:12px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;">Reject</button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+{% endif %}
+{% endif %}
 
 <!-- Filters -->
 <div class="card" style="margin-bottom:16px;padding:12px 20px;">
@@ -149,6 +278,58 @@
         </tr>
     </thead>
     <tbody>
+        {% if has_open_shifts %}
+        <tr style="border-bottom:2px solid #e9d5ff;background:#fdfaff;">
+            <td style="padding:10px 12px;font-weight:700;font-size:12px;color:#7c3aed;letter-spacing:.5px;position:sticky;left:0;background:#fdfaff;z-index:1;border-right:1px solid #eee;vertical-align:top;">
+                OPEN SHIFTS
+            </td>
+            {% for cell in open_cells %}
+            <td {% if cell.date == today %}class="col-today-td"{% endif %} style="padding:6px 4px;text-align:center;vertical-align:top;">
+                {% for p in cell.shifts %}
+                <div style="border:2px dashed #c4b5fd;border-radius:6px;background:white;padding:6px 6px 7px;{% if not forloop.first %}margin-top:6px;{% endif %}">
+                    <span style="display:inline-block;background:#ede9fe;color:#6d28d9;border-radius:3px;font-size:9px;font-weight:800;letter-spacing:.5px;padding:1px 6px;">OPEN</span>
+                    <div style="font-size:12px;font-weight:600;color:#6d28d9;white-space:nowrap;margin-top:2px;">{{ p.time_label }}</div>
+                    {% if p.incentive_type == 'time_and_a_half' %}
+                    <span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fbbf24;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">1.5x</span>
+                    {% elif p.incentive_type == 'power_hour' %}
+                    <span style="display:inline-block;background:#ffedd5;color:#9a3412;border:1px solid #f97316;border-radius:3px;font-size:10px;font-weight:700;padding:1px 5px;margin-top:2px;">2x</span>
+                    {% endif %}
+                    {% if p.notes %}
+                    <div style="font-size:10px;color:#6b7280;margin-top:2px;line-height:1.3;">{{ p.notes|truncatechars:60 }}</div>
+                    {% endif %}
+                    {% for c in p.pending_claims %}
+                    <div style="font-size:10px;color:#92400e;margin-top:2px;line-height:1.3;">Requested by {{ c.requester }} — pending approval</div>
+                    {% endfor %}
+                    <div style="margin-top:5px;display:flex;gap:4px;justify-content:center;flex-wrap:wrap;">
+                        {% if p.my_pending %}
+                        <span style="font-size:10px;color:#15803d;font-weight:600;">&#10003; Requested</span>
+                        {% else %}
+                        <form method="post" action="{% url 'open_ot_claim' pk=p.pk %}" style="display:inline;margin:0;" onsubmit="this.querySelector('button').disabled=true;">
+                            {% csrf_token %}
+                            <button type="submit" class="btn" style="padding:2px 10px;font-size:11px;background:#7c3aed;color:white;border-radius:4px;">Request</button>
+                        </form>
+                        {% endif %}
+                        {% if is_ot_approver %}
+                        <button type="button" title="Edit this open shift"
+                            onclick="openEditOpenShift({{ p.pk }}, '{{ p.date|date:'Y-m-d' }}', '{{ p.start_time|time:'H:i' }}', '{{ p.end_time|time:'H:i' }}', '{{ p.incentive_type }}', '{{ p.notes|escapejs }}')"
+                            style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;cursor:pointer;font-size:12px;">✏</button>
+                        <form method="post" action="{% url 'open_ot_delete' pk=p.pk %}" style="display:inline;margin:0;"
+                              onsubmit="return confirm('Delete this open shift posting? Pending requests will be rejected.');">
+                            {% csrf_token %}
+                            <button type="submit" title="Delete this open shift"
+                                style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;cursor:pointer;font-size:12px;">🗑</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </div>
+                {% empty %}
+                <span style="color:#e9d5ff;font-size:12px;">&mdash;</span>
+                {% endfor %}
+            </td>
+            {% endfor %}
+            <td colspan="3" style="border-left:2px solid #eee;"></td>
+        </tr>
+        {% endif %}
         {% for row in rows %}
         <tr data-agent="{{ row.agent.pk }}" style="border-bottom:1px solid #e8e8e8;">
             <td style="padding:10px 12px;font-weight:600;font-size:13px;position:sticky;left:0;background:white;z-index:1;border-right:1px solid #eee;">
@@ -223,6 +404,20 @@
                         </div>
                         {% endif %}
                         {% endwith %}
+                        {% endif %}
+                        <!-- Own-shift cancellation request state -->
+                        {% if ot.my_cancel_req and ot.status != 'cancelled' %}
+                            {% if ot.my_cancel_req.status == 'pending' %}
+                            <div style="font-size:10px;color:#92400e;background:#fef9c3;border-radius:3px;padding:1px 5px;margin-top:3px;display:inline-block;">Cancellation requested — pending</div>
+                            {% elif ot.my_cancel_req.status == 'rejected' %}
+                            <div style="font-size:10px;color:#dc2626;margin-top:3px;">Cancellation rejected{% if ot.my_cancel_req.review_note %}: {{ ot.my_cancel_req.review_note }}{% endif %}</div>
+                            {% endif %}
+                        {% endif %}
+                        {% if ot.can_request_cancel %}
+                        <div style="margin-top:3px;">
+                            <button type="button" onclick="openCancelRequestModal({{ ot.pk }}, '{{ ot.date|date:"D, M j" }} {{ ot.start_time|time:"H:i" }}–{{ ot.end_time|time:"H:i" }}')"
+                                style="font-size:10px;background:none;border:none;color:#b45309;text-decoration:underline;cursor:pointer;padding:0;">Request cancellation</button>
+                        </div>
                         {% endif %}
                         <!-- Hover-reveal action buttons -->
                         <div class="ot-row-actions" style="display:none;margin-top:4px;gap:4px;justify-content:center;">
@@ -300,6 +495,86 @@
         </div>
     </div>
 </div>
+
+<!-- Cancellation request modal (own shifts) -->
+<div id="cancel-request-modal" style="display:none;position:fixed;inset:0;z-index:10002;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 style="margin:0 0 8px;font-size:17px;color:#1a3a5c;">Request Shift Cancellation</h3>
+        <p id="cancel-request-desc" style="margin:0 0 6px;font-size:14px;color:#555;line-height:1.5;"></p>
+        <p style="margin:0 0 16px;font-size:12px;color:#888;">The shift stays assigned to you and fully counted until a supervisor or coordinator approves this request.</p>
+        <form id="cancel-request-form" method="post" action="">
+            {% csrf_token %}
+            <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:#374151;">
+                Reason <span style="color:#dc2626;">*</span>
+            </label>
+            <textarea name="reason" rows="3" required maxlength="500" placeholder="Why can't you make this shift?"
+                style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"></textarea>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" onclick="closeCancelRequestModal()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Never Mind</button>
+                <button type="submit" style="padding:8px 20px;border:none;border-radius:6px;background:#b45309;color:white;font-size:14px;font-weight:600;cursor:pointer;">Submit Request</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if is_ot_approver %}
+<!-- Reject-with-reason modal (claim + cancellation requests) -->
+<div id="reject-modal" style="display:none;position:fixed;inset:0;z-index:10002;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 style="margin:0 0 8px;font-size:17px;color:#1a3a5c;">Reject Request</h3>
+        <form id="reject-form" method="post" action="">
+            {% csrf_token %}
+            <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:#374151;">
+                Reason <span style="font-weight:400;color:#888;">(optional — shown to the requester)</span>
+            </label>
+            <textarea id="reject-reason-field" name="rejection_reason" rows="3" maxlength="500" placeholder="Explain the rejection…"
+                style="width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"></textarea>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
+                <button type="button" onclick="closeRejectModal()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Cancel</button>
+                <button type="submit" style="padding:8px 20px;border:none;border-radius:6px;background:#dc2626;color:white;font-size:14px;font-weight:600;cursor:pointer;">Confirm Rejection</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit open shift modal -->
+<div id="edit-open-modal" style="display:none;position:fixed;inset:0;z-index:10002;background:rgba(0,0,0,.4);align-items:center;justify-content:center;">
+    <div style="background:white;border-radius:12px;padding:28px 32px;max-width:460px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 style="margin:0 0 16px;font-size:17px;color:#1a3a5c;">Edit Open Shift</h3>
+        <form id="edit-open-form" method="post" action="">
+            {% csrf_token %}
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                <div>
+                    <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Date</label>
+                    <input type="date" name="date" id="edit-open-date" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                </div>
+                <div>
+                    <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Start</label>
+                    <input type="time" name="start_time" id="edit-open-start" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                </div>
+                <div>
+                    <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">End</label>
+                    <input type="time" name="end_time" id="edit-open-end" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                </div>
+            </div>
+            <div style="margin-top:10px;">
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Incentive</label>
+                <select name="incentive_type" id="edit-open-incentive" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+                    {% for val, lbl in incentive_choices %}<option value="{{ val }}">{{ lbl }}</option>{% endfor %}
+                </select>
+            </div>
+            <div style="margin-top:10px;">
+                <label style="font-size:12px;color:#555;margin-bottom:4px;display:block;">Note (optional)</label>
+                <input type="text" name="notes" id="edit-open-notes" maxlength="300" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:100%;box-sizing:border-box;margin:0;">
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+                <button type="button" onclick="closeEditOpenModal()" style="padding:8px 20px;border:1px solid #ddd;border-radius:6px;background:white;font-size:14px;cursor:pointer;color:#555;">Cancel</button>
+                <button type="submit" class="btn btn-primary" style="padding:8px 20px;font-size:14px;">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <style>
 #ot-table thead th { position: sticky; top: 0; z-index: 3; background: #f0f4f8; }
@@ -583,6 +858,67 @@ function recalcAgentTotals(row) {
     if (offeredEl) offeredEl.textContent = totalOffered > 0 ? '$' + totalOffered.toFixed(2) : '—';
     if (earnedEl) earnedEl.textContent = totalEarned > 0 ? '$' + totalEarned.toFixed(2) : '—';
 }
+
+function togglePostOpenPanel() {
+    const p = document.getElementById('post-open-panel');
+    if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+function openCancelRequestModal(pk, label) {
+    const modal = document.getElementById('cancel-request-modal');
+    document.getElementById('cancel-request-desc').textContent = 'Shift: ' + label;
+    const form = document.getElementById('cancel-request-form');
+    form.action = '/agent/ot-shifts/' + pk + '/request-cancel/';
+    form.querySelector('textarea[name=reason]').value = '';
+    modal.style.display = 'flex';
+    setTimeout(() => form.querySelector('textarea[name=reason]').focus(), 50);
+}
+function closeCancelRequestModal() {
+    document.getElementById('cancel-request-modal').style.display = 'none';
+}
+document.getElementById('cancel-request-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeCancelRequestModal();
+});
+
+function openRejectModal(actionUrl, fieldName) {
+    const modal = document.getElementById('reject-modal');
+    if (!modal) return;
+    const form = document.getElementById('reject-form');
+    form.action = actionUrl;
+    const field = document.getElementById('reject-reason-field');
+    field.name = fieldName;
+    field.value = '';
+    modal.style.display = 'flex';
+    setTimeout(() => field.focus(), 50);
+}
+function closeRejectModal() {
+    const modal = document.getElementById('reject-modal');
+    if (modal) modal.style.display = 'none';
+}
+const _rejectModal = document.getElementById('reject-modal');
+if (_rejectModal) _rejectModal.addEventListener('click', function(e) {
+    if (e.target === this) closeRejectModal();
+});
+
+function openEditOpenShift(pk, date, start, end, incentive, notes) {
+    const modal = document.getElementById('edit-open-modal');
+    if (!modal) return;
+    document.getElementById('edit-open-form').action = '/overtime/open/' + pk + '/update/';
+    document.getElementById('edit-open-date').value = date;
+    document.getElementById('edit-open-start').value = start;
+    document.getElementById('edit-open-end').value = end;
+    document.getElementById('edit-open-incentive').value = incentive;
+    document.getElementById('edit-open-notes').value = notes;
+    modal.style.display = 'flex';
+}
+function closeEditOpenModal() {
+    const modal = document.getElementById('edit-open-modal');
+    if (modal) modal.style.display = 'none';
+}
+const _editOpenModal = document.getElementById('edit-open-modal');
+if (_editOpenModal) _editOpenModal.addEventListener('click', function(e) {
+    if (e.target === this) closeEditOpenModal();
+});
 
 function getCookie(name) {
     let v = null;

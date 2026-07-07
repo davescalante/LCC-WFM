@@ -332,6 +332,108 @@ class OTShiftVerification(models.Model):
         return self._fmt_secs(self.shift_seconds)
 
 
+class OpenOTShift(models.Model):
+    """An unassigned OT shift posting — a claimable slot on the OT job board.
+
+    Kept separate from OvertimeShift on purpose: approving a claim CREATES a
+    regular OvertimeShift, so payroll, Five9 verification, and Staffing
+    Calculator coverage only ever see real assigned shifts. Each posting is
+    for exactly one person.
+    """
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('filled', 'Filled'),
+        ('removed', 'Removed'),  # soft-delete: keeps claim-request history intact
+    ]
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    incentive_type = models.CharField(max_length=20, choices=OvertimeShift.INCENTIVE_CHOICES, default='none')
+    notes = models.TextField(blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='open')
+    posted_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL,
+                                  related_name='posted_open_ot_shifts')
+    posted_at = models.DateTimeField(auto_now_add=True)
+    filled_by = models.ForeignKey(Agent, null=True, blank=True, on_delete=models.SET_NULL,
+                                  related_name='claimed_open_ot_shifts')
+    filled_at = models.DateTimeField(null=True, blank=True)
+    assigned_shift = models.OneToOneField(OvertimeShift, null=True, blank=True, on_delete=models.SET_NULL,
+                                          related_name='open_posting')
+
+    class Meta:
+        ordering = ['date', 'start_time']
+        indexes = [
+            models.Index(fields=['status', 'date']),
+        ]
+
+    def __str__(self):
+        return f"Open OT {self.date} {self.start_time:%H:%M}–{self.end_time:%H:%M}"
+
+    def time_label(self):
+        return f"{self.start_time:%H:%M}–{self.end_time:%H:%M}"
+
+
+class OTShiftClaimRequest(models.Model):
+    """A request to claim an open OT shift. Several can be pending on the same
+    posting (backups); approving one auto-rejects the rest."""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    open_shift = models.ForeignKey(OpenOTShift, on_delete=models.CASCADE, related_name='claim_requests')
+    requester = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='ot_claim_requests')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    reviewed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name='reviewed_ot_claims')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+
+    # Notification flags: False = unread / needs attention
+    supervisor_read = models.BooleanField(default=False)  # False when newly submitted
+    requester_read = models.BooleanField(default=True)    # False when approver responds
+
+    class Meta:
+        ordering = ['submitted_at']
+
+    def __str__(self):
+        return f"{self.requester} → {self.open_shift} ({self.status})"
+
+
+class OTCancellationRequest(models.Model):
+    """A request by a shift's owner to cancel their assigned OT shift.
+
+    Submitting does NOT change the shift — it stays assigned and fully counted
+    until an approver acts. Approval moves the shift to the existing
+    'cancelled' status with the reason attached.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    shift = models.ForeignKey(OvertimeShift, on_delete=models.CASCADE, related_name='cancellation_requests')
+    requester = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='ot_cancellation_requests')
+    reason = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    reviewed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name='reviewed_ot_cancellations')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+
+    # Notification flags: False = unread / needs attention
+    supervisor_read = models.BooleanField(default=False)
+    requester_read = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['submitted_at']
+
+    def __str__(self):
+        return f"Cancel {self.shift} ({self.status})"
+
+
 class AuditLog(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_logs')

@@ -59,6 +59,9 @@ class AgentAccessMiddleware:
         request.agent_request_badge = 0
         request.supervisor_request_badge = 0
         request.staff_own_request_badge = 0
+        request.agent_ot_claim_badge = 0
+        request.agent_ot_cancel_badge = 0
+        request.ot_request_badge = 0
         request.has_finance_access = False
 
         if request.user.is_authenticated:
@@ -75,13 +78,19 @@ class AgentAccessMiddleware:
                     request.is_agent = True
                     if not any(request.path.startswith(p) for p in _AGENT_ALLOWED):
                         return redirect('agent_my_shifts')
-                    from scheduling.models import AgentRequest
+                    from scheduling.models import AgentRequest, OTShiftClaimRequest, OTCancellationRequest
                     request.agent_request_badge = AgentRequest.objects.filter(
                         agent=profile, agent_read=False
                     ).count()
+                    request.agent_ot_claim_badge = OTShiftClaimRequest.objects.filter(
+                        requester=profile, requester_read=False
+                    ).count()
+                    request.agent_ot_cancel_badge = OTCancellationRequest.objects.filter(
+                        requester=profile, requester_read=False
+                    ).count()
                 else:
                     from django.db.models import Q
-                    from scheduling.models import AgentRequest
+                    from scheduling.models import AgentRequest, OTShiftClaimRequest, OTCancellationRequest
                     # Staff requests only badge their assigned supervisor
                     request.supervisor_request_badge = AgentRequest.objects.filter(
                         status='pending', supervisor_read=False
@@ -92,6 +101,18 @@ class AgentAccessMiddleware:
                     request.staff_own_request_badge = AgentRequest.objects.filter(
                         agent=profile, agent_read=False
                     ).count()
+                    # OT badge: pending claim/cancel requests for approvers
+                    # (supervisors/coordinators) + responses to own requests
+                    ot_badge = (
+                        OTShiftClaimRequest.objects.filter(requester=profile, requester_read=False).count()
+                        + OTCancellationRequest.objects.filter(requester=profile, requester_read=False).count()
+                    )
+                    if profile.role == 'admin' and profile.role_type in ('supervisor', 'coordinator'):
+                        ot_badge += (
+                            OTShiftClaimRequest.objects.filter(status='pending', supervisor_read=False).count()
+                            + OTCancellationRequest.objects.filter(status='pending', supervisor_read=False).count()
+                        )
+                    request.ot_request_badge = ot_badge
                     request.has_finance_access = getattr(profile, 'is_super_admin', False)
             except Exception:
                 if request.user.is_superuser:

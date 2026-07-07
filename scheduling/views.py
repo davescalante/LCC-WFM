@@ -8,7 +8,7 @@ from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, log_action
+from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, OpenOTShift, OTShiftClaimRequest, OTCancellationRequest, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm
 
 
@@ -1232,6 +1232,59 @@ def overtime_list(request):
         .order_by('-uploaded_at').first()
     )
 
+    viewer = _viewer_agent(request)
+    is_ot_approver_flag = _is_ot_approver(viewer)
+    today_val = timezone.localdate()
+
+    # Open OT shift postings for this week (dashed "Open Shifts" row)
+    open_shifts = list(
+        OpenOTShift.objects.filter(status='open', date__in=week_dates)
+        .order_by('start_time')
+        .prefetch_related('claim_requests__requester')
+    )
+    open_map = {}
+    for p in open_shifts:
+        p.pending_claims = [c for c in p.claim_requests.all() if c.status == 'pending']
+        p.my_pending = viewer is not None and any(c.requester_id == viewer.pk for c in p.pending_claims)
+        open_map.setdefault(p.date, []).append(p)
+    open_cells = [{'date': d, 'shifts': open_map.get(d, [])} for d in week_dates]
+
+    # Approver inbox: all pending claim + cancellation requests (not week-scoped)
+    pending_claims = []
+    pending_cancels = []
+    if is_ot_approver_flag:
+        pending_claims = list(
+            OTShiftClaimRequest.objects.filter(status='pending')
+            .select_related('open_shift', 'requester__user')
+            .order_by('open_shift__date', 'open_shift__start_time', 'submitted_at')
+        )
+        pending_cancels = list(
+            OTCancellationRequest.objects.filter(status='pending')
+            .select_related('shift__agent__user', 'requester__user')
+            .order_by('shift__date', 'submitted_at')
+        )
+        OTShiftClaimRequest.objects.filter(status='pending', supervisor_read=False).update(supervisor_read=True)
+        OTCancellationRequest.objects.filter(status='pending', supervisor_read=False).update(supervisor_read=True)
+
+    if viewer is not None:
+        # Staff viewing this page have seen the responses to their own requests
+        OTShiftClaimRequest.objects.filter(requester=viewer, requester_read=False).update(requester_read=True)
+        OTCancellationRequest.objects.filter(requester=viewer, requester_read=False).update(requester_read=True)
+
+        # Cancellation-request state for the viewer's own shifts in the grid
+        own_pks = [s.pk for shifts in ot_map.values() for s in shifts if s.agent_id == viewer.pk]
+        cr_map = {}
+        for cr in OTCancellationRequest.objects.filter(shift_id__in=own_pks).order_by('submitted_at'):
+            cr_map[cr.shift_id] = cr  # latest per shift wins
+        for shifts in ot_map.values():
+            for s in shifts:
+                if s.agent_id == viewer.pk:
+                    s.my_cancel_req = cr_map.get(s.pk)
+                    s.can_request_cancel = (
+                        s.status == 'pending' and s.date >= today_val
+                        and not (s.my_cancel_req and s.my_cancel_req.status == 'pending')
+                    )
+
     rows = []
     for agent in agents:
         cells = []
@@ -1263,13 +1316,20 @@ def overtime_list(request):
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
-        'today': timezone.localdate(),
+        'today': today_val,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
         'status_filter': status_filter,
         'last_ll_upload': last_ll_upload,
+        'viewer': viewer,
+        'is_ot_approver': is_ot_approver_flag,
+        'open_cells': open_cells,
+        'has_open_shifts': bool(open_shifts),
+        'pending_claims': pending_claims,
+        'pending_cancels': pending_cancels,
+        'incentive_choices': OvertimeShift.INCENTIVE_CHOICES,
     })
 
 
@@ -1796,6 +1856,399 @@ def overtime_set_status(request, pk):
                + (f' (reason: {cancellation_reason})' if cancellation_reason else ''),
                agent=ot_shift.agent)
     return JsonResponse({'status': new_status, 'pk': pk, 'cancellation_reason': ot_shift.cancellation_reason})
+
+
+# ── Open OT shift postings, claim requests, cancellation requests ─────────────
+
+def _viewer_agent(request):
+    try:
+        return request.user.agent
+    except Exception:
+        return None
+
+
+def _is_ot_approver(agent):
+    """Only supervisors and coordinators can post open shifts and action requests."""
+    return agent is not None and agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')
+
+
+def _redirect_after_ot_action(request, target_date=None):
+    """Send portal users back to their portal, staff back to the OT week grid."""
+    viewer = _viewer_agent(request)
+    if viewer is not None and _is_portal_user(viewer):
+        return redirect('agent_available_ot')
+    url = reverse('overtime_list')
+    if target_date:
+        week_start = target_date - timedelta(days=target_date.weekday())
+        url += f'?week_start={week_start.isoformat()}'
+    return redirect(url)
+
+
+def _parse_open_shift_fields(post):
+    """Returns (fields_dict, error_message)."""
+    from django.utils.dateparse import parse_time
+    try:
+        shift_date = date.fromisoformat(post.get('date', ''))
+    except (ValueError, TypeError):
+        return None, "Please enter a valid date."
+    start = parse_time(post.get('start_time') or '')
+    end = parse_time(post.get('end_time') or '')
+    if not start or not end:
+        return None, "Please enter valid start and end times."
+    incentive = post.get('incentive_type', 'none')
+    if incentive not in dict(OvertimeShift.INCENTIVE_CHOICES):
+        incentive = 'none'
+    return {
+        'date': shift_date,
+        'start_time': start,
+        'end_time': end,
+        'incentive_type': incentive,
+        'notes': post.get('notes', '').strip(),
+    }, None
+
+
+@login_required
+def open_ot_create(request):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can post open shifts.")
+        return redirect('overtime_list')
+
+    fields, err = _parse_open_shift_fields(request.POST)
+    if err:
+        messages.error(request, err)
+        return redirect('overtime_list')
+
+    try:
+        count = max(1, min(20, int(request.POST.get('count', '1'))))
+    except (ValueError, TypeError):
+        count = 1
+
+    for _ in range(count):
+        OpenOTShift.objects.create(posted_by=request.user, **fields)
+
+    label = f"{fields['date']} {fields['start_time']:%H:%M}–{fields['end_time']:%H:%M}"
+    log_action(request.user, 'Posted open OT shift',
+               f"{label} ×{count}" + (f" — {fields['notes']}" if fields['notes'] else ''))
+    messages.success(request, f"Posted {count} open shift{'s' if count > 1 else ''} for {label}.")
+    return _redirect_after_ot_action(request, fields['date'])
+
+
+@login_required
+def open_ot_update(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can edit open shifts.")
+        return redirect('overtime_list')
+
+    posting = get_object_or_404(OpenOTShift, pk=pk)
+    if posting.status != 'open':
+        messages.error(request, "This shift has already been claimed and can no longer be edited.")
+        return _redirect_after_ot_action(request, posting.date)
+
+    fields, err = _parse_open_shift_fields(request.POST)
+    if err:
+        messages.error(request, err)
+        return _redirect_after_ot_action(request, posting.date)
+
+    for k, v in fields.items():
+        setattr(posting, k, v)
+    posting.save()
+    log_action(request.user, 'Updated open OT shift',
+               f"{posting.date} {posting.time_label()}")
+    messages.success(request, "Open shift updated.")
+    return _redirect_after_ot_action(request, posting.date)
+
+
+@login_required
+def open_ot_delete(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can delete open shifts.")
+        return redirect('overtime_list')
+
+    posting = get_object_or_404(OpenOTShift, pk=pk)
+    if posting.status != 'open':
+        messages.error(request, "This shift has already been claimed and can no longer be deleted.")
+        return _redirect_after_ot_action(request, posting.date)
+
+    # Notify anyone still waiting on this posting
+    posting.claim_requests.filter(status='pending').update(
+        status='rejected', rejection_reason='The open shift posting was removed.',
+        reviewed_by=request.user, reviewed_at=timezone.now(), requester_read=False,
+    )
+    # Soft-delete so claim-request history and notifications survive
+    posting.status = 'removed'
+    posting.save(update_fields=['status'])
+    log_action(request.user, 'Deleted open OT shift', f"{posting.date} {posting.time_label()}")
+    messages.success(request, "Open shift deleted.")
+    return _redirect_after_ot_action(request, posting.date)
+
+
+@login_required
+def open_ot_claim(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    if viewer is None or viewer.status != 'active':
+        messages.error(request, "You need an active profile to request shifts.")
+        return _redirect_after_ot_action(request)
+
+    posting = get_object_or_404(OpenOTShift, pk=pk)
+    if posting.status != 'open':
+        messages.error(request, "This shift has already been filled.")
+        return _redirect_after_ot_action(request, posting.date)
+    if posting.claim_requests.filter(requester=viewer, status='pending').exists():
+        messages.error(request, "You already have a pending request for this shift.")
+        return _redirect_after_ot_action(request, posting.date)
+
+    OTShiftClaimRequest.objects.create(
+        open_shift=posting, requester=viewer,
+        supervisor_read=False, requester_read=True,
+    )
+    log_action(request.user, 'Requested open OT shift',
+               f"{posting.date} {posting.time_label()}", agent=viewer)
+    messages.success(request, "Your request has been submitted and is pending approval.")
+    return _redirect_after_ot_action(request, posting.date)
+
+
+@login_required
+def ot_claim_approve(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    claim = get_object_or_404(
+        OTShiftClaimRequest.objects.select_related('open_shift', 'requester'), pk=pk
+    )
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can approve shift requests.")
+        return redirect('overtime_list')
+    if claim.requester_id == viewer.pk:
+        messages.error(request, "You cannot approve your own shift request. "
+                                "Another supervisor or coordinator must approve it.")
+        return _redirect_after_ot_action(request, claim.open_shift.date)
+    if claim.status != 'pending':
+        messages.error(request, "This request has already been reviewed.")
+        return _redirect_after_ot_action(request, claim.open_shift.date)
+    posting = claim.open_shift
+    if posting.status != 'open':
+        messages.error(request, "This shift has already been filled.")
+        return _redirect_after_ot_action(request, posting.date)
+
+    from django.db import transaction
+    now = timezone.now()
+    with transaction.atomic():
+        shift = OvertimeShift.objects.create(
+            agent=claim.requester,
+            date=posting.date,
+            start_time=posting.start_time,
+            end_time=posting.end_time,
+            incentive_type=posting.incentive_type,
+            notes=posting.notes,
+            base_hourly_rate=claim.requester.hourly_rate,
+        )
+        if posting.incentive_type != 'none':
+            shift.incentivized_hours = shift.total_shift_hours()
+            shift.save(update_fields=['incentivized_hours'])
+
+        posting.status = 'filled'
+        posting.filled_by = claim.requester
+        posting.filled_at = now
+        posting.assigned_shift = shift
+        posting.save(update_fields=['status', 'filled_by', 'filled_at', 'assigned_shift'])
+
+        claim.status = 'approved'
+        claim.reviewed_by = request.user
+        claim.reviewed_at = now
+        claim.requester_read = False
+        claim.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'requester_read'])
+
+        # Backup requests lose out once the shift is assigned
+        posting.claim_requests.filter(status='pending').exclude(pk=claim.pk).update(
+            status='rejected', rejection_reason='Shift was assigned to another requester.',
+            reviewed_by=request.user, reviewed_at=now, requester_read=False,
+        )
+
+    log_action(request.user, 'Approved OT shift claim',
+               f"{posting.date} {posting.time_label()} → {claim.requester}", agent=claim.requester)
+    messages.success(request, f"Shift assigned to {claim.requester}.")
+    return _redirect_after_ot_action(request, posting.date)
+
+
+@login_required
+def ot_claim_reject(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    claim = get_object_or_404(
+        OTShiftClaimRequest.objects.select_related('open_shift', 'requester'), pk=pk
+    )
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can reject shift requests.")
+        return redirect('overtime_list')
+    if claim.status != 'pending':
+        messages.error(request, "This request has already been reviewed.")
+        return _redirect_after_ot_action(request, claim.open_shift.date)
+
+    claim.status = 'rejected'
+    claim.reviewed_by = request.user
+    claim.reviewed_at = timezone.now()
+    claim.rejection_reason = request.POST.get('rejection_reason', '').strip()
+    claim.requester_read = False
+    claim.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'rejection_reason', 'requester_read'])
+
+    log_action(request.user, 'Rejected OT shift claim',
+               f"{claim.open_shift.date} {claim.open_shift.time_label()} — {claim.requester}",
+               agent=claim.requester)
+    messages.success(request, "Shift request rejected. The shift remains open.")
+    return _redirect_after_ot_action(request, claim.open_shift.date)
+
+
+@login_required
+def ot_cancel_request(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    shift = get_object_or_404(OvertimeShift, pk=pk)
+    if viewer is None or shift.agent_id != viewer.pk:
+        messages.error(request, "You can only request cancellation of your own shifts.")
+        return _redirect_after_ot_action(request, shift.date)
+    if shift.status != 'pending':
+        messages.error(request, "Only upcoming pending shifts can be cancelled.")
+        return _redirect_after_ot_action(request, shift.date)
+    if shift.date < timezone.localdate():
+        messages.error(request, "This shift is in the past and can no longer be cancelled.")
+        return _redirect_after_ot_action(request, shift.date)
+    reason = request.POST.get('reason', '').strip()
+    if not reason:
+        messages.error(request, "Please provide a reason for the cancellation request.")
+        return _redirect_after_ot_action(request, shift.date)
+    if shift.cancellation_requests.filter(status='pending').exists():
+        messages.error(request, "A cancellation request for this shift is already pending.")
+        return _redirect_after_ot_action(request, shift.date)
+
+    OTCancellationRequest.objects.create(
+        shift=shift, requester=viewer, reason=reason,
+        supervisor_read=False, requester_read=True,
+    )
+    log_action(request.user, 'Requested OT shift cancellation',
+               f"{shift.date} {shift.start_time:%H:%M}–{shift.end_time:%H:%M} — {reason}",
+               agent=viewer)
+    messages.success(request, "Cancellation request submitted. The shift stays assigned to you "
+                              "unless it is approved.")
+    if viewer is not None and _is_portal_user(viewer):
+        return redirect('agent_my_ot_shifts')
+    return _redirect_after_ot_action(request, shift.date)
+
+
+@login_required
+def ot_cancel_approve(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    cr = get_object_or_404(
+        OTCancellationRequest.objects.select_related('shift', 'requester'), pk=pk
+    )
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can approve cancellation requests.")
+        return redirect('overtime_list')
+    if cr.requester_id == viewer.pk:
+        messages.error(request, "You cannot approve your own cancellation request. "
+                                "Another supervisor or coordinator must approve it.")
+        return _redirect_after_ot_action(request, cr.shift.date)
+    if cr.status != 'pending':
+        messages.error(request, "This request has already been reviewed.")
+        return _redirect_after_ot_action(request, cr.shift.date)
+
+    shift = cr.shift
+    shift.status = 'cancelled'
+    shift.cancellation_reason = cr.reason
+    shift.save(update_fields=['status', 'cancellation_reason'])
+
+    cr.status = 'approved'
+    cr.reviewed_by = request.user
+    cr.reviewed_at = timezone.now()
+    cr.requester_read = False
+    cr.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'requester_read'])
+
+    log_action(request.user, 'Approved OT cancellation request',
+               f"{shift.agent} on {shift.date}: cancelled (reason: {cr.reason})",
+               agent=shift.agent)
+    messages.success(request, "Cancellation approved — the shift is now cancelled.")
+    return _redirect_after_ot_action(request, shift.date)
+
+
+@login_required
+def ot_cancel_reject(request, pk):
+    if request.method != 'POST':
+        return redirect('overtime_list')
+    viewer = _viewer_agent(request)
+    cr = get_object_or_404(
+        OTCancellationRequest.objects.select_related('shift', 'requester'), pk=pk
+    )
+    if not _is_ot_approver(viewer):
+        messages.error(request, "Only supervisors and coordinators can reject cancellation requests.")
+        return redirect('overtime_list')
+    if cr.status != 'pending':
+        messages.error(request, "This request has already been reviewed.")
+        return _redirect_after_ot_action(request, cr.shift.date)
+
+    cr.status = 'rejected'
+    cr.reviewed_by = request.user
+    cr.reviewed_at = timezone.now()
+    cr.review_note = request.POST.get('review_note', '').strip()
+    cr.requester_read = False
+    cr.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'review_note', 'requester_read'])
+
+    log_action(request.user, 'Rejected OT cancellation request',
+               f"{cr.shift.agent} on {cr.shift.date}"
+               + (f" (note: {cr.review_note})" if cr.review_note else ''),
+               agent=cr.shift.agent)
+    messages.success(request, "Cancellation request rejected. The shift remains assigned.")
+    return _redirect_after_ot_action(request, cr.shift.date)
+
+
+@login_required
+def agent_available_ot(request):
+    """Agent portal: browse open OT shifts and request to claim them."""
+    viewer = _viewer_agent(request)
+    if viewer is None:
+        return redirect('dashboard')
+    if not _is_portal_user(viewer):
+        return redirect('overtime_list')
+
+    today = timezone.localdate()
+    # Mark responses to my claim requests as seen
+    OTShiftClaimRequest.objects.filter(requester=viewer, requester_read=False).update(requester_read=True)
+
+    postings = list(
+        OpenOTShift.objects.filter(status='open', date__gte=today)
+        .order_by('date', 'start_time')
+        .prefetch_related('claim_requests__requester')
+    )
+    for p in postings:
+        pending = [c for c in p.claim_requests.all() if c.status == 'pending']
+        p.pending_claims = pending
+        p.my_pending = any(c.requester_id == viewer.pk for c in pending)
+
+    my_requests = (
+        OTShiftClaimRequest.objects.filter(requester=viewer)
+        .select_related('open_shift', 'reviewed_by')
+        .order_by('-submitted_at')[:30]
+    )
+
+    return render(request, 'agent/available_ot.html', {
+        'agent': viewer,
+        'postings': postings,
+        'my_requests': my_requests,
+        'today': today,
+    })
 
 
 @login_required
@@ -2526,6 +2979,18 @@ def agent_my_ot_shifts(request):
     ot_shifts = list(
         OvertimeShift.objects.filter(agent=agent, date__in=week_dates).order_by('date', 'start_time')
     )
+
+    # Cancellation requests: mark responses seen, attach state to each shift
+    OTCancellationRequest.objects.filter(requester=agent, requester_read=False).update(requester_read=True)
+    cr_map = {}
+    for cr in OTCancellationRequest.objects.filter(shift__in=ot_shifts).order_by('submitted_at'):
+        cr_map[cr.shift_id] = cr  # latest per shift wins
+    for s in ot_shifts:
+        s.my_cancel_req = cr_map.get(s.pk)
+        s.can_request_cancel = (
+            s.status == 'pending' and s.date >= today
+            and not (s.my_cancel_req and s.my_cancel_req.status == 'pending')
+        )
 
     # Group shifts by date
     ot_days = []

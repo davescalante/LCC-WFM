@@ -73,14 +73,15 @@
         <div class="brand">LCC WFM</div>
         {% if request.is_agent %}
         <a href="{% url 'agent_my_shifts' %}">My Shifts</a>
-        <a href="{% url 'agent_my_ot_shifts' %}">My OT Shifts</a>
+        <a href="{% url 'agent_my_ot_shifts' %}" style="position:relative;">My OT Shifts{% if request.agent_ot_cancel_badge %}<span class="nav-badge">{{ request.agent_ot_cancel_badge }}</span>{% endif %}</a>
+        <a href="{% url 'agent_available_ot' %}" style="position:relative;">Available OT{% if request.agent_ot_claim_badge %}<span class="nav-badge">{{ request.agent_ot_claim_badge }}</span>{% endif %}</a>
         <a href="{% url 'agent_my_adherence' %}">My Adherence</a>
         <a href="{% url 'agent_my_requests' %}" style="position:relative;">My Requests{% if request.agent_request_badge %}<span class="nav-badge">{{ request.agent_request_badge }}</span>{% endif %}</a>
         {% else %}
         <a href="{% url 'dashboard' %}">Dashboard</a>
         <a href="{% url 'agent_list' %}">Users</a>
         <a href="{% url 'shift_list' %}">Shifts</a>
-        <a href="{% url 'overtime_list' %}">OT Shifts</a>
+        <a href="{% url 'overtime_list' %}" style="position:relative;">OT Shifts{% if request.ot_request_badge %}<span class="nav-badge">{{ request.ot_request_badge }}</span>{% endif %}</a>
         <a href="{% url 'adherence_dashboard' %}">Adherence</a>
         <a href="{% url 'codings_week' %}">Codings</a>
         <a href="{% url 'daily_hours' %}">Daily Hours</a>

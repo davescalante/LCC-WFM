@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% block title %} - Available OT{% endblock %}
+{% block content %}
+<h1>Available OT</h1>
+<p style="color:#6b7280;font-size:14px;margin:-8px 0 20px;">Open overtime shifts you can request. A supervisor approves requests — you'll see the result here.</p>
+
+{% if messages %}
+{% for msg in messages %}
+<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>
+{% endfor %}
+{% endif %}
+
+<div class="card" style="padding:0;margin-bottom:20px;">
+    {% if postings %}
+    <table>
+        <thead>
+            <tr>
+                <th>Day</th>
+                <th>Time</th>
+                <th>Incentive</th>
+                <th>Note</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in postings %}
+            <tr>
+                <td style="font-weight:600;white-space:nowrap;font-size:13px;">
+                    {{ p.date|date:"D" }}
+                    <div style="font-weight:400;font-size:12px;color:#9ca3af;">{{ p.date|date:"M j, Y" }}</div>
+                </td>
+                <td style="font-size:14px;font-weight:500;white-space:nowrap;">{{ p.time_label }}</td>
+                <td style="white-space:nowrap;">
+                    {% if p.incentive_type == 'time_and_a_half' %}
+                    <span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fbbf24;border-radius:3px;font-size:11px;font-weight:700;padding:1px 6px;">1.5x</span>
+                    {% elif p.incentive_type == 'power_hour' %}
+                    <span style="display:inline-block;background:#ffedd5;color:#9a3412;border:1px solid #f97316;border-radius:3px;font-size:11px;font-weight:700;padding:1px 6px;">2x</span>
+                    {% else %}
+                    <span style="color:#9ca3af;font-size:12px;">—</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:13px;color:#6b7280;">{{ p.notes|default:"—" }}</td>
+                <td style="font-size:12px;">
+                    {% if p.pending_claims %}
+                        {% for c in p.pending_claims %}
+                        <div style="color:#92400e;">Requested by {{ c.requester }} — pending approval</div>
+                        {% endfor %}
+                    {% else %}
+                        <span style="color:#15803d;">Available</span>
+                    {% endif %}
+                </td>
+                <td style="white-space:nowrap;text-align:right;">
+                    {% if p.my_pending %}
+                    <span style="font-size:12px;color:#15803d;font-weight:600;">&#10003; Requested</span>
+                    {% else %}
+                    <form method="post" action="{% url 'open_ot_claim' pk=p.pk %}" style="display:inline;margin:0;" onsubmit="this.querySelector('button').disabled=true;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-primary" style="padding:5px 14px;font-size:12px;">Request This Shift</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center;padding:48px;color:#9ca3af;font-size:14px;">
+        No open OT shifts available right now. Check back later!
+    </div>
+    {% endif %}
+</div>
+
+{% if my_requests %}
+<h2 style="font-size:16px;margin-bottom:10px;">My Shift Requests</h2>
+<div class="card" style="padding:0;">
+    <table>
+        <thead>
+            <tr>
+                <th>Shift</th>
+                <th>Requested</th>
+                <th>Status</th>
+                <th>Response</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in my_requests %}
+            <tr>
+                <td style="font-weight:600;font-size:13px;white-space:nowrap;">{{ r.open_shift.date|date:"D, M j" }} · {{ r.open_shift.time_label }}</td>
+                <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ r.submitted_at|date:"M j, Y" }}</td>
+                <td style="white-space:nowrap;">
+                    {% if r.status == 'pending' %}
+                        <span class="badge" style="background:#e5e7eb;color:#374151;">Pending</span>
+                    {% elif r.status == 'approved' %}
+                        <span class="badge badge-green">Approved</span>
+                    {% elif r.status == 'rejected' %}
+                        <span class="badge badge-red">Rejected</span>
+                    {% endif %}
+                </td>
+                <td style="font-size:13px;">
+                    {% if r.status == 'approved' %}
+                        <span style="color:#15803d;">The shift is yours — see My OT Shifts.</span>
+                    {% elif r.status == 'rejected' %}
+                        {% if r.rejection_reason %}
+                            <span style="color:#dc2626;">{{ r.rejection_reason }}</span>
+                        {% else %}
+                            <span style="color:#6b7280;">No reason provided</span>
+                        {% endif %}
+                    {% else %}
+                        <span style="color:#d1d5db;">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}
