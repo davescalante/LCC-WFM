@@ -1233,7 +1233,7 @@ def overtime_list(request):
     )
 
     viewer = _viewer_agent(request)
-    is_ot_approver_flag = _is_ot_approver(viewer)
+    is_ot_approver_flag = _is_ot_approver(viewer, request.user)
     today_val = timezone.localdate()
 
     # Open OT shift postings for this week (dashed "Open Shifts" row)
@@ -1867,9 +1867,15 @@ def _viewer_agent(request):
         return None
 
 
-def _is_ot_approver(agent):
-    """Only supervisors and coordinators can post open shifts and action requests."""
-    return agent is not None and agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator')
+def _is_ot_approver(agent, user=None):
+    """Supervisors, coordinators, super admins, and Django superusers can post
+    open shifts and action claim/cancellation requests."""
+    if agent is not None:
+        if agent.role == 'admin' and agent.role_type in ('supervisor', 'coordinator'):
+            return True
+        if agent.is_super_admin:
+            return True
+    return user is not None and user.is_superuser
 
 
 def _redirect_after_ot_action(request, target_date=None):
@@ -1912,7 +1918,7 @@ def open_ot_create(request):
     if request.method != 'POST':
         return redirect('overtime_list')
     viewer = _viewer_agent(request)
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can post open shifts.")
         return redirect('overtime_list')
 
@@ -1941,7 +1947,7 @@ def open_ot_update(request, pk):
     if request.method != 'POST':
         return redirect('overtime_list')
     viewer = _viewer_agent(request)
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can edit open shifts.")
         return redirect('overtime_list')
 
@@ -1969,7 +1975,7 @@ def open_ot_delete(request, pk):
     if request.method != 'POST':
         return redirect('overtime_list')
     viewer = _viewer_agent(request)
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can delete open shifts.")
         return redirect('overtime_list')
 
@@ -2026,10 +2032,10 @@ def ot_claim_approve(request, pk):
     claim = get_object_or_404(
         OTShiftClaimRequest.objects.select_related('open_shift', 'requester'), pk=pk
     )
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can approve shift requests.")
         return redirect('overtime_list')
-    if claim.requester_id == viewer.pk:
+    if viewer is not None and claim.requester_id == viewer.pk:
         messages.error(request, "You cannot approve your own shift request. "
                                 "Another supervisor or coordinator must approve it.")
         return _redirect_after_ot_action(request, claim.open_shift.date)
@@ -2089,7 +2095,7 @@ def ot_claim_reject(request, pk):
     claim = get_object_or_404(
         OTShiftClaimRequest.objects.select_related('open_shift', 'requester'), pk=pk
     )
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can reject shift requests.")
         return redirect('overtime_list')
     if claim.status != 'pending':
@@ -2155,10 +2161,10 @@ def ot_cancel_approve(request, pk):
     cr = get_object_or_404(
         OTCancellationRequest.objects.select_related('shift', 'requester'), pk=pk
     )
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can approve cancellation requests.")
         return redirect('overtime_list')
-    if cr.requester_id == viewer.pk:
+    if viewer is not None and cr.requester_id == viewer.pk:
         messages.error(request, "You cannot approve your own cancellation request. "
                                 "Another supervisor or coordinator must approve it.")
         return _redirect_after_ot_action(request, cr.shift.date)
@@ -2192,7 +2198,7 @@ def ot_cancel_reject(request, pk):
     cr = get_object_or_404(
         OTCancellationRequest.objects.select_related('shift', 'requester'), pk=pk
     )
-    if not _is_ot_approver(viewer):
+    if not _is_ot_approver(viewer, request.user):
         messages.error(request, "Only supervisors and coordinators can reject cancellation requests.")
         return redirect('overtime_list')
     if cr.status != 'pending':

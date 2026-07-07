@@ -209,6 +209,30 @@ class OpenOTShiftTests(TestCase):
         # Open postings are NOT OvertimeShift rows → never counted as coverage
         self.assertEqual(OvertimeShift.objects.count(), 0)
 
+    def test_super_admin_and_superuser_can_post_and_approve(self):
+        boss = _make_agent('boss2', role_type='qa')
+        boss.is_super_admin = True
+        boss.save()
+        postings = self._post_open(poster=boss)
+        self.assertEqual(len(postings), 1)
+        claim = self._claim(postings[0], self.agent)
+        self._login(boss)
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}))
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, 'approved')
+        resp = self.client.get(reverse('dashboard'))
+        self.assertEqual(resp.wsgi_request.ot_request_badge, 0)  # cleared after actioning
+        self.client.logout()
+
+        # Django superuser with no Agent profile can approve too
+        User.objects.create_superuser('root', 'root@example.com', 'pw')
+        posting2 = self._post_open()[0]
+        claim2 = self._claim(posting2, self.agent)
+        self.client.login(username='root', password='pw')
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim2.pk}))
+        claim2.refresh_from_db()
+        self.assertEqual(claim2.status, 'approved')
+
     def test_non_approver_staff_cannot_post(self):
         self._login(self.qa)
         self.client.post(reverse('open_ot_create'), {

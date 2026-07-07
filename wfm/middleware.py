@@ -107,7 +107,8 @@ class AgentAccessMiddleware:
                         OTShiftClaimRequest.objects.filter(requester=profile, requester_read=False).count()
                         + OTCancellationRequest.objects.filter(requester=profile, requester_read=False).count()
                     )
-                    if profile.role == 'admin' and profile.role_type in ('supervisor', 'coordinator'):
+                    if (profile.role == 'admin' and profile.role_type in ('supervisor', 'coordinator')) \
+                            or profile.is_super_admin:
                         ot_badge += (
                             OTShiftClaimRequest.objects.filter(status='pending', supervisor_read=False).count()
                             + OTCancellationRequest.objects.filter(status='pending', supervisor_read=False).count()
