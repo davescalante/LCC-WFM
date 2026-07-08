@@ -1249,6 +1249,21 @@ def overtime_list(request):
         open_map.setdefault(p.date, []).append(p)
     open_cells = [{'date': d, 'shifts': open_map.get(d, [])} for d in week_dates]
 
+    # Daily posting totals for the day-column headers: "X open · Y pending · Z filled"
+    filled_by_date = {}
+    for d in OpenOTShift.objects.filter(status='filled', date__in=week_dates).values_list('date', flat=True):
+        filled_by_date[d] = filled_by_date.get(d, 0) + 1
+    day_headers = []
+    for d in week_dates:
+        day_postings = open_map.get(d, [])
+        n_pending = sum(1 for p in day_postings if p.pending_claims)
+        summary = {
+            'open': len(day_postings) - n_pending,
+            'pending': n_pending,
+            'filled': filled_by_date.get(d, 0),
+        }
+        day_headers.append({'date': d, 'summary': summary if any(summary.values()) else None})
+
     # Approver inbox: all pending claim + cancellation requests (not week-scoped)
     pending_claims = []
     pending_cancels = []
@@ -1326,6 +1341,7 @@ def overtime_list(request):
         'viewer': viewer,
         'is_ot_approver': is_ot_approver_flag,
         'open_cells': open_cells,
+        'day_headers': day_headers,
         'has_open_shifts': bool(open_shifts),
         'pending_claims': pending_claims,
         'pending_cancels': pending_cancels,
@@ -1879,7 +1895,11 @@ def _is_ot_approver(agent, user=None):
 
 
 def _redirect_after_ot_action(request, target_date=None):
-    """Send portal users back to their portal, staff back to the OT week grid."""
+    """Send portal users back to their portal, staff back to the OT week grid.
+    A local `next` path in the POST (e.g. from the Staffing Calculator) wins."""
+    nxt = request.POST.get('next', '')
+    if nxt.startswith('/') and not nxt.startswith('//'):
+        return redirect(nxt)
     viewer = _viewer_agent(request)
     if viewer is not None and _is_portal_user(viewer):
         return redirect('agent_available_ot')

@@ -264,12 +264,15 @@
     <thead>
         <tr style="background:#f0f4f8;">
             <th style="width:160px;padding:10px 12px;border-bottom:2px solid #ddd;text-align:left;position:sticky;left:0;top:0;background:#f0f4f8;z-index:8;">Agent</th>
-            {% for d in week_dates %}
+            {% for h in day_headers %}
             <th style="min-width:120px;padding:8px 6px;border-bottom:2px solid #ddd;text-align:center;"
-                {% if d == today %}class="col-today-th"{% endif %}>
-                {% if d == today %}<span class="col-today-label">TODAY</span>{% endif %}
-                <div class="ot-day-name" style="font-weight:700;font-size:13px;">{{ d|date:"D" }}</div>
-                <div class="ot-day-date" style="font-weight:400;font-size:11px;color:#888;">{{ d|date:"M j" }}</div>
+                {% if h.date == today %}class="col-today-th"{% endif %}>
+                {% if h.date == today %}<span class="col-today-label">TODAY</span>{% endif %}
+                <div class="ot-day-name" style="font-weight:700;font-size:13px;">{{ h.date|date:"D" }}</div>
+                <div class="ot-day-date" style="font-weight:400;font-size:11px;color:#888;">{{ h.date|date:"M j" }}</div>
+                {% if h.summary %}
+                <div style="font-weight:400;font-size:10px;color:#9ca3af;margin-top:2px;white-space:nowrap;">{{ h.summary.open }} open &middot; {{ h.summary.pending }} pending &middot; {{ h.summary.filled }} filled</div>
+                {% endif %}
             </th>
             {% endfor %}
             <th style="min-width:90px;padding:8px 10px;border-bottom:2px solid #ddd;text-align:center;border-left:2px solid #ddd;font-size:12px;">Offered</th>

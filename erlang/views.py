@@ -14,7 +14,7 @@ from .calculator import (
     parse_aht, calculate_staffing, format_aht,
 )
 from .models import ErlangReport, ErlangActualStaff, ErlangCallRow, ErlangWeekParams
-from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift, Agent, log_action
+from scheduling.models import Shift, ShiftTemplate, Five9Profile, OvertimeShift, OpenOTShift, Agent, log_action
 
 DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -251,6 +251,52 @@ def _build_scheduled_map(week_start):
     return scheduled, agents_map
 
 
+def _build_open_ot_map(week_start):
+    """Count open OT postings covering each (day_name, hour).
+
+    Returns {(day_name, hour): [open_count, filled_count]}. Same hour
+    semantics as _build_scheduled_map: start hour inclusive, end hour
+    exclusive, overnight shifts split at midnight. Note: filled postings'
+    assigned shifts are already counted inside the scheduled map — the
+    filled count here is informational only and must not be subtracted
+    from variance again.
+    """
+    week_dates = [week_start + timedelta(days=i) for i in range(7)]
+    counts = {}
+
+    def _bump(day_name, h, idx):
+        key = (day_name, h)
+        if key not in counts:
+            counts[key] = [0, 0]
+        counts[key][idx] += 1
+
+    postings = OpenOTShift.objects.filter(
+        date__in=week_dates, status__in=('open', 'filled'),
+    ).values('date', 'start_time', 'end_time', 'status', 'assigned_shift__status')
+
+    for p in postings:
+        if p['status'] == 'filled':
+            # A filled posting only provides coverage while its shift stands
+            if p['assigned_shift__status'] in (None, 'cancelled'):
+                continue
+            idx = 1
+        else:
+            idx = 0
+        day_name = p['date'].strftime('%A')
+        start_h, end_h = p['start_time'].hour, p['end_time'].hour
+        if end_h <= start_h:  # overnight — split at midnight
+            for h in range(start_h, 24):
+                _bump(day_name, h, idx)
+            next_name = (p['date'] + timedelta(days=1)).strftime('%A')
+            for h in range(0, end_h):
+                _bump(next_name, h, idx)
+        else:
+            for h in range(start_h, end_h):
+                _bump(day_name, h, idx)
+
+    return counts
+
+
 def _build_actual_map(week_start):
     """Load saved actual agent counts for the given week."""
     return {
@@ -437,6 +483,28 @@ def erlang_calculator(request):
             _build_actual_map(week_start),
             weeks_by_day=_weeks_by_day,
         )
+
+        # OT posting visibility: open/filled counts per hour and the real
+        # remaining gap. Filled postings are already inside scheduled_staff
+        # (their created OvertimeShift counts as coverage), so the net gap
+        # only subtracts open (not yet claimed/approved) postings.
+        open_ot_map = _build_open_ot_map(week_start)
+        day_date_by_name = {(week_start + timedelta(days=i)).strftime('%A'): week_start + timedelta(days=i)
+                            for i in range(7)}
+        for day in days:
+            day['date'] = day_date_by_name[day['name']]
+            for row in day['rows']:
+                ot_open, ot_filled = open_ot_map.get((day['name'], row['hour']), (0, 0))
+                row['ot_open'] = ot_open
+                row['ot_filled'] = ot_filled
+                shortage = max(0, row['agents_shrinkage'] - row['scheduled_staff'])
+                row['net_gap'] = max(0, shortage - ot_open)
+                if shortage > ot_open:
+                    row['net_state'] = 'short'    # still need to post more
+                elif shortage > 0:
+                    row['net_state'] = 'pending'  # covered only by unclaimed postings
+                else:
+                    row['net_state'] = 'ok'       # covered by scheduled + filled OT
         import json
         agents_map_json = json.dumps({
             f"{day}:{hour}": sorted(entries, key=lambda e: e['name'])
@@ -460,9 +528,14 @@ def erlang_calculator(request):
                 f"{_abbrev[d]} {wbd.get(d, _wp.weeks)}w" for d in DAYS_ORDER
             )
 
+    from scheduling.views import _viewer_agent, _is_ot_approver
+
     return render(request, 'erlang/calculator.html', {
         'days': days,
         'params': params,
+        'is_ot_approver': _is_ot_approver(_viewer_agent(request), request.user),
+        'today': today,
+        'incentive_choices': OvertimeShift.INCENTIVE_CHOICES,
         'week_params': _wp,
         'weeks_audit': weeks_audit,
         'has_data': bool(raw_rows),

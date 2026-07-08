@@ -119,3 +119,104 @@ class CalculateStaffingTests(TestCase):
         result = calculate_staffing(rows, 80.0, 20, 0, 300)
         self.assertEqual(result[0]['day'], 'Wednesday')
         self.assertEqual(result[0]['custom'], 'x')
+
+
+from datetime import date, time, timedelta
+
+from django.contrib.auth.models import User
+from django.urls import reverse
+
+from scheduling.models import Agent, OpenOTShift, OTShiftClaimRequest
+from .models import ErlangCallRow
+
+
+def _staff(username, role_type='supervisor'):
+    user = User.objects.create_user(username=username, password='pw')
+    return Agent.objects.create(user=user, role='admin', role_type=role_type,
+                                agent_name=username.title())
+
+
+class StaffingCalculatorOTVisibilityTests(TestCase):
+    def setUp(self):
+        self.sup = _staff('sup')
+        self.sup2 = _staff('sup2')
+        self.qa = _staff('qa1', role_type='qa')
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.monday = self.week_start
+        ErlangCallRow.objects.create(week_start=self.week_start, day='Monday', hour=16,
+                                     total_calls=300, avg_calls=100)
+
+    def _get_monday_row(self):
+        self.client.login(username='sup', password='pw')
+        resp = self.client.get(reverse('erlang_calculator') + f'?week_start={self.week_start.isoformat()}')
+        self.client.logout()
+        monday = next(d for d in resp.context['days'] if d['name'] == 'Monday')
+        return resp, monday['rows'][0]
+
+    def _post_open_shift(self):
+        return OpenOTShift.objects.create(
+            date=self.monday, start_time=time(16, 0), end_time=time(18, 0),
+        )
+
+    def test_gap_with_no_postings(self):
+        resp, row = self._get_monday_row()
+        self.assertEqual((row['ot_open'], row['ot_filled']), (0, 0))
+        self.assertGreater(row['agents_shrinkage'], 0)
+        self.assertEqual(row['net_state'], 'short')
+        self.assertEqual(row['net_gap'], row['agents_shrinkage'])  # scheduled is 0
+        self.assertContains(resp, '+ Post OT')  # approver sees the shortcut
+
+    def test_open_posting_reduces_net_gap(self):
+        self._post_open_shift()
+        resp, row = self._get_monday_row()
+        self.assertEqual(row['ot_open'], 1)
+        self.assertEqual(row['net_gap'], row['agents_shrinkage'] - 1)
+
+    def test_filled_posting_counts_once_via_scheduled(self):
+        posting = self._post_open_shift()
+        claim = OTShiftClaimRequest.objects.create(open_shift=posting, requester=self.qa)
+        self.client.login(username='sup2', password='pw')
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}))
+        self.client.logout()
+
+        resp, row = self._get_monday_row()
+        self.assertEqual((row['ot_open'], row['ot_filled']), (0, 1))
+        self.assertEqual(row['scheduled_staff'], 1)  # the assigned OT shift IS the coverage
+        self.assertEqual(row['net_gap'], row['agents_shrinkage'] - 1)  # no double counting
+
+        # Cancelling the assigned shift removes the filled coverage
+        posting.refresh_from_db()
+        posting.assigned_shift.status = 'cancelled'
+        posting.assigned_shift.save(update_fields=['status'])
+        resp, row = self._get_monday_row()
+        self.assertEqual((row['ot_open'], row['ot_filled']), (0, 0))
+        self.assertEqual(row['scheduled_staff'], 0)
+
+    def test_non_approver_sees_columns_but_no_button(self):
+        self.client.login(username='qa1', password='pw')
+        resp = self.client.get(reverse('erlang_calculator') + f'?week_start={self.week_start.isoformat()}')
+        self.assertContains(resp, 'Net Gap')
+        self.assertNotContains(resp, '+ Post OT')
+
+    def test_post_from_calculator_redirects_back(self):
+        self.client.login(username='sup', password='pw')
+        nxt = reverse('erlang_calculator') + f'?week_start={self.week_start.isoformat()}'
+        resp = self.client.post(reverse('open_ot_create'), {
+            'date': self.monday.isoformat(), 'start_time': '16:00', 'end_time': '17:00',
+            'incentive_type': 'none', 'count': '2', 'next': nxt,
+        })
+        self.assertEqual(resp.url, nxt)
+        self.assertEqual(OpenOTShift.objects.count(), 2)
+
+    def test_ot_board_day_summary(self):
+        posting = self._post_open_shift()          # open, unclaimed
+        requested = self._post_open_shift()        # open with pending claim
+        OTShiftClaimRequest.objects.create(open_shift=requested, requester=self.qa)
+        filled = self._post_open_shift()
+        filled.status = 'filled'
+        filled.save(update_fields=['status'])
+
+        self.client.login(username='sup', password='pw')
+        resp = self.client.get(reverse('overtime_list') + f'?week_start={self.week_start.isoformat()}')
+        self.assertContains(resp, '1 open &middot; 1 pending &middot; 1 filled')
