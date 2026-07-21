@@ -3353,27 +3353,10 @@ def request_approve(request, pk):
     agent = ar.agent
     actions = []
 
-    if ar.request_type == 'coding':
-        from adherence.models import Coding
-        from adherence.views import _refresh_actual_hours
-        # Official Admins are tracked on the Admin Adherence tab, which reads
-        # admin codings; everyone else gets a regular coding.
-        is_admin_coding = agent.is_official_admin
-        Coding.objects.create(
-            agent=agent,
-            date=ar.coding_date,
-            start_time=ar.coding_start_time,
-            end_time=ar.coding_end_time,
-            notes=ar.notes or '',
-            is_admin_coding=is_admin_coding,
-        )
-        if is_admin_coding:
-            actions.append(f"Admin coding entry created (Admin Adherence): {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
-        else:
-            _refresh_actual_hours(agent.pk, ar.coding_date)
-            actions.append(f"Coding entry created: {ar.coding_date} {ar.coding_start_time}–{ar.coding_end_time}")
-
-    elif ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
+    # Coding requests intentionally have NO auto-apply: agents only estimate
+    # their missed time, so the supervisor pulls the exact amount and enters
+    # the coding manually. Approval/Done only track the request's status.
+    if ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
         from adherence.models import AdherenceRecord
         d = ar.vacation_start
         count = 0

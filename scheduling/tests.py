@@ -110,7 +110,9 @@ class StaffRequestTests(TestCase):
             self.assertEqual(ar.status, 'pending')
             self.client.logout()
 
-    def test_official_admin_coding_creates_admin_coding(self):
+    def test_coding_request_approval_creates_no_coding(self):
+        """Coding requests are status-only: supervisors enter the exact coded
+        time manually, so neither approval nor mark-as-done creates a Coding."""
         admin = _make_agent('offadmin', role_type='qa', supervisor=self.boss, official=True)
         self._login(admin)
         self.client.post(reverse('staff_my_requests'), {
@@ -124,8 +126,15 @@ class StaffRequestTests(TestCase):
 
         self._login(self.boss)
         self.client.post(reverse('request_approve', kwargs={'pk': ar.pk}))
-        coding = Coding.objects.get(agent=admin)
-        self.assertTrue(coding.is_admin_coding)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'approved')
+        self.assertEqual(ar.auto_action_log, '')
+        self.assertEqual(Coding.objects.count(), 0)
+
+        self.client.post(reverse('request_mark_done', kwargs={'pk': ar.pk}))
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'done')
+        self.assertEqual(Coding.objects.count(), 0)
 
     def test_list_view_only_clears_badge_for_assigned_supervisor(self):
         ar = self._submit_vacation(self.coordinator)
