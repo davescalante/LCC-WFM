@@ -176,44 +176,50 @@ def _build_scheduled_map(week_start):
             for h in range(start_hour, end_hour):
                 _add(day_name, h, agent_id, entry)
 
-    # Specific shift overrides — date-aware role check
+    # Specific shift overrides — date-aware role check. An override fully
+    # governs its date, INCLUDING is_off=True (a one-time day off must stop
+    # the recurring template from counting), so fetch all of them and only
+    # add hours for working ones.
     shifts = Shift.objects.filter(
-        date__in=week_dates, is_off=False, agent_id__in=all_call_ids,
-    ).values('agent_id', 'date', 'start_time', 'end_time')
+        date__in=week_dates, agent_id__in=all_call_ids,
+    ).values('agent_id', 'date', 'start_time', 'end_time', 'is_off')
 
     agents_with_shift_override = set()
     for s in shifts:
         if s['agent_id'] not in call_ids_by_date[s['date']]:
             continue
         agents_with_shift_override.add((s['agent_id'], s['date']))
+        if s['is_off'] or not s['start_time'] or not s['end_time']:
+            continue
         name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         next_day = (s['date'] + timedelta(days=1)).strftime('%A')
         _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
                    s['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
 
-    # Recurring templates — date-aware role check + effective_from/effective_until
-    templates = ShiftTemplate.objects.filter(
-        agent_id__in=all_call_ids, is_off=False,
-    ).values('agent_id', 'day_of_week', 'start_time', 'end_time', 'effective_from', 'effective_until')
+    # Recurring templates — resolved per (agent, date) with the same shared
+    # rule the Shifts/Adherence tabs and agent portal use (_best_shift_template:
+    # latest effective_from covering the date wins, is_off templates suppress
+    # older working ones), instead of adding every window-matching template.
+    from scheduling.views import _best_shift_template
 
-    for t in templates:
-        for day_date in week_dates:
-            if day_date.weekday() != t['day_of_week']:
+    templates_by_agent = {}
+    for t in ShiftTemplate.objects.filter(agent_id__in=all_call_ids):
+        templates_by_agent.setdefault(t.agent_id, []).append(t)
+
+    for day_date in week_dates:
+        day_name = day_date.strftime('%A')
+        next_day = (day_date + timedelta(days=1)).strftime('%A')
+        for agent_id in call_ids_by_date[day_date]:
+            if (agent_id, day_date) in agents_with_shift_override:
                 continue
-            if t['agent_id'] not in call_ids_by_date[day_date]:
+            t = _best_shift_template(templates_by_agent.get(agent_id, []), agent_id, day_date)
+            if t is None or t.is_off or not t.start_time or not t.end_time:
                 continue
-            if t['effective_from'] and t['effective_from'] > day_date:
-                continue
-            if t['effective_until'] and t['effective_until'] <= day_date:
-                continue
-            if (t['agent_id'], day_date) in agents_with_shift_override:
-                continue
-            name = agent_names.get(t['agent_id'], f"Agent {t['agent_id']}")
-            label = f"{t['start_time'].strftime('%H:%M')}–{t['end_time'].strftime('%H:%M')}"
-            next_day = (day_date + timedelta(days=1)).strftime('%A')
-            _add_hours(day_date.strftime('%A'), t['start_time'].hour, t['end_time'].hour,
-                       t['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
+            name = agent_names.get(agent_id, f"Agent {agent_id}")
+            label = f"{t.start_time.strftime('%H:%M')}–{t.end_time.strftime('%H:%M')}"
+            _add_hours(day_name, t.start_time.hour, t.end_time.hour,
+                       agent_id, {'name': name, 'time': label, 'ot': False}, next_day)
 
     # Pending role changes with a new schedule — count them for planning before effective date applies
     # This lets coordinators see next week's staffing with graduating agents already counted.

@@ -220,3 +220,65 @@ class StaffingCalculatorOTVisibilityTests(TestCase):
         self.client.login(username='sup', password='pw')
         resp = self.client.get(reverse('overtime_list') + f'?week_start={self.week_start.isoformat()}')
         self.assertContains(resp, '1 open &middot; 1 pending &middot; 1 filled')
+
+
+from scheduling.models import Shift, ShiftTemplate, OvertimeShift
+from .views import _build_scheduled_map
+
+
+class ScheduledMapOverrideTests(TestCase):
+    """A per-date Shift override must fully govern its date in the Staffing
+    calculator — including an override that makes the agent OFF."""
+
+    def setUp(self):
+        self.agent = _staff('caller1', role_type='regular_agent')
+        self.agent.role = 'agent'
+        self.agent.save()
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.saturday = self.week_start + timedelta(days=5)
+        ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=5,  # Saturday
+            start_time=time(16, 0), end_time=time(18, 0), is_off=False,
+        )
+
+    def _count(self, hour):
+        scheduled, _ = _build_scheduled_map(self.week_start)
+        return scheduled.get(('Saturday', hour), 0)
+
+    def test_baseline_template_counts(self):
+        self.assertEqual(self._count(16), 1)
+        self.assertEqual(self._count(17), 1)
+        self.assertEqual(self._count(18), 0)
+
+    def test_one_time_day_off_override_removes_agent(self):
+        Shift.objects.create(agent=self.agent, date=self.saturday,
+                             start_time=time(0, 0), end_time=time(0, 0), is_off=True)
+        self.assertEqual(self._count(16), 0)
+        self.assertEqual(self._count(17), 0)
+
+    def test_working_override_replaces_template_hours(self):
+        Shift.objects.create(agent=self.agent, date=self.saturday,
+                             start_time=time(10, 0), end_time=time(12, 0), is_off=False)
+        self.assertEqual(self._count(10), 1)
+        self.assertEqual(self._count(11), 1)
+        self.assertEqual(self._count(16), 0)  # template no longer governs
+        self.assertEqual(self._count(17), 0)
+
+    def test_newer_off_template_suppresses_older_working_one(self):
+        # The setUp template is open-ended (no effective dates); a newer OFF
+        # template effective this week must win, same as on the Shifts tab.
+        ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=5, is_off=True,
+            effective_from=self.week_start,
+        )
+        self.assertEqual(self._count(16), 0)
+        self.assertEqual(self._count(17), 0)
+
+    def test_ot_shift_still_counts_despite_day_off_override(self):
+        Shift.objects.create(agent=self.agent, date=self.saturday,
+                             start_time=time(0, 0), end_time=time(0, 0), is_off=True)
+        OvertimeShift.objects.create(agent=self.agent, date=self.saturday,
+                                     start_time=time(16, 0), end_time=time(18, 0))
+        self.assertEqual(self._count(16), 1)
+        self.assertEqual(self._count(17), 1)
