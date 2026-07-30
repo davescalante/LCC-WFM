@@ -466,3 +466,170 @@ class OpenOTShiftTests(TestCase):
         self.client.get(reverse('agent_available_ot'))
         resp = self.client.get(reverse('agent_my_shifts'))
         self.assertEqual(resp.wsgi_request.agent_ot_claim_badge, 0)
+
+
+class AgentListRoleTypeFilterTests(TestCase):
+    """Part 1: role_type filter on the Users page, combining with the
+    existing supervisor and status filters."""
+
+    def setUp(self):
+        self.sup = _make_agent('lsup', role_type='supervisor')
+        self.viewer = _make_agent('lviewer', role_type='coordinator')
+        self.ra1 = _make_agent('ra1', role='agent', role_type='regular_agent',
+                               supervisor=self.sup)
+        self.ra2 = _make_agent('ra2', role='agent', role_type='regular_agent')
+        self.kt = _make_agent('kt1', role='agent', role_type='kill_team',
+                              supervisor=self.sup)
+        self.inactive_ra = _make_agent('ra3', role='agent', role_type='regular_agent',
+                                       supervisor=self.sup)
+        self.inactive_ra.status = 'inactive'
+        self.inactive_ra.save()
+        self.client.login(username='lviewer', password='pw')
+
+    def _names(self, query=''):
+        resp = self.client.get(reverse('agent_list') + query)
+        return {a.user.username for a in resp.context['agents']}
+
+    def test_role_type_filter_narrows(self):
+        names = self._names('?role_type=kill_team')
+        self.assertEqual(names, {'kt1'})
+
+    def test_filters_combine(self):
+        # role_type + supervisor + status all narrow together
+        names = self._names(f'?role_type=regular_agent&supervisor={self.sup.pk}&status_filter=active')
+        self.assertEqual(names, {'ra1'})
+        names = self._names(f'?role_type=regular_agent&supervisor={self.sup.pk}&status_filter=inactive')
+        self.assertEqual(names, {'ra3'})
+
+    def test_invalid_role_type_ignored(self):
+        names = self._names('?role_type=bogus')
+        self.assertIn('ra1', names)  # unfiltered active list
+        self.assertIn('kt1', names)
+
+    def test_existing_filters_and_pagination_unchanged(self):
+        resp = self.client.get(reverse('agent_list'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('page_obj', resp.context)
+        names = self._names('?status_filter=inactive')
+        self.assertEqual(names, {'ra3'})
+
+
+import csv
+import io
+
+from .models import EmploymentPeriod, Five9Profile
+
+
+class AgentListExportTests(TestCase):
+    """Part 2: filter-respecting CSV export with export-only columns."""
+
+    HEADER = ['Full name', 'Role type', 'Supervisor', 'Status',
+              'Primary Five9 username', 'Start date',
+              'Complete years with us', 'Cell phone (formatted)']
+
+    def setUp(self):
+        self.sup = _make_agent('xsup', role_type='supervisor')
+        self.viewer = _make_agent('xviewer', role_type='coordinator')
+        self.client.login(username='xviewer', password='pw')
+        self.today = date.today()
+
+    def _make_full_agent(self, username, **kwargs):
+        a = _make_agent(username, role='agent', role_type='regular_agent', **kwargs)
+        a.user.first_name = 'Test'
+        a.user.last_name = username.title()
+        a.user.save()
+        return a
+
+    def _export_rows(self, query=''):
+        resp = self.client.get(reverse('agent_list') + '?export=1' + query)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], 'text/csv')
+        rows = list(csv.reader(io.StringIO(resp.content.decode())))
+        return rows
+
+    def _row_for(self, rows, full_name):
+        return next(r for r in rows[1:] if r[0] == full_name)
+
+    def test_header_and_column_order(self):
+        rows = self._export_rows()
+        self.assertEqual(rows[0], self.HEADER)
+
+    def test_export_respects_all_filters(self):
+        a1 = self._make_full_agent('exp1', supervisor=self.sup)
+        self._make_full_agent('exp2')  # different supervisor
+        kt = _make_agent('exp3', role='agent', role_type='kill_team', supervisor=self.sup)
+        rows = self._export_rows(f'&supervisor={self.sup.pk}&role_type=regular_agent&status_filter=active')
+        names = [r[0] for r in rows[1:]]
+        self.assertEqual(names, ['Test Exp1'])
+
+    def test_full_row_content(self):
+        a = self._make_full_agent('exp4', supervisor=self.sup)
+        a.phone_number = '662-369-2710'
+        a.save()
+        Five9Profile.objects.create(agent=a, five9_username='other.acct', is_primary=False)
+        Five9Profile.objects.create(agent=a, five9_username='exp4.primary', is_primary=True)
+        # Two periods — the LATEST start (rehire) must win
+        EmploymentPeriod.objects.create(agent=a, start_date=self.today - timedelta(days=2000),
+                                        end_date=self.today - timedelta(days=1500))
+        rehire = self.today - timedelta(days=912)  # ~2.5 years ago
+        EmploymentPeriod.objects.create(agent=a, start_date=rehire)
+
+        row = self._row_for(self._export_rows(), 'Test Exp4')
+        self.assertEqual(row[1], 'Regular Agent')
+        self.assertEqual(row[2], str(self.sup))
+        self.assertEqual(row[3], 'Active')
+        self.assertEqual(row[4], 'exp4.primary')
+        self.assertEqual(row[5], rehire.isoformat())
+        self.assertEqual(row[6], '2')  # 2.5 years → floored to 2
+        self.assertEqual(row[7], '+5216623692710')
+
+    def test_years_floor_edge_cases(self):
+        # 11 months → 0 complete years
+        a = self._make_full_agent('exp5')
+        EmploymentPeriod.objects.create(agent=a, start_date=self.today - timedelta(days=335))
+        # Exactly N years today → N
+        b = self._make_full_agent('exp6')
+        try:
+            exact = self.today.replace(year=self.today.year - 3)
+        except ValueError:  # Feb 29 edge
+            exact = self.today.replace(year=self.today.year - 3, day=28)
+        EmploymentPeriod.objects.create(agent=b, start_date=exact)
+        # One day short of a full year → 0
+        c = self._make_full_agent('exp7')
+        EmploymentPeriod.objects.create(agent=c, start_date=self.today - timedelta(days=364))
+
+        rows = self._export_rows()
+        self.assertEqual(self._row_for(rows, 'Test Exp5')[6], '0')
+        self.assertEqual(self._row_for(rows, 'Test Exp6')[6], '3')
+        self.assertEqual(self._row_for(rows, 'Test Exp7')[6], '0')
+
+    def test_phone_formats_all_normalize(self):
+        cases = {
+            'exp8': '662-369-2710',
+            'exp9': '(662) 369 2710',
+            'exp10': '6623692710',
+            'exp11': '+52 662 369 2710',
+            'exp12': '+521 662 369 2710',
+        }
+        for username, raw in cases.items():
+            a = self._make_full_agent(username)
+            a.phone_number = raw
+            a.save()
+        rows = self._export_rows()
+        for username in cases:
+            row = self._row_for(rows, f'Test {username.title()}')
+            self.assertEqual(row[7], '+5216623692710', f'failed for {username}')
+
+    def test_bare_agent_exports_blanks_without_error(self):
+        self._make_full_agent('exp13')  # no phone, no periods, no five9 profiles
+        row = self._row_for(self._export_rows(), 'Test Exp13')
+        self.assertEqual(row[4], '')   # primary five9
+        self.assertEqual(row[5], '')   # start date
+        self.assertEqual(row[6], '')   # years
+        self.assertEqual(row[7], '')   # phone
+
+    def test_on_screen_table_unchanged(self):
+        resp = self.client.get(reverse('agent_list'))
+        self.assertNotContains(resp, 'Complete years')
+        self.assertNotContains(resp, 'Five9 username')
+        self.assertContains(resp, 'Export CSV')

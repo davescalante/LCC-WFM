@@ -212,6 +212,10 @@ def agent_list(request):
     if status_filter not in ('active', 'inactive', 'in_progress', 'all'):
         status_filter = 'active'
 
+    role_type_filter = request.GET.get('role_type', '')
+    if role_type_filter not in dict(Agent.ROLE_TYPE_CHOICES):
+        role_type_filter = ''
+
     agents = Agent.objects.select_related('user', 'supervisor__user').prefetch_related('separations').order_by(
         'user__last_name', 'user__first_name'
     )
@@ -221,6 +225,9 @@ def agent_list(request):
         except (ValueError, TypeError):
             pass
 
+    if role_type_filter:
+        agents = agents.filter(role_type=role_type_filter)
+
     if status_filter == 'active':
         agents = agents.filter(status='active')
     elif status_filter == 'inactive':
@@ -228,6 +235,47 @@ def agent_list(request):
     elif status_filter == 'in_progress':
         agents = agents.filter(separations__status='in_progress').distinct()
     # 'all' — no status filter
+
+    if request.GET.get('export') == '1':
+        # CSV of the full filtered list (not just the current page). These
+        # columns are export-only — the on-screen table stays as is.
+        import csv as _csv
+        import re as _re
+        from django.http import HttpResponse
+
+        today = timezone.localdate()
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = f'attachment; filename="users_{today}.csv"'
+        w = _csv.writer(resp)
+        w.writerow(['Full name', 'Role type', 'Supervisor', 'Status',
+                    'Primary Five9 username', 'Start date',
+                    'Complete years with us', 'Cell phone (formatted)'])
+        for a in agents.prefetch_related('five9_profiles', 'employment_periods'):
+            primary_five9 = next(
+                (p.five9_username for p in a.five9_profiles.all() if p.is_primary), ''
+            )
+            # Most recent employment period start = latest rehire date
+            start = max((ep.start_date for ep in a.employment_periods.all()), default=None)
+            years = ''
+            if start:
+                years = max(0, today.year - start.year
+                            - ((today.month, today.day) < (start.month, start.day)))
+            # Digits only, last 10 (drops any typed +52/521/1 prefix), then +521
+            phone = ''
+            digits = _re.sub(r'\D', '', a.phone_number or '')
+            if digits:
+                phone = '+521' + digits[-10:]
+            w.writerow([
+                a.user.get_full_name() or a.agent_name,
+                a.get_role_type_display() or '',
+                str(a.supervisor) if a.supervisor else '',
+                a.get_status_display(),
+                primary_five9,
+                start.isoformat() if start else '',
+                years,
+                phone,
+            ])
+        return resp
 
     paginator = Paginator(agents, 100)
     page_number = request.GET.get('page', 1)
@@ -239,6 +287,8 @@ def agent_list(request):
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
         'status_filter': status_filter,
+        'role_type_choices': Agent.ROLE_TYPE_CHOICES,
+        'selected_role_type': role_type_filter,
     })
 
 
