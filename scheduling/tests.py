@@ -581,7 +581,7 @@ class AgentListExportTests(TestCase):
         self.assertEqual(row[4], 'exp4.primary')
         self.assertEqual(row[5], rehire.isoformat())
         self.assertEqual(row[6], '2')  # 2.5 years → floored to 2
-        self.assertEqual(row[7], '+5216623692710')
+        self.assertEqual(row[7], '\t+5216623692710')  # tab keeps Excel from sci-notation
 
     def test_years_floor_edge_cases(self):
         # 11 months → 0 complete years
@@ -618,7 +618,7 @@ class AgentListExportTests(TestCase):
         rows = self._export_rows()
         for username in cases:
             row = self._row_for(rows, f'Test {username.title()}')
-            self.assertEqual(row[7], '+5216623692710', f'failed for {username}')
+            self.assertEqual(row[7], '\t+5216623692710', f'failed for {username}')
 
     def test_bare_agent_exports_blanks_without_error(self):
         self._make_full_agent('exp13')  # no phone, no periods, no five9 profiles
@@ -633,3 +633,75 @@ class AgentListExportTests(TestCase):
         self.assertNotContains(resp, 'Complete years')
         self.assertNotContains(resp, 'Five9 username')
         self.assertContains(resp, 'Export CSV')
+
+
+from .models import AgentSeparation
+
+
+class AgentListExportPayWindowTests(TestCase):
+    """Separated agents stay in the export while their pay window is open —
+    the same remove_from_adherence_date rule Finance/Adherence use."""
+
+    def setUp(self):
+        self.viewer = _make_agent('pwviewer', role_type='coordinator')
+        self.client.login(username='pwviewer', password='pw')
+        today = date.today()
+        self.this_monday = today - timedelta(days=today.weekday())
+        self.next_monday = self.this_monday + timedelta(days=7)
+        self.last_monday = self.this_monday - timedelta(days=7)
+
+    def _separated_agent(self, username, remove_date, sep_status='finalized',
+                         role_type='regular_agent'):
+        a = _make_agent(username, role='agent', role_type=role_type)
+        a.user.first_name = 'Pay'
+        a.user.last_name = username.title()
+        a.user.save()
+        a.status = 'inactive'
+        a.save()
+        AgentSeparation.objects.create(
+            agent=a, status=sep_status, separation_type='quit',
+            last_day_worked=self.this_monday - timedelta(days=1),
+            remove_from_adherence_date=remove_date,
+        )
+        return a
+
+    def _export_names(self, query=''):
+        resp = self.client.get(reverse('agent_list') + '?export=1' + query)
+        rows = list(csv.reader(io.StringIO(resp.content.decode())))
+        return [r[0] for r in rows[1:]]
+
+    def test_still_owed_agent_included(self):
+        self._separated_agent('owed1', self.next_monday)
+        names = self._export_names()
+        self.assertIn('Pay Owed1', names)
+        # Also caught when a role-type filter is active
+        names = self._export_names('&role_type=regular_agent')
+        self.assertIn('Pay Owed1', names)
+        # But NOT with a non-matching role filter
+        names = self._export_names('&role_type=kill_team')
+        self.assertNotIn('Pay Owed1', names)
+        # On-screen table unchanged: default active view hides them
+        resp = self.client.get(reverse('agent_list'))
+        screen = {a.user.username for a in resp.context['agents']}
+        self.assertNotIn('owed1', screen)
+
+    def test_window_closed_agent_excluded(self):
+        self._separated_agent('gone1', self.last_monday)
+        self._separated_agent('gone2', self.this_monday)  # boundary: == Monday → out
+        names = self._export_names()
+        self.assertNotIn('Pay Gone1', names)
+        self.assertNotIn('Pay Gone2', names)
+        # Explicitly choosing Inactive still shows them (user's explicit pick)
+        names = self._export_names('&status_filter=inactive')
+        self.assertIn('Pay Gone1', names)
+
+    def test_missing_data_never_errors(self):
+        # Inactive with no separation record at all
+        bare = _make_agent('bare1', role='agent', role_type='regular_agent')
+        bare.status = 'inactive'
+        bare.save()
+        # Separation without a remove date
+        self._separated_agent('nodate1', None)
+        names = self._export_names()
+        self.assertNotIn('bare1', ''.join(names).lower())
+        self.assertNotIn('Pay Nodate1', names)

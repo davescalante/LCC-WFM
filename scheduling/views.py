@@ -228,14 +228,6 @@ def agent_list(request):
     if role_type_filter:
         agents = agents.filter(role_type=role_type_filter)
 
-    if status_filter == 'active':
-        agents = agents.filter(status='active')
-    elif status_filter == 'inactive':
-        agents = agents.filter(status='inactive')
-    elif status_filter == 'in_progress':
-        agents = agents.filter(separations__status='in_progress').distinct()
-    # 'all' — no status filter
-
     if request.GET.get('export') == '1':
         # CSV of the full filtered list (not just the current page). These
         # columns are export-only — the on-screen table stays as is.
@@ -244,6 +236,21 @@ def agent_list(request):
         from django.http import HttpResponse
 
         today = timezone.localdate()
+        # Pay runs a week in arrears, so the export must keep separated agents
+        # until their pay window closes — the same rule Finance/Adherence use
+        # (billing_report, _get_adherence_agent_pks): a finalized-separation
+        # agent still counts while remove_from_adherence_date > week Monday.
+        week_start = today - timedelta(days=today.weekday())
+        pay_window_q = Q(status='inactive', separations__status='finalized',
+                         separations__remove_from_adherence_date__gt=week_start)
+        status_q = {
+            'active': Q(status='active'),
+            'inactive': Q(status='inactive'),
+            'in_progress': Q(separations__status='in_progress'),
+        }.get(status_filter)
+        if status_q is not None:  # 'all' needs no narrowing
+            agents = agents.filter(status_q | pay_window_q).distinct()
+
         resp = HttpResponse(content_type='text/csv')
         resp['Content-Disposition'] = f'attachment; filename="users_{today}.csv"'
         w = _csv.writer(resp)
@@ -260,11 +267,13 @@ def agent_list(request):
             if start:
                 years = max(0, today.year - start.year
                             - ((today.month, today.day) < (start.month, start.day)))
-            # Digits only, last 10 (drops any typed +52/521/1 prefix), then +521
+            # Digits only, last 10 (drops any typed +52/521/1 prefix), then
+            # +521. The leading tab stops Excel from rendering the long digit
+            # string as scientific notation — it forces literal text.
             phone = ''
             digits = _re.sub(r'\D', '', a.phone_number or '')
             if digits:
-                phone = '+521' + digits[-10:]
+                phone = '\t+521' + digits[-10:]
             w.writerow([
                 a.user.get_full_name() or a.agent_name,
                 a.get_role_type_display() or '',
@@ -276,6 +285,14 @@ def agent_list(request):
                 phone,
             ])
         return resp
+
+    if status_filter == 'active':
+        agents = agents.filter(status='active')
+    elif status_filter == 'inactive':
+        agents = agents.filter(status='inactive')
+    elif status_filter == 'in_progress':
+        agents = agents.filter(separations__status='in_progress').distinct()
+    # 'all' — no status filter
 
     paginator = Paginator(agents, 100)
     page_number = request.GET.get('page', 1)
