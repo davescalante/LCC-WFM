@@ -514,14 +514,17 @@ class AgentListRoleTypeFilterTests(TestCase):
         self.assertEqual(names, {'ra3'})
 
 
-import csv
 import io
+
+import openpyxl
 
 from .models import EmploymentPeriod, Five9Profile
 
+XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
 
 class AgentListExportTests(TestCase):
-    """Part 2: filter-respecting CSV export with export-only columns."""
+    """Part 2: filter-respecting Excel export with export-only columns."""
 
     HEADER = ['Full name', 'Role type', 'Supervisor', 'Status',
               'Primary Five9 username', 'Start date',
@@ -540,12 +543,15 @@ class AgentListExportTests(TestCase):
         a.user.save()
         return a
 
-    def _export_rows(self, query=''):
+    def _export_ws(self, query=''):
         resp = self.client.get(reverse('agent_list') + '?export=1' + query)
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp['Content-Type'], 'text/csv')
-        rows = list(csv.reader(io.StringIO(resp.content.decode())))
-        return rows
+        self.assertEqual(resp['Content-Type'], XLSX_MIME)
+        return openpyxl.load_workbook(io.BytesIO(resp.content)).active
+
+    def _export_rows(self, query=''):
+        ws = self._export_ws(query)
+        return [list(r) for r in ws.iter_rows(values_only=True)]
 
     def _row_for(self, rows, full_name):
         return next(r for r in rows[1:] if r[0] == full_name)
@@ -574,14 +580,19 @@ class AgentListExportTests(TestCase):
         rehire = self.today - timedelta(days=912)  # ~2.5 years ago
         EmploymentPeriod.objects.create(agent=a, start_date=rehire)
 
-        row = self._row_for(self._export_rows(), 'Test Exp4')
+        ws = self._export_ws()
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        row = self._row_for(rows, 'Test Exp4')
         self.assertEqual(row[1], 'Regular Agent')
         self.assertEqual(row[2], str(self.sup))
         self.assertEqual(row[3], 'Active')
         self.assertEqual(row[4], 'exp4.primary')
         self.assertEqual(row[5], rehire.isoformat())
-        self.assertEqual(row[6], '2')  # 2.5 years → floored to 2
-        self.assertEqual(row[7], '\t+5216623692710')  # tab keeps Excel from sci-notation
+        self.assertEqual(row[6], 2)  # 2.5 years → floored to 2
+        self.assertEqual(row[7], '+5216623692710')  # clean text — no tab, no sci-notation
+        # The phone cell is explicitly Text-formatted so Excel never coerces it
+        row_idx = rows.index(row) + 1
+        self.assertEqual(ws.cell(row=row_idx, column=8).number_format, '@')
 
     def test_years_floor_edge_cases(self):
         # 11 months → 0 complete years
@@ -599,9 +610,9 @@ class AgentListExportTests(TestCase):
         EmploymentPeriod.objects.create(agent=c, start_date=self.today - timedelta(days=364))
 
         rows = self._export_rows()
-        self.assertEqual(self._row_for(rows, 'Test Exp5')[6], '0')
-        self.assertEqual(self._row_for(rows, 'Test Exp6')[6], '3')
-        self.assertEqual(self._row_for(rows, 'Test Exp7')[6], '0')
+        self.assertEqual(self._row_for(rows, 'Test Exp5')[6], 0)
+        self.assertEqual(self._row_for(rows, 'Test Exp6')[6], 3)
+        self.assertEqual(self._row_for(rows, 'Test Exp7')[6], 0)
 
     def test_phone_formats_all_normalize(self):
         cases = {
@@ -618,21 +629,21 @@ class AgentListExportTests(TestCase):
         rows = self._export_rows()
         for username in cases:
             row = self._row_for(rows, f'Test {username.title()}')
-            self.assertEqual(row[7], '\t+5216623692710', f'failed for {username}')
+            self.assertEqual(row[7], '+5216623692710', f'failed for {username}')
 
     def test_bare_agent_exports_blanks_without_error(self):
         self._make_full_agent('exp13')  # no phone, no periods, no five9 profiles
         row = self._row_for(self._export_rows(), 'Test Exp13')
-        self.assertEqual(row[4], '')   # primary five9
-        self.assertEqual(row[5], '')   # start date
-        self.assertEqual(row[6], '')   # years
-        self.assertEqual(row[7], '')   # phone
+        self.assertIsNone(row[4])   # primary five9
+        self.assertIsNone(row[5])   # start date
+        self.assertIsNone(row[6])   # years
+        self.assertIsNone(row[7])   # phone
 
     def test_on_screen_table_unchanged(self):
         resp = self.client.get(reverse('agent_list'))
         self.assertNotContains(resp, 'Complete years')
         self.assertNotContains(resp, 'Five9 username')
-        self.assertContains(resp, 'Export CSV')
+        self.assertContains(resp, 'Export Excel')
 
 
 from .models import AgentSeparation
@@ -667,7 +678,9 @@ class AgentListExportPayWindowTests(TestCase):
 
     def _export_names(self, query=''):
         resp = self.client.get(reverse('agent_list') + '?export=1' + query)
-        rows = list(csv.reader(io.StringIO(resp.content.decode())))
+        self.assertEqual(resp['Content-Type'], XLSX_MIME)
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        rows = list(ws.iter_rows(values_only=True))
         return [r[0] for r in rows[1:]]
 
     def test_still_owed_agent_included(self):

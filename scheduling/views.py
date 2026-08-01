@@ -229,10 +229,14 @@ def agent_list(request):
         agents = agents.filter(role_type=role_type_filter)
 
     if request.GET.get('export') == '1':
-        # CSV of the full filtered list (not just the current page). These
-        # columns are export-only — the on-screen table stays as is.
-        import csv as _csv
+        # Excel export of the full filtered list (not just the current page).
+        # These columns are export-only — the on-screen table stays as is.
+        # Modeled on finance billing_export; .xlsx so the phone column can be
+        # true text (no CSV scientific-notation workarounds needed).
         import re as _re
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
         from django.http import HttpResponse
 
         today = timezone.localdate()
@@ -251,39 +255,60 @@ def agent_list(request):
         if status_q is not None:  # 'all' needs no narrowing
             agents = agents.filter(status_q | pay_window_q).distinct()
 
-        resp = HttpResponse(content_type='text/csv')
-        resp['Content-Disposition'] = f'attachment; filename="users_{today}.csv"'
-        w = _csv.writer(resp)
-        w.writerow(['Full name', 'Role type', 'Supervisor', 'Status',
-                    'Primary Five9 username', 'Start date',
-                    'Complete years with us', 'Cell phone (formatted)'])
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Users"
+
+        headers = ['Full name', 'Role type', 'Supervisor', 'Status',
+                   'Primary Five9 username', 'Start date',
+                   'Complete years with us', 'Cell phone (formatted)']
+        ws.append(headers)
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="1A3A5C")
+        center = Alignment(horizontal='center')
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center
+
         for a in agents.prefetch_related('five9_profiles', 'employment_periods'):
             primary_five9 = next(
-                (p.five9_username for p in a.five9_profiles.all() if p.is_primary), ''
+                (p.five9_username for p in a.five9_profiles.all() if p.is_primary), None
             )
             # Most recent employment period start = latest rehire date
             start = max((ep.start_date for ep in a.employment_periods.all()), default=None)
-            years = ''
+            years = None
             if start:
                 years = max(0, today.year - start.year
                             - ((today.month, today.day) < (start.month, start.day)))
-            # Digits only, last 10 (drops any typed +52/521/1 prefix), then
-            # +521. The leading tab stops Excel from rendering the long digit
-            # string as scientific notation — it forces literal text.
-            phone = ''
+            # Digits only, last 10 (drops any typed +52/521/1 prefix), then +521
+            phone = None
             digits = _re.sub(r'\D', '', a.phone_number or '')
             if digits:
-                phone = '\t+521' + digits[-10:]
-            w.writerow([
+                phone = '+521' + digits[-10:]
+            ws.append([
                 a.user.get_full_name() or a.agent_name,
-                a.get_role_type_display() or '',
-                str(a.supervisor) if a.supervisor else '',
+                a.get_role_type_display() or None,
+                str(a.supervisor) if a.supervisor else None,
                 a.get_status_display(),
                 primary_five9,
-                start.isoformat() if start else '',
+                start.isoformat() if start else None,
                 years,
                 phone,
             ])
+            # Text format ('@') keeps Excel from ever coercing the phone
+            ws.cell(row=ws.max_row, column=8).number_format = '@'
+
+        col_widths = [24, 16, 20, 12, 22, 12, 10, 18]
+        for i, w in enumerate(col_widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+        resp = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        resp['Content-Disposition'] = f'attachment; filename="users_{today}.xlsx"'
+        wb.save(resp)
         return resp
 
     if status_filter == 'active':
