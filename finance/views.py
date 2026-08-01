@@ -803,6 +803,143 @@ def admin_codings(request):
     })
 
 
+def _seconds_to_hhmmss(total_seconds):
+    h, rem = divmod(total_seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f'{h:02d}:{m:02d}:{s:02d}'
+
+
+@login_required
+@finance_access_required
+def codings_export(request):
+    """Export every coding block (regular + admin) for the selected week, per agent,
+    with daily and weekly totals. Read-only — no coding/adherence/payroll data is touched."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    week_start = _get_week_start(request)
+    week_dates = _week_dates(week_start)
+    week_end = week_dates[-1]
+
+    # Same active-OR-still-in-pay-window rule as _get_adherence_agent_pks /
+    # the Users export's pay_window_q / billing_report — a finalized separation
+    # still counts while remove_from_adherence_date is after this week's Monday.
+    pay_window_q = Q(status='active') | Q(
+        status='inactive', separations__status='finalized',
+        separations__remove_from_adherence_date__gt=week_start,
+    )
+
+    # Regular codings — same roster + filter as adherence.codings_week
+    regular_agents = Agent.objects.filter(pay_window_q).distinct()
+    regular_codings = Coding.objects.filter(
+        date__in=week_dates, agent__in=regular_agents, is_admin_coding=False
+    ).select_related('agent__user')
+
+    # Admin codings — same roster + filter as finance.admin_codings
+    admin_agents = Agent.objects.filter(
+        pay_window_q, five9_profiles__billable=True, is_official_admin=True
+    ).distinct()
+    admin_codings = Coding.objects.filter(
+        date__in=week_dates, agent__in=admin_agents, is_admin_coding=True
+    ).select_related('agent__user')
+
+    by_agent = {}
+    for c in regular_codings:
+        by_agent.setdefault(c.agent_id, {'agent': c.agent, 'by_date': {}})
+        by_agent[c.agent_id]['by_date'].setdefault(c.date, []).append((c, 'Regular'))
+    for c in admin_codings:
+        by_agent.setdefault(c.agent_id, {'agent': c.agent, 'by_date': {}})
+        by_agent[c.agent_id]['by_date'].setdefault(c.date, []).append((c, 'Admin'))
+
+    primary_map = {}
+    for p in Five9Profile.objects.filter(
+        agent_id__in=by_agent.keys(), is_primary=True
+    ).values('agent_id', 'five9_username'):
+        primary_map.setdefault(p['agent_id'], p['five9_username'])
+
+    agents_sorted = sorted(
+        by_agent.values(),
+        key=lambda e: (e['agent'].user.get_full_name() or e['agent'].agent_name or '')
+    )
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Codings"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1A3A5C")
+    daily_fill = PatternFill("solid", fgColor="E5E7EB")
+    daily_font = Font(bold=True, color="374151")
+    weekly_fill = PatternFill("solid", fgColor="CBD5E1")
+    weekly_font = Font(bold=True, color="1A3A5C")
+    center = Alignment(horizontal='center')
+
+    headers = [
+        'Agent Name', 'Agent Username', 'Date', 'Day', 'Type',
+        'Start', 'End', 'Duration (Decimal)', 'Duration (HH:MM:SS)',
+    ]
+
+    ws.append([f"Codings Export — Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}"])
+    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
+    ws['A1'].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(headers)
+    for col in range(1, len(headers) + 1):
+        cell = ws.cell(row=3, column=col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+
+    def _total_row(label, total_seconds, fill, font):
+        ws.append([label, None, None, None, None, None, None,
+                   round(total_seconds / 3600, 2), _seconds_to_hhmmss(total_seconds)])
+        r = ws.max_row
+        ws.merge_cells(f'A{r}:G{r}')
+        for col in range(1, len(headers) + 1):
+            ws.cell(row=r, column=col).fill = fill
+            ws.cell(row=r, column=col).font = font
+        ws.cell(row=r, column=9).number_format = '@'
+
+    for entry in agents_sorted:
+        agent = entry['agent']
+        full_name = agent.user.get_full_name() or agent.agent_name
+        username = primary_map.get(agent.pk, '') or ''
+        week_total_seconds = 0
+        for day_date in sorted(entry['by_date'].keys()):
+            blocks = sorted(entry['by_date'][day_date], key=lambda pair: pair[0].start_time)
+            day_total_seconds = 0
+            for c, type_label in blocks:
+                secs = c.total_seconds_count()
+                day_total_seconds += secs
+                ws.append([
+                    full_name, username, day_date.isoformat(), day_date.strftime('%a'),
+                    type_label,
+                    c.start_time.strftime('%H:%M:%S'), c.end_time.strftime('%H:%M:%S'),
+                    c.total_hours(), c.total_hhmmss(),
+                ])
+                ws.cell(row=ws.max_row, column=6).number_format = '@'
+                ws.cell(row=ws.max_row, column=7).number_format = '@'
+                ws.cell(row=ws.max_row, column=9).number_format = '@'
+            week_total_seconds += day_total_seconds
+            _total_row('Daily total', day_total_seconds, daily_fill, daily_font)
+        _total_row('Weekly total', week_total_seconds, weekly_fill, weekly_font)
+
+    col_widths = [22, 20, 12, 8, 10, 12, 12, 16, 18]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="codings_{week_start.isoformat()}.xlsx"'
+    )
+    wb.save(response)
+    log_action(request.user, 'Codings exported', f'Week {week_start.isoformat()}')
+    return response
+
+
 @login_required
 @finance_access_required
 @require_POST
