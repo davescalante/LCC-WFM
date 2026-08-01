@@ -923,6 +923,132 @@ def codings_export(request):
     return response
 
 
+def _split_agent_display_name(name):
+    """Split a call-center display name into (first, last) on the LAST space."""
+    name = (name or '').strip()
+    if not name:
+        return '', ''
+    if ' ' not in name:
+        return name, ''
+    first, last = name.rsplit(' ', 1)
+    return first, last
+
+
+@login_required
+@finance_access_required
+def billing_export_v2(request):
+    """Billing Report v2 — one row per agent, weekly payroll matrix (login, not-ready,
+    coded, allowed-NR, deduction, final hours). Reuses _get_billable_weekly_data's
+    NR/final-hours math exactly; adds no new not-ready calculations. Read-only —
+    does not touch billing_report/billing_export or any hours/payroll data."""
+    import openpyxl
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    week_start = _get_week_start(request)
+    settings = BillingSettings.get_for_week(week_start)
+    week_dates = _week_dates(week_start)
+
+    # Same active-OR-still-in-pay-window rule as codings_export / the Users
+    # export's pay_window_q / billing_report — a finalized separation still
+    # counts while remove_from_adherence_date is after this week's Monday.
+    # Applied once, with no role/admin/billable narrowing: every agent in the
+    # pay window gets a row, zero-filled if they have no hours that week.
+    pay_window_q = Q(status='active') | Q(
+        status='inactive', separations__status='finalized',
+        separations__remove_from_adherence_date__gt=week_start,
+    )
+    agents = Agent.objects.filter(pay_window_q).distinct().select_related(
+        'user', 'supervisor__user'
+    ).prefetch_related('five9_profiles', 'separations')
+
+    data = _get_billable_weekly_data(list(agents), week_dates, settings)
+
+    primary_map = {}
+    for p in Five9Profile.objects.filter(
+        agent__in=agents, is_primary=True
+    ).values('agent_id', 'five9_username'):
+        primary_map.setdefault(p['agent_id'], p['five9_username'])
+
+    agents_sorted = sorted(agents, key=lambda a: (a.agent_name or ''))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Billing v2"
+
+    header_font = Font(bold=True)
+
+    headers = [
+        'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME',
+        'LOGIN TIME', 'NOT READY TIME', 'Coded time', 'Total connected time',
+        'Allowed Not Ready', 'Time that should be deducted for going over NR Allowed',
+        'Total work time after deduction of Not Ready in Decimal',
+        'Total work time after deduction of Not Ready',
+    ]
+    ws.append(headers)
+    for col in range(2, 12):  # B-K bold, A left default
+        ws.cell(row=1, column=col).font = header_font
+
+    for agent in agents_sorted:
+        d = data.get(agent.pk, {})
+        first, last = _split_agent_display_name(agent.agent_name)
+
+        login_hrs = d.get('actual_hrs', Decimal('0'))
+        nr_hrs = d.get('total_nr_hrs', Decimal('0'))
+        coded_hrs = d.get('coded_hrs', Decimal('0'))
+        connected_hrs = d.get('pre_cap_total', login_hrs + coded_hrs)
+        deduction_hrs = d.get('nr_deduction', Decimal('0'))
+        final_hrs = d.get('final_hrs', connected_hrs - deduction_hrs)
+
+        nr_cap = (settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team'
+                  else settings.nr_cap_regular_hours)
+        if connected_hrs <= settings.nr_ratio_max_hours:
+            allowed_hrs = min(nr_cap, login_hrs * settings.nr_ratio)
+        else:
+            allowed_hrs = nr_cap
+
+        def _secs(hrs):
+            return timedelta(seconds=round(float(hrs) * 3600))
+
+        row = [
+            primary_map.get(agent.pk, '') or '',
+            first,
+            last,
+            _secs(login_hrs),
+            _secs(nr_hrs),
+            _secs(coded_hrs),
+            _secs(connected_hrs),
+            _secs(allowed_hrs),
+            _secs(deduction_hrs),
+            round(float(final_hrs), 2),
+            _secs(final_hrs),
+        ]
+        ws.append(row)
+        r = ws.max_row
+        ws.cell(row=r, column=4).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=5).number_format = 'h:mm:ss'
+        ws.cell(row=r, column=6).number_format = '[h]:mm:ss;@'
+        ws.cell(row=r, column=7).number_format = '[h]:mm:ss;@'
+        ws.cell(row=r, column=8).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=9).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=10).number_format = '0.00'
+        ws.cell(row=r, column=11).number_format = '[h]:mm:ss'
+
+    col_widths = {1: 22, 2: 20, 3: 19, 4: 12, 5: 17, 6: 12, 7: 21, 8: 19, 9: 55, 10: 56, 11: 44}
+    for col, w in col_widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="billing_v2_{week_start.isoformat()}.xlsx"'
+    )
+    wb.save(response)
+    log_action(request.user, 'Billing report v2 exported', f'Week {week_start.isoformat()}')
+    return response
+
+
 @login_required
 @finance_access_required
 @require_POST

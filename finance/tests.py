@@ -10,6 +10,7 @@ import openpyxl
 from scheduling.models import Agent, Five9Profile, AgentSeparation
 from adherence.models import DailyUpload, DailyAgentHours, Coding
 from finance.models import BillingSettings
+from finance.views import _split_agent_display_name
 
 
 _WEEK_START = date(2025, 1, 6)
@@ -344,3 +345,233 @@ class CodingsExportTests(TestCase):
         idx_a = next(i for i, r in enumerate(rows) if r[3] == 'Sup Alpha')
         idx_b = next(i for i, r in enumerate(rows) if r[3] == 'Sup Bravo')
         self.assertLess(idx_a, idx_b)
+
+
+V2_HEADERS = [
+    'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME',
+    'LOGIN TIME', 'NOT READY TIME', 'Coded time', 'Total connected time',
+    'Allowed Not Ready', 'Time that should be deducted for going over NR Allowed',
+    'Total work time after deduction of Not Ready in Decimal',
+    'Total work time after deduction of Not Ready',
+]
+
+
+def _as_timedelta(value):
+    """Normalize an openpyxl round-tripped duration cell (time, timedelta, or a bare
+    numeric zero — openpyxl round-trips a zero-valued duration cell as plain 0) to a timedelta."""
+    if isinstance(value, timedelta):
+        return value
+    if isinstance(value, time):
+        return timedelta(hours=value.hour, minutes=value.minute, seconds=value.second)
+    if isinstance(value, (int, float)):
+        return timedelta(days=float(value))
+    raise AssertionError(f"expected a duration-like value, got {value!r}")
+
+
+class BillingV2ExportTests(TestCase):
+    """Billing Report v2 — one row per agent, weekly payroll matrix reusing the exact
+    hours-engine NR/final-hours math. Purely additive; must not touch billing_report/export."""
+
+    def setUp(self):
+        self.boss = _make_agent('v2boss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+        self.client.login(username='v2boss', password='x')
+        _settings(
+            nr_cap_regular_hours=Decimal('6.00'),
+            nr_cap_kill_team_hours=Decimal('7.00'),
+            nr_ratio=Decimal('0.1250'),
+            nr_ratio_max_hours=Decimal('48.00'),
+        )
+
+    def _export_ws(self, week_start=_WEEK_START):
+        resp = self.client.get(reverse('billing_export_v2') + f'?week={week_start.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], XLSX_MIME)
+        return openpyxl.load_workbook(io.BytesIO(resp.content)).active
+
+    def _rows(self, ws):
+        return [list(r) for r in ws.iter_rows(values_only=True)]
+
+    def _row_index_for(self, ws, agent):
+        first, last = _split_agent_display_name(agent.agent_name)
+        for r in range(2, ws.max_row + 1):
+            # openpyxl round-trips a written '' as a blank cell (None) — normalize both.
+            if (ws.cell(row=r, column=2).value or '') == first and (ws.cell(row=r, column=3).value or '') == last:
+                return r
+        raise AssertionError(f"No row found for {agent.agent_name!r}")
+
+    def _row_for(self, ws, agent):
+        return self._rows(ws)[self._row_index_for(ws, agent) - 1]
+
+    def test_header_row(self):
+        ws = self._export_ws()
+        self.assertEqual(self._rows(ws)[0], V2_HEADERS)
+        # A not bold, B-K bold
+        self.assertFalse(ws.cell(row=1, column=1).font.bold)
+        for col in range(2, 12):
+            self.assertTrue(ws.cell(row=1, column=col).font.bold)
+
+    def test_filename_and_content_type(self):
+        resp = self.client.get(reverse('billing_export_v2') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp['Content-Type'], XLSX_MIME)
+        self.assertIn(f'billing_v2_{_WEEK_START.isoformat()}.xlsx', resp['Content-Disposition'])
+
+    def test_g_k_j_identities_for_real_hours(self):
+        # 44h login, 3h coded, 7h NR, regular agent -> matches the worked example.
+        agent = _make_agent('identity1')
+        _add_hours(agent, 44 * 3600, 7 * 3600)
+        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(12, 0))
+        row = self._row_for(self._export_ws(), agent)
+        d = _as_timedelta(row[3])
+        f = _as_timedelta(row[5])
+        g = _as_timedelta(row[6])
+        i = _as_timedelta(row[8])
+        k = _as_timedelta(row[10])
+        j = row[9]
+        self.assertEqual(g, d + f)
+        self.assertEqual(k, g - i)
+        self.assertAlmostEqual(j, k.total_seconds() / 3600, places=2)
+        self.assertAlmostEqual(k.total_seconds() / 3600, 45.5, places=2)
+
+    def test_allowed_nr_regular_vs_kill_team_cap(self):
+        # pre_total=50h (>48h ratio ceiling) -> H collapses to the absolute cap exactly.
+        regular = _make_agent('capregular', role_type='regular_agent')
+        kill = _make_agent('capkill', role_type='kill_team')
+        _add_hours(regular, 50 * 3600, 10 * 3600)
+        _add_hours(kill, 50 * 3600, 10 * 3600)
+        ws = self._export_ws()
+        row_r = self._row_for(ws, regular)
+        row_k = self._row_for(ws, kill)
+        self.assertEqual(_as_timedelta(row_r[7]), timedelta(hours=6))   # Allowed NR
+        self.assertEqual(_as_timedelta(row_k[7]), timedelta(hours=7))   # kill team +1h
+        self.assertEqual(_as_timedelta(row_r[8]), timedelta(hours=4))   # deduction 10-6
+        self.assertEqual(_as_timedelta(row_k[8]), timedelta(hours=3))   # deduction 10-7
+        self.assertEqual(_as_timedelta(row_r[10]), timedelta(hours=46))
+        self.assertEqual(_as_timedelta(row_k[10]), timedelta(hours=47))
+
+    def test_nr_under_allowance_zero_deduction(self):
+        agent = _make_agent('underallow1')
+        _add_hours(agent, 40 * 3600, 2 * 3600)  # allowance = min(6, 40*.125=5) = 5h > 2h NR
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[8]), timedelta(0))
+        self.assertEqual(_as_timedelta(row[10]), _as_timedelta(row[6]))  # K == G
+
+    def test_nr_over_allowance_deduction_reduces_final(self):
+        agent = _make_agent('overallow1')
+        _add_hours(agent, 20 * 3600, 8 * 3600)  # allowance = min(6, 2.5) = 2.5h; NR=8h
+        row = self._row_for(self._export_ws(), agent)
+        allowed = _as_timedelta(row[7])
+        ded = _as_timedelta(row[8])
+        nr = _as_timedelta(row[4])
+        self.assertEqual(allowed, timedelta(hours=2, minutes=30))
+        self.assertEqual(ded, nr - allowed)
+        self.assertEqual(_as_timedelta(row[10]), timedelta(hours=14, minutes=30))
+
+    def test_zero_fill_for_agent_with_no_hours(self):
+        agent = _make_agent('zerofillv2')
+        row = self._row_for(self._export_ws(), agent)
+        for col in (3, 4, 5, 6, 8, 9):
+            self.assertEqual(_as_timedelta(row[col]), timedelta(0))
+        self.assertEqual(row[9], 0.0)
+
+    def test_admin_with_no_login_shows_coded_as_connected_time(self):
+        agent = _make_agent('adminnologin', role='admin', role_type='supervisor')
+        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(14, 0))
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[3]), timedelta(0))            # login 0
+        self.assertEqual(_as_timedelta(row[5]), timedelta(hours=5))     # coded 5h
+        self.assertEqual(_as_timedelta(row[6]), timedelta(hours=5))     # connected == coded
+
+    def test_durations_are_real_values_not_text_and_j_is_number(self):
+        agent = _make_agent('durfmtv2')
+        _add_hours(agent, 10 * 3600, 1 * 3600)
+        ws = self._export_ws()
+        r = self._row_index_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=4).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=5).number_format, 'h:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=6).number_format, '[h]:mm:ss;@')
+        self.assertEqual(ws.cell(row=r, column=7).number_format, '[h]:mm:ss;@')
+        self.assertEqual(ws.cell(row=r, column=8).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=9).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=10).number_format, '0.00')
+        self.assertEqual(ws.cell(row=r, column=11).number_format, '[h]:mm:ss')
+        for col in (4, 5, 6, 7, 8, 9, 11):
+            self.assertNotIsInstance(ws.cell(row=r, column=col).value, str)
+        j_value = ws.cell(row=r, column=10).value
+        self.assertIsInstance(j_value, (int, float))
+        self.assertNotIsInstance(j_value, bool)
+
+    def test_name_split_parenthetical_middle_name(self):
+        agent = _make_agent('nametest1')
+        agent.agent_name = 'David (IB) Green'
+        agent.save()
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(row[1], 'David (IB)')
+        self.assertEqual(row[2], 'Green')
+
+    def test_name_split_single_word(self):
+        agent = _make_agent('nametest2')
+        agent.agent_name = 'Cher'
+        agent.save()
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(row[1], 'Cher')
+        self.assertEqual(row[2] or '', '')  # openpyxl round-trips a written '' as blank (None)
+
+    def test_pay_window_inclusion(self):
+        agent = _make_agent('v2payin1')
+        agent.status = 'inactive'
+        agent.save()
+        AgentSeparation.objects.create(
+            agent=agent, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=3),
+            remove_from_adherence_date=_WEEK_START + timedelta(days=1),
+        )
+        _add_hours(agent, 5 * 3600, 0)
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=5))
+
+    def test_pay_window_exclusion(self):
+        agent = _make_agent('v2payout1')
+        agent.status = 'inactive'
+        agent.save()
+        AgentSeparation.objects.create(
+            agent=agent, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=10),
+            remove_from_adherence_date=_WEEK_START,  # not > week_start -> already passed
+        )
+        rows = self._rows(self._export_ws())
+        names = [(r[1], r[2]) for r in rows[1:]]
+        first, last = _split_agent_display_name(agent.agent_name)
+        self.assertNotIn((first, last), names)
+
+    def test_non_super_admin_denied(self):
+        self.client.logout()
+        _make_agent('v2plainadmin', role='admin', role_type='supervisor')
+        self.client.login(username='v2plainadmin', password='x')
+        resp = self.client.get(reverse('billing_export_v2') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_unauthenticated_denied(self):
+        self.client.logout()
+        resp = self.client.get(reverse('billing_export_v2') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_existing_billing_report_and_export_untouched(self):
+        # Regression guard: the original billing report/export must still work exactly
+        # as before — same URL names, same content type, same header columns.
+        resp_report = self.client.get(reverse('billing_report') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp_report.status_code, 200)
+
+        resp_export = self.client.get(reverse('billing_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp_export.status_code, 200)
+        self.assertEqual(resp_export['Content-Type'], XLSX_MIME)
+        self.assertIn(f'billing_{_WEEK_START.isoformat()}.xlsx', resp_export['Content-Disposition'])
+        ws = openpyxl.load_workbook(io.BytesIO(resp_export.content)).active
+        self.assertEqual(ws.title, "Billing")
+        header_row = [c.value for c in ws[3]]
+        self.assertEqual(header_row, [
+            'Agent Name', 'Legal Name', 'Employee ID', 'Five9 Username (Billable)',
+            'Supervisor', 'Agent Type', 'Employer',
+            'Worked Hrs (Final)', 'Billing Rate (USD)', 'Total Billing (USD)',
+        ])
