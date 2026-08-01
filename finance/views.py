@@ -803,131 +803,114 @@ def admin_codings(request):
     })
 
 
-def _seconds_to_hhmmss(total_seconds):
-    h, rem = divmod(total_seconds, 3600)
-    m, s = divmod(rem, 60)
-    return f'{h:02d}:{m:02d}:{s:02d}'
-
-
 @login_required
 @finance_access_required
 def codings_export(request):
-    """Export every coding block (regular + admin) for the selected week, per agent,
-    with daily and weekly totals. Read-only — no coding/adherence/payroll data is touched."""
+    """Export a one-row-per-agent weekly coding matrix (regular + admin combined),
+    with Mon-Sun day totals and a weekly total. Read-only — no coding/adherence/payroll
+    data is touched."""
     import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     week_start = _get_week_start(request)
     week_dates = _week_dates(week_start)
-    week_end = week_dates[-1]
 
     # Same active-OR-still-in-pay-window rule as _get_adherence_agent_pks /
     # the Users export's pay_window_q / billing_report — a finalized separation
     # still counts while remove_from_adherence_date is after this week's Monday.
+    # Applied once, with no role/admin/billable narrowing: every agent in the
+    # pay window gets a row, zero-filled if they have no codings that week.
     pay_window_q = Q(status='active') | Q(
         status='inactive', separations__status='finalized',
         separations__remove_from_adherence_date__gt=week_start,
     )
+    agents = Agent.objects.filter(pay_window_q).distinct().select_related(
+        'user', 'supervisor__user'
+    )
 
-    # Regular codings — same roster + filter as adherence.codings_week
-    regular_agents = Agent.objects.filter(pay_window_q).distinct()
-    regular_codings = Coding.objects.filter(
-        date__in=week_dates, agent__in=regular_agents, is_admin_coding=False
-    ).select_related('agent__user')
-
-    # Admin codings — same roster + filter as finance.admin_codings
-    admin_agents = Agent.objects.filter(
-        pay_window_q, five9_profiles__billable=True, is_official_admin=True
-    ).distinct()
-    admin_codings = Coding.objects.filter(
-        date__in=week_dates, agent__in=admin_agents, is_admin_coding=True
-    ).select_related('agent__user')
-
-    by_agent = {}
-    for c in regular_codings:
-        by_agent.setdefault(c.agent_id, {'agent': c.agent, 'by_date': {}})
-        by_agent[c.agent_id]['by_date'].setdefault(c.date, []).append((c, 'Regular'))
-    for c in admin_codings:
-        by_agent.setdefault(c.agent_id, {'agent': c.agent, 'by_date': {}})
-        by_agent[c.agent_id]['by_date'].setdefault(c.date, []).append((c, 'Admin'))
+    # Both regular and admin codings summed together, per agent per day.
+    codings = Coding.objects.filter(date__in=week_dates, agent__in=agents)
+    day_seconds = {}
+    for c in codings:
+        key = (c.agent_id, c.date)
+        day_seconds[key] = day_seconds.get(key, 0) + c.total_seconds_count()
 
     primary_map = {}
     for p in Five9Profile.objects.filter(
-        agent_id__in=by_agent.keys(), is_primary=True
+        agent__in=agents, is_primary=True
     ).values('agent_id', 'five9_username'):
         primary_map.setdefault(p['agent_id'], p['five9_username'])
 
-    agents_sorted = sorted(
-        by_agent.values(),
-        key=lambda e: (e['agent'].user.get_full_name() or e['agent'].agent_name or '')
-    )
+    def _display_name(agent):
+        return agent.user.get_full_name() or agent.agent_name or ''
+
+    def _supervisor_name(agent):
+        return str(agent.supervisor) if agent.supervisor_id else ''
+
+    agents_sorted = sorted(agents, key=lambda a: (_supervisor_name(a), _display_name(a)))
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Codings"
 
     header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="1A3A5C")
-    daily_fill = PatternFill("solid", fgColor="E5E7EB")
-    daily_font = Font(bold=True, color="374151")
-    weekly_fill = PatternFill("solid", fgColor="CBD5E1")
-    weekly_font = Font(bold=True, color="1A3A5C")
-    center = Alignment(horizontal='center')
+    identity_header_fill = PatternFill("solid", fgColor="5B9BD5")
+    day_header_fill = PatternFill("solid", fgColor="A6A6A6")
+    identity_data_fill = PatternFill("solid", fgColor="BDD7EE")
+    day_data_fill = PatternFill("solid", fgColor="D9D9D9")
+    day_data_font = Font(bold=True)
 
     headers = [
-        'Agent Name', 'Agent Username', 'Date', 'Day', 'Type',
-        'Start', 'End', 'Duration (Decimal)', 'Duration (HH:MM:SS)',
+        'Username', 'ID', 'LEGAL NAMES', 'Supervisor',
+        'Mon Total', 'Tues Total', 'Wed Total', 'Thur Total', 'Fri Total', 'Sat Total', 'Sun Total',
+        None,
+        'Total', 'Total Decimal',
     ]
+    IDENTITY_COLS = (1, 2, 3, 4, 13, 14)
+    DAY_COLS = range(5, 12)  # E-K
 
-    ws.append([f"Codings Export — Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}"])
-    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
-    ws['A1'].font = Font(bold=True, size=13)
-    ws.append([])
     ws.append(headers)
-    for col in range(1, len(headers) + 1):
-        cell = ws.cell(row=3, column=col)
+    for col in IDENTITY_COLS:
+        cell = ws.cell(row=1, column=col)
         cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = center
+        cell.fill = identity_header_fill
+    for col in DAY_COLS:
+        cell = ws.cell(row=1, column=col)
+        cell.font = header_font
+        cell.fill = day_header_fill
 
-    def _total_row(label, total_seconds, fill, font):
-        ws.append([label, None, None, None, None, None, None,
-                   round(total_seconds / 3600, 2), _seconds_to_hhmmss(total_seconds)])
+    for agent in agents_sorted:
+        day_values = []
+        week_seconds = 0
+        for day_date in week_dates:
+            secs = day_seconds.get((agent.pk, day_date), 0)
+            week_seconds += secs
+            day_values.append(timedelta(seconds=secs))
+
+        row = (
+            [primary_map.get(agent.pk, '') or '', agent.employee_id or '',
+             _display_name(agent), _supervisor_name(agent)]
+            + day_values
+            + [None, timedelta(seconds=week_seconds), round(week_seconds / 3600, 2)]
+        )
+        ws.append(row)
         r = ws.max_row
-        ws.merge_cells(f'A{r}:G{r}')
-        for col in range(1, len(headers) + 1):
-            ws.cell(row=r, column=col).fill = fill
-            ws.cell(row=r, column=col).font = font
-        ws.cell(row=r, column=9).number_format = '@'
+        for col in IDENTITY_COLS:
+            ws.cell(row=r, column=col).fill = identity_data_fill
+        for col in DAY_COLS:
+            cell = ws.cell(row=r, column=col)
+            cell.fill = day_data_fill
+            cell.font = day_data_font
+            cell.number_format = 'h:mm:ss'
+        ws.cell(row=r, column=13).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=14).number_format = '0.00'
 
-    for entry in agents_sorted:
-        agent = entry['agent']
-        full_name = agent.user.get_full_name() or agent.agent_name
-        username = primary_map.get(agent.pk, '') or ''
-        week_total_seconds = 0
-        for day_date in sorted(entry['by_date'].keys()):
-            blocks = sorted(entry['by_date'][day_date], key=lambda pair: pair[0].start_time)
-            day_total_seconds = 0
-            for c, type_label in blocks:
-                secs = c.total_seconds_count()
-                day_total_seconds += secs
-                ws.append([
-                    full_name, username, day_date.isoformat(), day_date.strftime('%a'),
-                    type_label,
-                    c.start_time.strftime('%H:%M:%S'), c.end_time.strftime('%H:%M:%S'),
-                    c.total_hours(), c.total_hhmmss(),
-                ])
-                ws.cell(row=ws.max_row, column=6).number_format = '@'
-                ws.cell(row=ws.max_row, column=7).number_format = '@'
-                ws.cell(row=ws.max_row, column=9).number_format = '@'
-            week_total_seconds += day_total_seconds
-            _total_row('Daily total', day_total_seconds, daily_fill, daily_font)
-        _total_row('Weekly total', week_total_seconds, weekly_fill, weekly_font)
-
-    col_widths = [22, 20, 12, 8, 10, 12, 12, 16, 18]
-    for i, w in enumerate(col_widths, 1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+    col_widths = {1: 17, 2: 6, 3: 51, 4: 14, 12: 4, 13: 9, 14: 12}
+    for col in DAY_COLS:
+        col_widths[col] = 9
+    for col, w in col_widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'

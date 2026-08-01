@@ -150,13 +150,15 @@ class NRCapMaxOfTwoTests(TestCase):
 XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 HEADERS = [
-    'Agent Name', 'Agent Username', 'Date', 'Day', 'Type',
-    'Start', 'End', 'Duration (Decimal)', 'Duration (HH:MM:SS)',
+    'Username', 'ID', 'LEGAL NAMES', 'Supervisor',
+    'Mon Total', 'Tues Total', 'Wed Total', 'Thur Total', 'Fri Total', 'Sat Total', 'Sun Total',
+    None,
+    'Total', 'Total Decimal',
 ]
 
 
 class CodingsExportTests(TestCase):
-    """Export Codings — regular + admin codings for a week, per agent, with totals."""
+    """Export Codings — one row per agent, Mon-Sun day totals + a weekly total."""
 
     def setUp(self):
         # role='admin'/role_type='supervisor' keeps AgentAccessMiddleware from
@@ -175,90 +177,104 @@ class CodingsExportTests(TestCase):
     def _rows(self, ws):
         return [list(r) for r in ws.iter_rows(values_only=True)]
 
+    def _row_index_for(self, ws, agent):
+        legal_name = agent.user.get_full_name() or agent.agent_name
+        for r in range(2, ws.max_row + 1):
+            if ws.cell(row=r, column=3).value == legal_name:
+                return r
+        raise AssertionError(f"No row found for {legal_name!r}")
+
+    def _row_for(self, ws, agent):
+        return self._rows(ws)[self._row_index_for(ws, agent) - 1]
+
     def test_header_row(self):
         ws = self._export_ws()
-        rows = self._rows(ws)
-        self.assertEqual(rows[2], HEADERS)
+        self.assertEqual(self._rows(ws)[0], HEADERS)
 
     def test_filename_and_content_type(self):
         resp = self.client.get(reverse('codings_export') + f'?week={_WEEK_START.isoformat()}')
         self.assertEqual(resp['Content-Type'], XLSX_MIME)
         self.assertIn(f'codings_{_WEEK_START.isoformat()}.xlsx', resp['Content-Disposition'])
 
-    def test_regular_and_admin_codings_both_appear(self):
-        agent = _make_agent('rega')
-        agent.is_official_admin = True
-        agent.save()
-        Five9Profile.objects.create(agent=agent, five9_username='rega.f9', billable=True, is_primary=True)
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+    def test_daily_and_weekly_totals(self):
+        agent = _make_agent('dow1')
+        # Monday: regular (2h) + admin (1h) on the SAME day -> summed into one 3h total
+        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(11, 0),
                                is_admin_coding=False)
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(11, 0), end_time=time(12, 30),
+        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(13, 0), end_time=time(14, 0),
                                is_admin_coding=True)
-        rows = self._rows(self._export_ws())
-        full_name = agent.user.get_full_name() or agent.agent_name
-        types = [r[4] for r in rows if r[0] == full_name]
-        self.assertIn('Regular', types)
-        self.assertIn('Admin', types)
+        # Wednesday: 0.5h regular
+        Coding.objects.create(agent=agent, date=_WEEK_START + timedelta(days=2), start_time=time(9, 0),
+                               end_time=time(9, 30), is_admin_coding=False)
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(row[4], time(3, 0, 0))    # Mon Total
+        self.assertEqual(row[5], time(0, 0, 0))    # Tues Total
+        self.assertEqual(row[6], time(0, 30, 0))   # Wed Total
+        self.assertEqual(row[7], time(0, 0, 0))    # Thur Total
+        self.assertEqual(row[8], time(0, 0, 0))    # Fri Total
+        self.assertEqual(row[9], time(0, 0, 0))    # Sat Total
+        self.assertEqual(row[10], time(0, 0, 0))   # Sun Total
+        self.assertEqual(row[12], timedelta(hours=3, minutes=30))  # Total
+        self.assertEqual(row[13], 3.5)              # Total Decimal
 
-    def test_block_duration_conversion(self):
-        # 90 minutes -> 1.5 decimal hours and 01:30:00
-        agent = _make_agent('conv1')
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 30),
-                               is_admin_coding=False)
-        rows = self._rows(self._export_ws())
-        block = next(r for r in rows if r[4] == 'Regular')
-        self.assertEqual(block[7], 1.5)
-        self.assertEqual(block[8], '01:30:00')
+    def test_agent_with_no_codings_is_zero_filled(self):
+        agent = _make_agent('zerofill1')
+        row = self._row_for(self._export_ws(), agent)
+        for i in range(4, 11):
+            self.assertEqual(row[i], time(0, 0, 0))
+        self.assertEqual(row[12], timedelta(0))
+        self.assertEqual(row[13], 0.0)
 
-    def test_daily_total(self):
-        agent = _make_agent('daily1')
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
-                               is_admin_coding=False)  # 1h
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(11, 0), end_time=time(11, 30),
-                               is_admin_coding=False)  # 0.5h
-        rows = self._rows(self._export_ws())
-        daily = next(r for r in rows if r[0] == 'Daily total')
-        self.assertEqual(daily[7], 1.5)
-        self.assertEqual(daily[8], '01:30:00')
+    def test_weekly_total_over_24_hours(self):
+        agent = _make_agent('over24')
+        for i, day_date in enumerate(_WEEK):
+            Coding.objects.create(agent=agent, date=day_date, start_time=time(8, 0), end_time=time(12, 0),
+                                   is_admin_coding=(i % 2 == 0))  # 4h/day * 7 days = 28h
+        ws = self._export_ws()
+        r = self._row_index_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=13).value, timedelta(hours=28))
+        self.assertEqual(ws.cell(row=r, column=13).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=14).value, 28.0)
 
-    def test_weekly_total(self):
-        agent = _make_agent('weekly1')
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
-                               is_admin_coding=False)  # 1h, day 0
-        Coding.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0),
-                               end_time=time(9, 30), is_admin_coding=False)  # 0.5h, day 1
-        rows = self._rows(self._export_ws())
-        weekly = next(r for r in rows if r[0] == 'Weekly total')
-        self.assertEqual(weekly[7], 1.5)
-        self.assertEqual(weekly[8], '01:30:00')
-
-    def test_time_columns_are_text_formatted(self):
-        agent = _make_agent('fmt1')
+    def test_time_cells_are_real_duration_values_not_text(self):
+        agent = _make_agent('durfmt1')
         Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 30),
                                is_admin_coding=False)
         ws = self._export_ws()
-        row_idx = next(
-            r for r in range(4, ws.max_row + 1) if ws.cell(row=r, column=5).value == 'Regular'
-        )
-        self.assertEqual(ws.cell(row=row_idx, column=6).number_format, '@')
-        self.assertEqual(ws.cell(row=row_idx, column=7).number_format, '@')
-        self.assertEqual(ws.cell(row=row_idx, column=9).number_format, '@')
+        r = self._row_index_for(ws, agent)
+        for col in range(5, 12):
+            self.assertEqual(ws.cell(row=r, column=col).number_format, 'h:mm:ss')
+        self.assertIsInstance(ws.cell(row=r, column=5).value, time)
+        self.assertEqual(ws.cell(row=r, column=13).number_format, '[h]:mm:ss')
+        self.assertIsInstance(ws.cell(row=r, column=13).value, timedelta)
+        self.assertNotEqual(ws.cell(row=r, column=14).number_format, '@')
+        self.assertIsInstance(ws.cell(row=r, column=14).value, float)
 
-    def test_agent_with_no_codings_absent(self):
-        agent = _make_agent('empty1')
-        rows = self._rows(self._export_ws())
-        names = [r[0] for r in rows]
-        self.assertNotIn(agent.user.get_full_name() or agent.agent_name, names)
+    def test_employee_id_and_username_populate_and_blank(self):
+        agent = _make_agent('idtest1')
+        agent.employee_id = 'EMP-500'
+        agent.save()
+        Five9Profile.objects.create(agent=agent, five9_username='idtest1.f9', is_primary=True)
+        agent2 = _make_agent('idtest2')  # no employee_id, no Five9 profile
+        ws = self._export_ws()
+        row1 = self._row_for(ws, agent)
+        row2 = self._row_for(ws, agent2)
+        self.assertEqual(row1[1], 'EMP-500')
+        self.assertEqual(row1[0], 'idtest1.f9')
+        # openpyxl round-trips a written '' as a blank cell (None) — both mean "blank"
+        self.assertFalse(row2[1])
+        self.assertFalse(row2[0])
 
-    def test_coding_outside_week_excluded(self):
+    def test_coding_outside_week_excluded_from_totals(self):
         agent = _make_agent('outside1')
         Coding.objects.create(agent=agent, date=_WEEK_START - timedelta(days=1), start_time=time(9, 0),
                                end_time=time(10, 0), is_admin_coding=False)
         Coding.objects.create(agent=agent, date=_WEEK_START + timedelta(days=7), start_time=time(9, 0),
                                end_time=time(10, 0), is_admin_coding=False)
-        rows = self._rows(self._export_ws())
-        names = [r[0] for r in rows]
-        self.assertNotIn('outside1', names)
+        row = self._row_for(self._export_ws(), agent)  # row exists — zero-fill roster
+        for i in range(4, 11):
+            self.assertEqual(row[i], time(0, 0, 0))
+        self.assertEqual(row[12], timedelta(0))
 
     def test_non_super_admin_denied(self):
         self.client.logout()
@@ -272,7 +288,7 @@ class CodingsExportTests(TestCase):
         resp = self.client.get(reverse('codings_export') + f'?week={_WEEK_START.isoformat()}')
         self.assertEqual(resp.status_code, 302)
 
-    def test_pay_window_inclusion_regular(self):
+    def test_pay_window_inclusion(self):
         agent = _make_agent('payin1')
         agent.status = 'inactive'
         agent.save()
@@ -283,26 +299,8 @@ class CodingsExportTests(TestCase):
         )
         Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
                                is_admin_coding=False)
-        rows = self._rows(self._export_ws())
-        names = [r[0] for r in rows]
-        self.assertIn('payin1', names)
-
-    def test_pay_window_inclusion_admin(self):
-        agent = _make_agent('payin2')
-        agent.status = 'inactive'
-        agent.is_official_admin = True
-        agent.save()
-        Five9Profile.objects.create(agent=agent, five9_username='payin2.f9', billable=True, is_primary=True)
-        AgentSeparation.objects.create(
-            agent=agent, status='finalized', separation_type='quit',
-            last_day_worked=_WEEK_START - timedelta(days=3),
-            remove_from_adherence_date=_WEEK_START + timedelta(days=1),
-        )
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
-                               is_admin_coding=True)
-        rows = self._rows(self._export_ws())
-        names = [r[0] for r in rows]
-        self.assertIn('payin2', names)
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(row[4], time(1, 0, 0))
 
     def test_pay_window_exclusion(self):
         agent = _make_agent('payout1')
@@ -316,5 +314,33 @@ class CodingsExportTests(TestCase):
         Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
                                is_admin_coding=False)
         rows = self._rows(self._export_ws())
-        names = [r[0] for r in rows]
+        names = [r[2] for r in rows[1:]]
         self.assertNotIn('payout1', names)
+
+    def test_sort_by_supervisor_then_legal_name(self):
+        sup_a = _make_agent('supa', role='admin', role_type='supervisor')
+        sup_a.agent_name = 'Sup Alpha'
+        sup_a.save()
+        sup_b = _make_agent('supb', role='admin', role_type='supervisor')
+        sup_b.agent_name = 'Sup Bravo'
+        sup_b.save()
+
+        under_a_z = _make_agent('undera_z')
+        under_a_z.agent_name = 'Zeta Under A'
+        under_a_z.supervisor = sup_a
+        under_a_z.save()
+        under_a_a = _make_agent('undera_a')
+        under_a_a.agent_name = 'Alpha Under A'
+        under_a_a.supervisor = sup_a
+        under_a_a.save()
+        under_b = _make_agent('underb')
+        under_b.agent_name = 'Someone Under B'
+        under_b.supervisor = sup_b
+        under_b.save()
+
+        rows = self._rows(self._export_ws())[1:]
+        names_under_a = [r[2] for r in rows if r[3] == 'Sup Alpha']
+        self.assertEqual(names_under_a, ['Alpha Under A', 'Zeta Under A'])
+        idx_a = next(i for i, r in enumerate(rows) if r[3] == 'Sup Alpha')
+        idx_b = next(i for i, r in enumerate(rows) if r[3] == 'Sup Bravo')
+        self.assertLess(idx_a, idx_b)
