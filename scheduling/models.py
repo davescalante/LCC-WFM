@@ -64,6 +64,7 @@ class Agent(models.Model):
     is_official_admin = models.BooleanField(default=False, help_text="Genuine administrator — receives admin bonus instead of adherence bonus")
     admin_bonus_mxn = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, help_text="Individual admin bonus in MXN (uses global default if blank)")
     is_super_admin = models.BooleanField(default=False, help_text="Super admin — full access to Finance section; can grant super admin to others")
+    can_access_admin_tabs = models.BooleanField(default=False, help_text="Access to Admin Codings and Admin Adherence — supervisors see & code their own team of Official Admins; super admins see everyone")
     notes = models.TextField(blank=True)
 
     @property

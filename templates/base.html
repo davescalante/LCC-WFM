@@ -84,7 +84,7 @@
         <a href="{% url 'overtime_list' %}" style="position:relative;">OT Shifts{% if request.ot_request_badge %}<span class="nav-badge">{{ request.ot_request_badge }}</span>{% endif %}</a>
         <a href="{% url 'adherence_dashboard' %}">Adherence</a>
         <a href="{% url 'codings_week' %}">Codings</a>
-        {% if request.has_finance_access %}
+        {% if request.can_access_admin_tabs %}
         <a href="{% url 'admin_codings' %}">Admin Codings</a>
         <a href="{% url 'admin_adherence' %}">Admin Adherence</a>
         {% endif %}

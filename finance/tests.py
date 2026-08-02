@@ -661,3 +661,60 @@ class BillingV2ExportTests(TestCase):
             'Supervisor', 'Agent Type', 'Employer',
             'Worked Hrs (Final)', 'Billing Rate (USD)', 'Total Billing (USD)',
         ])
+
+
+class AdminTabsAccessTests(TestCase):
+    """
+    Part 2: can_access_admin_tabs gates Admin Codings and Admin Adherence
+    (now top-level tabs, previously Finance-only). Super admins keep implicit
+    access; a plain holder of the flag gets access; anyone else is denied
+    server-side, not just hidden from nav.
+    """
+
+    def test_holder_can_open_both_tabs(self):
+        holder = _make_agent('tabsholder', role='admin', role_type='supervisor')
+        holder.can_access_admin_tabs = True
+        holder.save()
+        self.client.login(username='tabsholder', password='x')
+        resp1 = self.client.get(reverse('admin_codings') + f'?week={_WEEK_START.isoformat()}')
+        resp2 = self.client.get(reverse('admin_adherence') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(resp2.status_code, 200)
+
+    def test_non_holder_denied_on_both_tabs(self):
+        _make_agent('tabsnoholder', role='admin', role_type='supervisor')
+        self.client.login(username='tabsnoholder', password='x')
+        resp1 = self.client.get(reverse('admin_codings') + f'?week={_WEEK_START.isoformat()}')
+        resp2 = self.client.get(reverse('admin_adherence') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp1.status_code, 302)
+        self.assertEqual(resp2.status_code, 302)
+
+    def test_non_holder_denied_on_ajax_endpoints_directly(self):
+        # Server-side enforcement, not just hidden nav: hitting the save
+        # endpoints directly without the permission must still be rejected.
+        agent = _make_agent('tabsnoholder2', role='admin', role_type='supervisor')
+        official = _make_agent('officialx', role='admin', role_type='supervisor')
+        official.is_official_admin = True
+        official.save()
+        self.client.login(username='tabsnoholder2', password='x')
+        resp = self.client.post(
+            reverse('add_admin_coding_ajax'), data='{}', content_type='application/json'
+        )
+        self.assertEqual(resp.status_code, 302)
+
+    def test_super_admin_has_access_without_the_flag(self):
+        boss = _make_agent('tabssuper', role='admin', role_type='supervisor')
+        boss.is_super_admin = True
+        boss.can_access_admin_tabs = False
+        boss.save()
+        self.client.login(username='tabssuper', password='x')
+        resp1 = self.client.get(reverse('admin_codings') + f'?week={_WEEK_START.isoformat()}')
+        resp2 = self.client.get(reverse('admin_adherence') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(resp2.status_code, 200)
+
+    def test_unauthenticated_denied_on_both_tabs(self):
+        resp1 = self.client.get(reverse('admin_codings'))
+        resp2 = self.client.get(reverse('admin_adherence'))
+        self.assertEqual(resp1.status_code, 302)
+        self.assertEqual(resp2.status_code, 302)

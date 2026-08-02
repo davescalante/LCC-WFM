@@ -42,6 +42,35 @@ def finance_access_required(view_func):
     return _wrapped
 
 
+# Admin Codings / Admin Adherence are visible to super admins (like Finance)
+# plus anyone individually granted can_access_admin_tabs. Team-scoping a
+# non-super-admin holder down to their own supervised Official Admins is a
+# separate, later concern from this gate.
+
+def _has_admin_tabs_access(user):
+    if user.is_superuser:
+        return True
+    try:
+        agent = user.agent
+    except Exception:
+        return False
+    return bool(agent.is_super_admin or agent.can_access_admin_tabs)
+
+
+def admin_tabs_access_required(view_func):
+    from functools import wraps
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            from django.contrib.auth.views import redirect_to_login
+            return redirect_to_login(request.get_full_path())
+        if not _has_admin_tabs_access(request.user):
+            messages.error(request, "Access denied.")
+            return redirect('dashboard')
+        return view_func(request, *args, **kwargs)
+    return _wrapped
+
+
 # ─── Week helpers ─────────────────────────────────────────────────────────────
 
 def _get_week_start(request):
@@ -752,7 +781,7 @@ def finance_settings(request):
 # ─── Admin Codings ────────────────────────────────────────────────────────────
 
 @login_required
-@finance_access_required
+@admin_tabs_access_required
 def admin_codings(request):
     """Codings for Official Admins and coordinators against their billable Five9 user."""
     week_start = _get_week_start(request)
@@ -1053,7 +1082,7 @@ def billing_export_v2(request):
 
 
 @login_required
-@finance_access_required
+@admin_tabs_access_required
 @require_POST
 def add_admin_coding_ajax(request):
     data = json.loads(request.body)
@@ -1108,7 +1137,7 @@ def add_admin_coding_ajax(request):
 
 
 @login_required
-@finance_access_required
+@admin_tabs_access_required
 @require_POST
 def edit_admin_coding_ajax(request):
     data = json.loads(request.body)
@@ -1155,7 +1184,7 @@ def edit_admin_coding_ajax(request):
 
 
 @login_required
-@finance_access_required
+@admin_tabs_access_required
 @require_POST
 def delete_admin_coding_ajax(request):
     data = json.loads(request.body)
@@ -1169,7 +1198,7 @@ def delete_admin_coding_ajax(request):
 # ─── Admin Adherence ──────────────────────────────────────────────────────────
 
 @login_required
-@finance_access_required
+@admin_tabs_access_required
 def admin_adherence(request):
     """Adherence tab for Official Admins only — super admin access."""
     from adherence.views import _build_maps, _build_rows
@@ -1244,7 +1273,7 @@ def admin_adherence(request):
 
 
 @login_required
-@finance_access_required
+@admin_tabs_access_required
 def admin_adherence_export(request):
     """Export admin adherence payroll as Excel."""
     import openpyxl
