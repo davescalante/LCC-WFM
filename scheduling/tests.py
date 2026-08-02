@@ -756,3 +756,98 @@ class AgentListExportPayWindowTests(TestCase):
         names = self._export_names()
         self.assertNotIn('bare1', ''.join(names).lower())
         self.assertNotIn('Pay Nodate1', names)
+
+
+from unittest.mock import patch
+
+from django.db import IntegrityError
+
+
+class AgentCreateEditAtomicityTests(TestCase):
+    """agent_create/agent_edit wrap their multi-step save (User, Agent,
+    RoleHistory, Five9 profiles, EmploymentPeriod) in transaction.atomic() so
+    a downstream failure can't leave an orphaned User (create) or a
+    half-applied edit (edit)."""
+
+    def setUp(self):
+        self.admin = _make_agent('atomicadmin', role_type='supervisor')
+        self.client.login(username='atomicadmin', password='pw')
+
+    def _create_payload(self, username):
+        return {
+            'username': username,
+            'email': f'{username}@example.com',
+            'legal_name': 'New Agent',
+            'password': '',
+            'agent_name': 'New Agent',
+            'employee_id': '',
+            'role': 'agent',
+            'role_type': 'regular_agent',
+            'status': 'active',
+            'employer': 'Infinity',
+            'billing_status': 'Not Billed',
+            'phone_country_code': '+1',
+            'phone_number': '',
+            'teams_password': '',
+            'hourly_rate': '62.50',
+            'billing_rate_usd': '',
+            'admin_bonus_mxn': '',
+            'notes': '',
+        }
+
+    def test_agent_create_rolls_back_user_on_downstream_failure(self):
+        payload = self._create_payload('orphancandidate')
+        with patch('scheduling.views.RoleHistory.objects.create', side_effect=IntegrityError('boom')):
+            with self.assertRaises(IntegrityError):
+                self.client.post(reverse('agent_create'), payload)
+        self.assertFalse(User.objects.filter(username='orphancandidate').exists())
+        self.assertFalse(Agent.objects.filter(user__username='orphancandidate').exists())
+
+    def test_agent_create_succeeds_normally(self):
+        payload = self._create_payload('realagent1')
+        resp = self.client.post(reverse('agent_create'), payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        self.assertTrue(User.objects.filter(username='realagent1').exists())
+        agent = Agent.objects.get(user__username='realagent1')
+        self.assertEqual(agent.role_history.count(), 1)
+
+    def _edit_payload(self, username, email, agent_name):
+        return {
+            'username': username,
+            'email': email,
+            'legal_name': agent_name,
+            'password': '',
+            'agent_name': agent_name,
+            'employee_id': '',
+            'role': 'agent',
+            'role_type': 'regular_agent',
+            'status': 'active',
+            'employer': 'Infinity',
+            'billing_status': 'Not Billed',
+            'phone_country_code': '+1',
+            'phone_number': '',
+            'teams_password': '',
+            'hourly_rate': '62.50',
+            'billing_rate_usd': '',
+            'admin_bonus_mxn': '',
+            'notes': '',
+        }
+
+    def test_agent_edit_rolls_back_on_downstream_failure(self):
+        target = _make_agent('editvictim', role='agent', role_type='regular_agent')
+        target.user.email = 'original@example.com'
+        target.user.save()
+        payload = self._edit_payload('editvictim', 'changed@example.com', target.agent_name)
+        with patch('scheduling.views._save_five9_profiles', side_effect=IntegrityError('boom')):
+            with self.assertRaises(IntegrityError):
+                self.client.post(reverse('agent_edit', args=[target.pk]), payload)
+        target.user.refresh_from_db()
+        self.assertEqual(target.user.email, 'original@example.com')
+
+    def test_agent_edit_succeeds_normally(self):
+        target = _make_agent('editok', role='agent', role_type='regular_agent')
+        payload = self._edit_payload('editok', 'editok-new@example.com', target.agent_name)
+        resp = self.client.post(reverse('agent_edit', args=[target.pk]), payload)
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        target.user.refresh_from_db()
+        self.assertEqual(target.user.email, 'editok-new@example.com')

@@ -423,35 +423,37 @@ def agent_create(request):
     user_form = AgentUserForm(request.POST or None)
     agent_form = AgentForm(request.POST or None, can_grant_admin_tabs=request.has_finance_access)
     if request.method == 'POST' and user_form.is_valid() and agent_form.is_valid():
-        user = user_form.save(commit=False)
-        password = user_form.cleaned_data.get('password')
-        if password:
-            user.set_password(password)
-        else:
-            user.set_unusable_password()
-        user.save()
-        agent = agent_form.save(commit=False)
-        agent.user = user
-        agent.save()
-        from django.utils import timezone as _tz
-        RoleHistory.objects.create(
-            agent=agent,
-            role=agent.role,
-            role_type=agent.role_type or '',
-            supervisor=agent.supervisor,
-            employer=agent.employer,
-            billing_status=agent.billing_status,
-            effective_from=agent.start_date or _tz.localdate(),
-            changed_by=request.user,
-        )
-        _save_five9_profiles(request, agent)
-        if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email'):
-            user.set_unusable_password()
+        from django.db import transaction
+        with transaction.atomic():
+            user = user_form.save(commit=False)
+            password = user_form.cleaned_data.get('password')
+            if password:
+                user.set_password(password)
+            else:
+                user.set_unusable_password()
             user.save()
-        start_date = request.POST.get('start_date', '').strip()
-        if start_date:
-            from .models import EmploymentPeriod
-            EmploymentPeriod.objects.create(agent=agent, start_date=start_date)
+            agent = agent_form.save(commit=False)
+            agent.user = user
+            agent.save()
+            from django.utils import timezone as _tz
+            RoleHistory.objects.create(
+                agent=agent,
+                role=agent.role,
+                role_type=agent.role_type or '',
+                supervisor=agent.supervisor,
+                employer=agent.employer,
+                billing_status=agent.billing_status,
+                effective_from=agent.start_date or _tz.localdate(),
+                changed_by=request.user,
+            )
+            _save_five9_profiles(request, agent)
+            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email'):
+                user.set_unusable_password()
+                user.save()
+            start_date = request.POST.get('start_date', '').strip()
+            if start_date:
+                from .models import EmploymentPeriod
+                EmploymentPeriod.objects.create(agent=agent, start_date=start_date)
         log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
         messages.success(request, f"User {user.get_full_name()} created successfully.")
         return redirect('agent_list')
@@ -484,89 +486,91 @@ def agent_edit(request, pk):
         user_form = AgentUserForm(request.POST, instance=agent.user)
         agent_form = AgentForm(request.POST, instance=agent, can_grant_admin_tabs=request.has_finance_access)
         if user_form.is_valid() and agent_form.is_valid():
-            # Capture user-level values before save
-            _old_user = {
-                'username': agent.user.username,
-                'legal_name': f"{agent.user.first_name} {agent.user.last_name}".strip(),
-                'email': agent.user.email,
-            }
-            user = user_form.save(commit=False)
-            password = user_form.cleaned_data.get('password')
-            if password:
-                user.set_password(password)
-            user.save()
-            # Capture before save
-            _old = {
-                'role': agent.role, 'role_type': agent.role_type,
-                'supervisor_id': agent.supervisor_id,
-                'employer': agent.employer, 'billing_status': agent.billing_status,
-                'agent_name': agent.agent_name,
-            }
-            agent = agent_form.save()
-            # Record role history if tracked fields changed
-            _new = {
-                'role': agent.role, 'role_type': agent.role_type,
-                'supervisor_id': agent.supervisor_id,
-                'employer': agent.employer, 'billing_status': agent.billing_status,
-                'agent_name': agent.agent_name,
-            }
-            if _old['role_type'] != _new['role_type'] and _old['role_type']:
-                agent.five9_profiles.filter(role_type=_old['role_type']).update(role_type=_new['role_type'])
-            if _old != _new:
-                from django.utils import timezone as _tz
-                today = _tz.localdate()
-                if not agent.role_history.exists():
-                    # Seed initial entry from old values
-                    RoleHistory.objects.create(
-                        agent=agent, role=_old['role'], role_type=_old['role_type'] or '',
-                        supervisor_id=_old['supervisor_id'], employer=_old['employer'],
-                        billing_status=_old['billing_status'],
-                        effective_from=agent.start_date or today,
-                        effective_to=today, changed_by=request.user,
-                    )
-                else:
-                    open_entry = agent.role_history.filter(effective_to__isnull=True).first()
-                    if open_entry:
-                        open_entry.effective_to = today
-                        open_entry.save(update_fields=['effective_to'])
-                RoleHistory.objects.create(
-                    agent=agent, role=agent.role, role_type=agent.role_type or '',
-                    supervisor=agent.supervisor, employer=agent.employer,
-                    billing_status=agent.billing_status,
-                    effective_from=today, changed_by=request.user,
-                )
-            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email'):
-                user.set_unusable_password()
+            from django.db import transaction
+            with transaction.atomic():
+                # Capture user-level values before save
+                _old_user = {
+                    'username': agent.user.username,
+                    'legal_name': f"{agent.user.first_name} {agent.user.last_name}".strip(),
+                    'email': agent.user.email,
+                }
+                user = user_form.save(commit=False)
+                password = user_form.cleaned_data.get('password')
+                if password:
+                    user.set_password(password)
                 user.save()
-
-            # Update or delete existing periods
-            for period in list(agent.employment_periods.all()):
-                if request.POST.get(f'period_{period.pk}_delete'):
-                    period.delete()
-                    continue
-                start = request.POST.get(f'period_{period.pk}_start', '').strip()
-                if start:
-                    period.start_date = start
-                    period.end_date = request.POST.get(f'period_{period.pk}_end', '').strip() or None
-                    period.reason_ended = request.POST.get(f'period_{period.pk}_reason', '')
-                    period.notes = request.POST.get(f'period_{period.pk}_notes', '')
-                    period.save()
-
-            # Create new periods (indexed rows added via JS)
-            i = 0
-            while f'new_{i}_start' in request.POST:
-                start = request.POST.get(f'new_{i}_start', '').strip()
-                if start:
-                    EmploymentPeriod.objects.create(
-                        agent=agent,
-                        start_date=start,
-                        end_date=request.POST.get(f'new_{i}_end', '').strip() or None,
-                        reason_ended=request.POST.get(f'new_{i}_reason', ''),
-                        notes=request.POST.get(f'new_{i}_notes', ''),
+                # Capture before save
+                _old = {
+                    'role': agent.role, 'role_type': agent.role_type,
+                    'supervisor_id': agent.supervisor_id,
+                    'employer': agent.employer, 'billing_status': agent.billing_status,
+                    'agent_name': agent.agent_name,
+                }
+                agent = agent_form.save()
+                # Record role history if tracked fields changed
+                _new = {
+                    'role': agent.role, 'role_type': agent.role_type,
+                    'supervisor_id': agent.supervisor_id,
+                    'employer': agent.employer, 'billing_status': agent.billing_status,
+                    'agent_name': agent.agent_name,
+                }
+                if _old['role_type'] != _new['role_type'] and _old['role_type']:
+                    agent.five9_profiles.filter(role_type=_old['role_type']).update(role_type=_new['role_type'])
+                if _old != _new:
+                    from django.utils import timezone as _tz
+                    today = _tz.localdate()
+                    if not agent.role_history.exists():
+                        # Seed initial entry from old values
+                        RoleHistory.objects.create(
+                            agent=agent, role=_old['role'], role_type=_old['role_type'] or '',
+                            supervisor_id=_old['supervisor_id'], employer=_old['employer'],
+                            billing_status=_old['billing_status'],
+                            effective_from=agent.start_date or today,
+                            effective_to=today, changed_by=request.user,
+                        )
+                    else:
+                        open_entry = agent.role_history.filter(effective_to__isnull=True).first()
+                        if open_entry:
+                            open_entry.effective_to = today
+                            open_entry.save(update_fields=['effective_to'])
+                    RoleHistory.objects.create(
+                        agent=agent, role=agent.role, role_type=agent.role_type or '',
+                        supervisor=agent.supervisor, employer=agent.employer,
+                        billing_status=agent.billing_status,
+                        effective_from=today, changed_by=request.user,
                     )
-                i += 1
+                if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email'):
+                    user.set_unusable_password()
+                    user.save()
 
-            _save_five9_profiles(request, agent)
+                # Update or delete existing periods
+                for period in list(agent.employment_periods.all()):
+                    if request.POST.get(f'period_{period.pk}_delete'):
+                        period.delete()
+                        continue
+                    start = request.POST.get(f'period_{period.pk}_start', '').strip()
+                    if start:
+                        period.start_date = start
+                        period.end_date = request.POST.get(f'period_{period.pk}_end', '').strip() or None
+                        period.reason_ended = request.POST.get(f'period_{period.pk}_reason', '')
+                        period.notes = request.POST.get(f'period_{period.pk}_notes', '')
+                        period.save()
+
+                # Create new periods (indexed rows added via JS)
+                i = 0
+                while f'new_{i}_start' in request.POST:
+                    start = request.POST.get(f'new_{i}_start', '').strip()
+                    if start:
+                        EmploymentPeriod.objects.create(
+                            agent=agent,
+                            start_date=start,
+                            end_date=request.POST.get(f'new_{i}_end', '').strip() or None,
+                            reason_ended=request.POST.get(f'new_{i}_reason', ''),
+                            notes=request.POST.get(f'new_{i}_notes', ''),
+                        )
+                    i += 1
+
+                _save_five9_profiles(request, agent)
             # Build detailed change description
             _change_parts = []
             _new_user = {
