@@ -1118,6 +1118,8 @@ def billing_export_v2(request):
 @admin_tabs_access_required
 @require_POST
 def add_admin_coding_ajax(request):
+    from adherence.views import _attendance_edit_denied
+
     data = json.loads(request.body)
     agent_id = data.get('agent_id')
     date_str = data.get('date')
@@ -1127,6 +1129,9 @@ def add_admin_coding_ajax(request):
 
     if not all([agent_id, date_str, start_time, end_time]):
         return JsonResponse({'ok': False, 'error': 'missing fields'}, status=400)
+
+    if _attendance_edit_denied(request.user, agent_id):
+        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
 
     def _pad(s):
         parts = s.split(':')
@@ -1173,6 +1178,8 @@ def add_admin_coding_ajax(request):
 @admin_tabs_access_required
 @require_POST
 def edit_admin_coding_ajax(request):
+    from adherence.views import _attendance_edit_denied
+
     data = json.loads(request.body)
     coding_id = data.get('coding_id')
     start_time = data.get('start_time', '').strip()
@@ -1182,6 +1189,9 @@ def edit_admin_coding_ajax(request):
     coding = Coding.objects.filter(pk=coding_id, is_admin_coding=True).first()
     if not coding:
         return JsonResponse({'ok': False, 'error': 'Not found'}, status=404)
+
+    if _attendance_edit_denied(request.user, coding.agent_id):
+        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
 
     def _pad(s):
         parts = s.split(':')
@@ -1220,11 +1230,20 @@ def edit_admin_coding_ajax(request):
 @admin_tabs_access_required
 @require_POST
 def delete_admin_coding_ajax(request):
+    from adherence.views import _attendance_edit_denied
+
     data = json.loads(request.body)
     coding_id = data.get('coding_id')
-    deleted, _ = Coding.objects.filter(pk=coding_id, is_admin_coding=True).delete()
-    if deleted:
-        log_action(request.user, 'Admin coding deleted', f'Coding #{coding_id}')
+
+    coding = Coding.objects.filter(pk=coding_id, is_admin_coding=True).first()
+    if not coding:
+        return JsonResponse({'ok': True})
+
+    if _attendance_edit_denied(request.user, coding.agent_id):
+        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
+
+    coding.delete()
+    log_action(request.user, 'Admin coding deleted', f'Coding #{coding_id}')
     return JsonResponse({'ok': True})
 
 

@@ -686,6 +686,47 @@ def _apply_supervisor_filter(agents_qs, supervisor_id):
     return agents_qs
 
 
+# ── Official Admin edit-scope guard ───────────────────────────────────────────
+
+def _get_user_agent(user):
+    """Return the Agent profile linked to a user, or None."""
+    return Agent.objects.filter(user=user).select_related('user').first()
+
+
+def _attendance_edit_denied(user, agent_id):
+    """
+    Server-side team-scope guard for editing an Official Admin's adherence
+    status, notes, or coded time (Admin Adherence / Admin Codings).
+
+    Any target that ISN'T an Official Admin (regular Adherence/Codings) is
+    unrestricted here — unchanged from today's behavior, where access control
+    for those views is middleware-only, same as every other staff view.
+
+    An Official Admin target is deniable for anyone except: superusers,
+    is_super_admin agents, or a can_access_admin_tabs holder editing
+    themselves or an Official Admin they supervise.
+    """
+    if user.is_superuser or agent_id is None:
+        return False
+    agent = _get_user_agent(user)
+    if agent is None or agent.is_super_admin:
+        return False
+    try:
+        target = int(agent_id)
+    except (TypeError, ValueError):
+        target = None
+
+    target_is_official_admin = (
+        target is not None
+        and Agent.objects.filter(pk=target, is_official_admin=True).exists()
+    )
+    if not target_is_official_admin:
+        return False
+    if not agent.can_access_admin_tabs:
+        return True
+    return not (target == agent.pk or Agent.objects.filter(pk=target, supervisor=agent).exists())
+
+
 # ── AJAX endpoints ────────────────────────────────────────────────────────────
 
 @login_required
@@ -728,6 +769,9 @@ def save_adherence_cell(request):
         day_date = date.fromisoformat(date_str)
     except (ValueError, TypeError):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
+
+    if _attendance_edit_denied(request.user, agent_id):
+        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
 
     agent = get_object_or_404(Agent, pk=agent_id)
 
@@ -1715,6 +1759,9 @@ def adherence_notes(request):
 
     if not agent_id:
         return JsonResponse({'error': 'Missing agent'}, status=400)
+
+    if _attendance_edit_denied(request.user, agent_id):
+        return JsonResponse({'error': 'Not permitted for this agent.'}, status=403)
 
     if request.method == 'POST':
         body = (request.POST.get('body') or '').strip()

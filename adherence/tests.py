@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from datetime import date, timedelta, time
 from django.test import TestCase
@@ -252,3 +253,141 @@ class CodingsRosterExcludesOfficialAdminsTests(TestCase):
         regular_row = next(r for r in rows if r['agent'].pk == self.regular.pk)
         # 2h coding, in seconds — unaffected by the official admin's exclusion.
         self.assertEqual(regular_row['total_seconds'], 2 * 3600)
+
+
+class AdminEditScopeTests(TestCase):
+    """
+    Part 5: server-side team-scoped edit enforcement for Official Admin data.
+    A can_access_admin_tabs holder may save a status/note only for themselves
+    or an Official Admin they supervise; anyone else targeting an
+    out-of-team Official Admin is rejected server-side (403), even via a
+    direct POST bypassing the UI. Super admins are unrestricted. Regular
+    (non-Official-Admin) targets are unaffected — a full regression guard.
+    """
+
+    def setUp(self):
+        self.boss = Agent.objects.create(
+            user=User.objects.create_user('editboss', password='x'),
+            role='admin', role_type='supervisor', agent_name='Boss Admin',
+            status='active', is_super_admin=True,
+        )
+        self.vrenely = Agent.objects.create(
+            user=User.objects.create_user('editvrenely', password='x'),
+            role='admin', role_type='supervisor', agent_name='Vrenely Salido',
+            status='active', can_access_admin_tabs=True, is_official_admin=True,
+        )
+        self.supervised = Agent.objects.create(
+            user=User.objects.create_user('editsupervised', password='x'),
+            role='admin', role_type='supervisor', agent_name='Supervised Admin',
+            status='active', is_official_admin=True, supervisor=self.vrenely,
+        )
+        other_supervisor = Agent.objects.create(
+            user=User.objects.create_user('editothersup', password='x'),
+            role='admin', role_type='supervisor', agent_name='Other Supervisor',
+            status='active',
+        )
+        self.other_admin = Agent.objects.create(
+            user=User.objects.create_user('editotheradmin', password='x'),
+            role='admin', role_type='supervisor', agent_name='Other Team Admin',
+            status='active', is_official_admin=True, supervisor=other_supervisor,
+        )
+        # A regular (non-Official-Admin) agent — regression target.
+        self.regular = Agent.objects.create(
+            user=User.objects.create_user('editregular', password='x'),
+            role='agent', role_type='agent', agent_name='Regular Agent',
+            status='active', track_attendance=True,
+        )
+
+    # ── save_adherence_cell ───────────────────────────────────────────────
+
+    def test_supervisor_can_save_status_for_supervised_admin(self):
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(
+            reverse('save_adherence_cell'),
+            data=json.dumps({'agent_id': self.supervised.pk, 'date': _WEEK_START.isoformat(), 'status': 'P'}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            AdherenceRecord.objects.filter(agent=self.supervised, date=_WEEK_START, status='P').exists()
+        )
+
+    def test_supervisor_denied_saving_status_for_out_of_team_admin(self):
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(
+            reverse('save_adherence_cell'),
+            data=json.dumps({'agent_id': self.other_admin.pk, 'date': _WEEK_START.isoformat(), 'status': 'P'}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(
+            AdherenceRecord.objects.filter(agent=self.other_admin, date=_WEEK_START, status='P').exists()
+        )
+
+    def test_super_admin_can_save_status_for_any_official_admin(self):
+        self.client.login(username='editboss', password='x')
+        resp = self.client.post(
+            reverse('save_adherence_cell'),
+            data=json.dumps({'agent_id': self.other_admin.pk, 'date': _WEEK_START.isoformat(), 'status': 'P'}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_regular_agent_status_save_unchanged_for_non_holder(self):
+        # Regression: a staff user with no admin-tabs permission at all could
+        # already save a status for a regular (non-admin) agent before this
+        # change — that must still work exactly the same.
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(
+            reverse('save_adherence_cell'),
+            data=json.dumps({'agent_id': self.regular.pk, 'date': _WEEK_START.isoformat(), 'status': 'P'}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    # ── adherence_notes ───────────────────────────────────────────────────
+
+    def test_supervisor_can_add_note_for_supervised_admin(self):
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('adherence_notes'), data={
+            'agent': self.supervised.pk, 'date': _WEEK_START.isoformat(), 'body': 'ok',
+        })
+        self.assertEqual(resp.status_code, 200)
+
+    def test_supervisor_denied_adding_note_for_out_of_team_admin(self):
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('adherence_notes'), data={
+            'agent': self.other_admin.pk, 'date': _WEEK_START.isoformat(), 'body': 'nope',
+        })
+        self.assertEqual(resp.status_code, 403)
+
+    def test_supervisor_denied_reading_notes_for_out_of_team_admin(self):
+        # GET is locked down too — can't fetch another team's notes by
+        # guessing an agent_id, even though they can't see that row.
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.get(reverse('adherence_notes'), data={
+            'agent': self.other_admin.pk, 'date': _WEEK_START.isoformat(),
+        })
+        self.assertEqual(resp.status_code, 403)
+
+    def test_super_admin_can_read_and_add_notes_for_any_official_admin(self):
+        self.client.login(username='editboss', password='x')
+        resp_get = self.client.get(reverse('adherence_notes'), data={
+            'agent': self.other_admin.pk, 'date': _WEEK_START.isoformat(),
+        })
+        resp_post = self.client.post(reverse('adherence_notes'), data={
+            'agent': self.other_admin.pk, 'date': _WEEK_START.isoformat(), 'body': 'ok',
+        })
+        self.assertEqual(resp_get.status_code, 200)
+        self.assertEqual(resp_post.status_code, 200)
+
+    def test_regular_agent_notes_unchanged_for_non_holder(self):
+        self.client.login(username='editothersup', password='x')
+        resp_get = self.client.get(reverse('adherence_notes'), data={
+            'agent': self.regular.pk, 'date': _WEEK_START.isoformat(),
+        })
+        resp_post = self.client.post(reverse('adherence_notes'), data={
+            'agent': self.regular.pk, 'date': _WEEK_START.isoformat(), 'body': 'fine',
+        })
+        self.assertEqual(resp_get.status_code, 200)
+        self.assertEqual(resp_post.status_code, 200)

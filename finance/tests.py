@@ -1,4 +1,5 @@
 import io
+import json
 from decimal import Decimal
 from datetime import date, timedelta, time
 from django.test import TestCase
@@ -799,3 +800,130 @@ class AdminTabsVisibilityTests(TestCase):
             for url_name in ('admin_codings', 'admin_adherence'):
                 pks = self._pks(url_name, username)
                 self.assertNotIn(self.regular_teammate.pk, pks)
+
+
+class AdminCodingsEditScopeTests(TestCase):
+    """
+    Part 5: server-side team-scoped edit enforcement on the Admin Codings
+    save endpoints. A supervisor can add/edit/delete a coding for a
+    supervised Official Admin; the same supervisor is rejected server-side
+    (403) for an out-of-team Official Admin via a direct POST, even bypassing
+    the UI entirely; a super admin can edit any Official Admin.
+    """
+
+    def setUp(self):
+        self.boss = _make_agent('codeeditboss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+
+        self.vrenely = _make_agent('codeeditvrenely', role='admin', role_type='supervisor')
+        self.vrenely.can_access_admin_tabs = True
+        self.vrenely.is_official_admin = True
+        self.vrenely.save()
+
+        self.supervised = _make_agent('codeeditsupervised', role='admin', role_type='supervisor')
+        self.supervised.is_official_admin = True
+        self.supervised.supervisor = self.vrenely
+        self.supervised.save()
+
+        other_supervisor = _make_agent('codeeditothersup', role='admin', role_type='supervisor')
+        self.other_admin = _make_agent('codeeditotheradmin', role='admin', role_type='supervisor')
+        self.other_admin.is_official_admin = True
+        self.other_admin.supervisor = other_supervisor
+        self.other_admin.save()
+
+    def _add(self, agent_id):
+        return self.client.post(reverse('add_admin_coding_ajax'), data=json.dumps({
+            'agent_id': agent_id, 'date': _WEEK_START.isoformat(),
+            'start_time': '09:00:00', 'end_time': '10:00:00', 'notes': '',
+        }), content_type='application/json')
+
+    def test_supervisor_can_add_coding_for_supervised_admin(self):
+        self.client.login(username='codeeditvrenely', password='x')
+        resp = self._add(self.supervised.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Coding.objects.filter(agent=self.supervised, is_admin_coding=True).exists())
+
+    def test_supervisor_denied_adding_coding_for_out_of_team_admin(self):
+        self.client.login(username='codeeditvrenely', password='x')
+        resp = self._add(self.other_admin.pk)
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(Coding.objects.filter(agent=self.other_admin, is_admin_coding=True).exists())
+
+    def test_super_admin_can_add_coding_for_any_official_admin(self):
+        self.client.login(username='codeeditboss', password='x')
+        resp = self._add(self.other_admin.pk)
+        self.assertEqual(resp.status_code, 200)
+
+    def test_supervisor_can_edit_coding_for_supervised_admin(self):
+        coding = Coding.objects.create(
+            agent=self.supervised, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=True,
+        )
+        self.client.login(username='codeeditvrenely', password='x')
+        resp = self.client.post(reverse('edit_admin_coding_ajax'), data=json.dumps({
+            'coding_id': coding.pk, 'start_time': '09:00:00', 'end_time': '11:00:00', 'notes': '',
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        coding.refresh_from_db()
+        self.assertEqual(coding.end_time, time(11, 0))
+
+    def test_supervisor_denied_editing_coding_for_out_of_team_admin(self):
+        coding = Coding.objects.create(
+            agent=self.other_admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=True,
+        )
+        self.client.login(username='codeeditvrenely', password='x')
+        resp = self.client.post(reverse('edit_admin_coding_ajax'), data=json.dumps({
+            'coding_id': coding.pk, 'start_time': '09:00:00', 'end_time': '11:00:00', 'notes': '',
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 403)
+        coding.refresh_from_db()
+        self.assertEqual(coding.end_time, time(10, 0))
+
+    def test_super_admin_can_edit_coding_for_any_official_admin(self):
+        coding = Coding.objects.create(
+            agent=self.other_admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=True,
+        )
+        self.client.login(username='codeeditboss', password='x')
+        resp = self.client.post(reverse('edit_admin_coding_ajax'), data=json.dumps({
+            'coding_id': coding.pk, 'start_time': '09:00:00', 'end_time': '11:00:00', 'notes': '',
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_supervisor_can_delete_coding_for_supervised_admin(self):
+        coding = Coding.objects.create(
+            agent=self.supervised, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=True,
+        )
+        self.client.login(username='codeeditvrenely', password='x')
+        resp = self.client.post(reverse('delete_admin_coding_ajax'), data=json.dumps({
+            'coding_id': coding.pk,
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Coding.objects.filter(pk=coding.pk).exists())
+
+    def test_supervisor_denied_deleting_coding_for_out_of_team_admin(self):
+        coding = Coding.objects.create(
+            agent=self.other_admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=True,
+        )
+        self.client.login(username='codeeditvrenely', password='x')
+        resp = self.client.post(reverse('delete_admin_coding_ajax'), data=json.dumps({
+            'coding_id': coding.pk,
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(Coding.objects.filter(pk=coding.pk).exists())
+
+    def test_super_admin_can_delete_coding_for_any_official_admin(self):
+        coding = Coding.objects.create(
+            agent=self.other_admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=True,
+        )
+        self.client.login(username='codeeditboss', password='x')
+        resp = self.client.post(reverse('delete_admin_coding_ajax'), data=json.dumps({
+            'coding_id': coding.pk,
+        }), content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Coding.objects.filter(pk=coding.pk).exists())
