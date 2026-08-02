@@ -3,6 +3,8 @@ from . import views
 
 urlpatterns = [
     path('', views.adherence_week, name='adherence_dashboard'),
+    path('admin-attendance/', views.admin_attendance, name='admin_attendance'),
+    path('admin-attendance/rows/', views.admin_attendance_rows, name='admin_attendance_rows'),
     path('codings/', views.codings_week, name='codings_week'),
     path('payroll/', views.payroll_export, name='payroll_export'),
     path('daily/', views.daily_hours_week, name='daily_hours'),

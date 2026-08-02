@@ -34,10 +34,16 @@ class AgentUserForm(forms.ModelForm):
 
 class AgentForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
+        # Only super admins may grant the Admin Attendance permission. When the
+        # editing user isn't a super admin we remove the field entirely so it is
+        # neither rendered nor reset to False on save.
+        can_grant_admin_attendance = kwargs.pop('can_grant_admin_attendance', False)
         super().__init__(*args, **kwargs)
         self.fields['supervisor'].queryset = Agent.objects.filter(
             role_type__in=('supervisor', 'coordinator')
         ).select_related('user').order_by('user__last_name', 'user__first_name')
+        if not can_grant_admin_attendance:
+            self.fields.pop('can_access_admin_attendance', None)
 
     class Meta:
         model = Agent
@@ -46,7 +52,8 @@ class AgentForm(forms.ModelForm):
             'employer', 'billing_status', 'track_attendance',
             'phone_country_code', 'phone_number',
             'teams_password', 'hourly_rate', 'billing_rate_usd',
-            'is_official_admin', 'admin_bonus_mxn', 'is_super_admin', 'notes',
+            'is_official_admin', 'admin_bonus_mxn', 'is_super_admin',
+            'can_access_admin_attendance', 'notes',
         ]
         widgets = {
             'teams_password': forms.PasswordInput(render_value=True),

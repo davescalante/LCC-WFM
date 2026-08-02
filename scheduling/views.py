@@ -419,7 +419,7 @@ def _save_five9_profiles(request, agent):
 @login_required
 def agent_create(request):
     user_form = AgentUserForm(request.POST or None)
-    agent_form = AgentForm(request.POST or None)
+    agent_form = AgentForm(request.POST or None, can_grant_admin_attendance=request.has_finance_access)
     if request.method == 'POST' and user_form.is_valid() and agent_form.is_valid():
         user = user_form.save(commit=False)
         password = user_form.cleaned_data.get('password')
@@ -480,7 +480,7 @@ def agent_edit(request, pk):
 
     if request.method == 'POST':
         user_form = AgentUserForm(request.POST, instance=agent.user)
-        agent_form = AgentForm(request.POST, instance=agent)
+        agent_form = AgentForm(request.POST, instance=agent, can_grant_admin_attendance=request.has_finance_access)
         if user_form.is_valid() and agent_form.is_valid():
             # Capture user-level values before save
             _old_user = {
@@ -593,7 +593,7 @@ def agent_edit(request, pk):
             return redirect('agent_detail', pk=agent.pk)
     else:
         user_form = AgentUserForm(instance=agent.user)
-        agent_form = AgentForm(instance=agent)
+        agent_form = AgentForm(instance=agent, can_grant_admin_attendance=request.has_finance_access)
 
     from finance.models import BillingSettings as _BS
     return render(request, 'scheduling/agent_form.html', {
