@@ -571,6 +571,7 @@ class AgentListExportTests(TestCase):
     def test_full_row_content(self):
         a = self._make_full_agent('exp4', supervisor=self.sup)
         a.phone_number = '662-369-2710'
+        a.phone_country_code = '+52'
         a.save()
         Five9Profile.objects.create(agent=a, five9_username='other.acct', is_primary=False)
         Five9Profile.objects.create(agent=a, five9_username='exp4.primary', is_primary=True)
@@ -625,11 +626,48 @@ class AgentListExportTests(TestCase):
         for username, raw in cases.items():
             a = self._make_full_agent(username)
             a.phone_number = raw
+            a.phone_country_code = '+52'
             a.save()
         rows = self._export_rows()
         for username in cases:
             row = self._row_for(rows, f'Test {username.title()}')
             self.assertEqual(row[7], '+5216623692710', f'failed for {username}')
+
+    def test_phone_us_country_code(self):
+        a = self._make_full_agent('exp14')
+        a.phone_country_code = '+1'
+        a.phone_number = '520-369-2710'
+        a.save()
+        ws = self._export_ws()
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        row = self._row_for(rows, 'Test Exp14')
+        self.assertEqual(row[7], '+15203692710')
+        row_idx = rows.index(row) + 1
+        self.assertEqual(ws.cell(row=row_idx, column=8).number_format, '@')
+
+    def test_phone_us_country_normalizes_variants(self):
+        cases = {
+            'exp15': '520-369-2710',
+            'exp16': '(520) 369 2710',
+            'exp17': '+1 520 369 2710',
+        }
+        for username, raw in cases.items():
+            a = self._make_full_agent(username)
+            a.phone_country_code = '+1'
+            a.phone_number = raw
+            a.save()
+        rows = self._export_rows()
+        for username in cases:
+            row = self._row_for(rows, f'Test {username.title()}')
+            self.assertEqual(row[7], '+15203692710', f'failed for {username}')
+
+    def test_phone_blank_country_code_defaults_to_mexico(self):
+        a = self._make_full_agent('exp18')
+        a.phone_country_code = ''
+        a.phone_number = '662-369-2710'
+        a.save()
+        row = self._row_for(self._export_rows(), 'Test Exp18')
+        self.assertEqual(row[7], '+5216623692710')
 
     def test_bare_agent_exports_blanks_without_error(self):
         self._make_full_agent('exp13')  # no phone, no periods, no five9 profiles

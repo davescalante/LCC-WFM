@@ -282,11 +282,13 @@ def agent_list(request):
             if start:
                 years = max(0, today.year - start.year
                             - ((today.month, today.day) < (start.month, start.day)))
-            # Digits only, last 10 (drops any typed +52/521/1 prefix), then +521
+            # Digits only, last 10 (drops any typed +52/521/1 prefix), then the
+            # agent's country code (+1 US, else +521 Mexico incl. blank default)
             phone = None
             digits = _re.sub(r'\D', '', a.phone_number or '')
             if digits:
-                phone = '+521' + digits[-10:]
+                prefix = '+1' if a.phone_country_code == '+1' else '+521'
+                phone = prefix + digits[-10:]
             ws.append([
                 a.user.get_full_name() or a.agent_name,
                 a.get_role_type_display() or None,
