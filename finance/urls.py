@@ -11,4 +11,5 @@ urlpatterns = [
     path('settings/', views.finance_settings, name='finance_settings'),
     path('codings/export/', views.codings_export, name='codings_export'),
     path('adherence/export/', views.adherence_export, name='adherence_export'),
+    path('user-audit/export/', views.user_audit_export, name='user_audit_export'),
 ]

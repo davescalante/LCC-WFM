@@ -1619,3 +1619,118 @@ def adherence_export(request):
     wb.save(response)
     log_action(request.user, 'Adherence report exported', f'Week {week_start.isoformat()}')
     return response
+
+
+# ─── User Setup Audit export ──────────────────────────────────────────────────
+
+@login_required
+@finance_access_required
+def user_audit_export(request):
+    """One row per Five9 account (or one row per zero-account person), every active and inactive user."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    today = get_week_start()
+    settings = BillingSettings.get_for_week(today)
+
+    agents = Agent.objects.all().select_related(
+        'user', 'supervisor__user'
+    ).prefetch_related('five9_profiles').order_by('user__last_name', 'user__first_name')
+
+    headers = [
+        'Legal Name', 'Agent Name', 'Employee ID', 'Login Username', 'Email', 'Phone',
+        'Role', 'Role Type', 'Status', 'Supervisor', 'Employer', 'Billing Status',
+        'Tracked in Attendance', 'Official Admin', 'Super Admin', 'Admin-Tabs Access',
+        'Has Working Login', 'Effective Billing Rate (USD)', 'Rate Source (USD)',
+        'Effective Hourly Rate (MXN)', 'Admin Bonus Override (MXN)', 'Team Password',
+        '# Billable Five9 Accounts',
+        'Five9 Username', 'Five9 Role Type', 'Billable', 'Is Primary', 'Five9 Password',
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "User Audit"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1A3A5C")
+    center = Alignment(horizontal='center')
+
+    ws.append([f"User Setup Audit — as of {today.strftime('%B %d, %Y')}"])
+    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
+    ws['A1'].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(headers)
+    for col in range(1, len(headers) + 1):
+        c = ws.cell(row=3, column=col)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = center
+
+    def yn(value):
+        return 'Yes' if value else 'No'
+
+    for agent in agents:
+        supervisor_name = str(agent.supervisor) if agent.supervisor else ''
+        billing_override = agent.billing_rate_usd not in (None, Decimal('0'))
+        billing_rate = agent.billing_rate_usd if billing_override else settings.billing_rate_usd
+        hourly_mxn = agent.hourly_rate or Decimal('0')
+        phone = f"{agent.phone_country_code} {agent.phone_number}".strip() if agent.phone_number else ''
+
+        person_cols = [
+            agent.user.get_full_name() or '',
+            agent.agent_name or '',
+            agent.employee_id or '',
+            agent.user.username,
+            agent.user.email or '',
+            phone,
+            agent.get_role_display(),
+            agent.get_role_type_display() or '',
+            agent.get_status_display(),
+            supervisor_name,
+            agent.employer,
+            agent.billing_status,
+            yn(agent.track_attendance),
+            yn(agent.is_official_admin),
+            yn(agent.is_super_admin),
+            yn(agent.can_access_admin_tabs),
+            yn(agent.user.has_usable_password()),
+            float(billing_rate),
+            'Override' if billing_override else 'Default',
+            float(hourly_mxn),
+            float(agent.admin_bonus_mxn) if agent.admin_bonus_mxn is not None else '',
+            agent.teams_password or '',
+        ]
+
+        five9_profiles = sorted(
+            agent.five9_profiles.all(),
+            key=lambda p: (not p.is_primary, p.label or p.five9_username or '')
+        )
+        billable_count = sum(1 for p in five9_profiles if p.billable)
+
+        if five9_profiles:
+            for p in five9_profiles:
+                ws.append(person_cols + [billable_count, p.five9_username,
+                                          p.get_role_type_display() or '',
+                                          yn(p.billable), yn(p.is_primary),
+                                          p.five9_password or ''])
+        else:
+            ws.append(person_cols + [0, '— none —', '— none —', '— none —', '— none —', '— none —'])
+
+    col_widths = [22, 20, 12, 16, 26, 16, 10, 16, 10, 20, 10, 12, 12, 10, 10, 12,
+                  12, 14, 12, 14, 14, 16, 12, 22, 16, 10, 10, 22]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    ws.freeze_panes = 'A4'
+    ws.auto_filter.ref = f'A3:{get_column_letter(len(headers))}{ws.max_row}'
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="user_audit_{today.isoformat()}.xlsx"'
+    )
+    wb.save(response)
+    log_action(request.user, 'User setup audit exported', f'As of {today.isoformat()}')
+    return response
