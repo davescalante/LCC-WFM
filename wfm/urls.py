@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.urls import path, include
+from finance import views as finance_views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -8,5 +9,11 @@ urlpatterns = [
     path('adherence/', include('adherence.urls')),
     path('erlang/', include('erlang.urls')),
     path('finance/', include('finance.urls')),
+    path('admin-codings/', finance_views.admin_codings, name='admin_codings'),
+    path('admin-codings/add/', finance_views.add_admin_coding_ajax, name='add_admin_coding_ajax'),
+    path('admin-codings/edit/', finance_views.edit_admin_coding_ajax, name='edit_admin_coding_ajax'),
+    path('admin-codings/delete/', finance_views.delete_admin_coding_ajax, name='delete_admin_coding_ajax'),
+    path('admin-adherence/', finance_views.admin_adherence, name='admin_adherence'),
+    path('admin-adherence/export/', finance_views.admin_adherence_export, name='admin_adherence_export'),
     path('', include('scheduling.urls')),
 ]

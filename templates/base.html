@@ -84,6 +84,10 @@
         <a href="{% url 'overtime_list' %}" style="position:relative;">OT Shifts{% if request.ot_request_badge %}<span class="nav-badge">{{ request.ot_request_badge }}</span>{% endif %}</a>
         <a href="{% url 'adherence_dashboard' %}">Adherence</a>
         <a href="{% url 'codings_week' %}">Codings</a>
+        {% if request.has_finance_access %}
+        <a href="{% url 'admin_codings' %}">Admin Codings</a>
+        <a href="{% url 'admin_adherence' %}">Admin Adherence</a>
+        {% endif %}
         <a href="{% url 'daily_hours' %}">Daily Hours</a>
         <a href="{% url 'erlang_calculator' %}">Staffing</a>
         <a href="{% url 'requests_list' %}" style="position:relative;">Requests{% if request.supervisor_request_badge or request.staff_own_request_badge %}<span class="nav-badge">{{ request.supervisor_request_badge|add:request.staff_own_request_badge }}</span>{% endif %}</a>

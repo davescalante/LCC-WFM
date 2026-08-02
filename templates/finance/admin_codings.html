@@ -13,7 +13,6 @@
     </div>
     <div style="display:flex;gap:8px;">
         <a href="{% url 'admin_adherence' %}?week={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">Admin Adherence</a>
-        <a href="{% url 'finance_dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Finance</a>
     </div>
 </div>
 
@@ -306,7 +305,7 @@ async function submitCoding(agentId, dateStr) {
     showStatus('Saving…', '#b45309', '#fef3c7');
 
     try {
-        const resp = await fetch('/finance/add-admin-coding/', {
+        const resp = await fetch('/admin-codings/add/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
             body: JSON.stringify({agent_id: agentId, date: dateStr, start_time: start, end_time: end, notes}),
@@ -345,7 +344,7 @@ async function deleteCoding(codingId, agentId, dateStr) {
     if (!confirm('Delete this entry?')) return;
 
     try {
-        const resp = await fetch('/finance/delete-admin-coding/', {
+        const resp = await fetch('/admin-codings/delete/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
             body: JSON.stringify({coding_id: codingId}),
@@ -425,7 +424,7 @@ async function saveEditCoding(codingId, agentId, dateStr) {
 
     showStatus('Saving…', '#b45309', '#fef3c7');
     try {
-        const resp = await fetch('/finance/edit-admin-coding/', {
+        const resp = await fetch('/admin-codings/edit/', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
             body: JSON.stringify({coding_id: codingId, start_time: start, end_time: end, notes}),
