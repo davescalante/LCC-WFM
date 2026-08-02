@@ -718,3 +718,84 @@ class AdminTabsAccessTests(TestCase):
         resp2 = self.client.get(reverse('admin_adherence'))
         self.assertEqual(resp1.status_code, 302)
         self.assertEqual(resp2.status_code, 302)
+
+
+class AdminTabsVisibilityTests(TestCase):
+    """
+    Part 4: team-scoped visibility for the Admin Codings / Admin Adherence
+    rosters (_admin_tabs_access). Super admins/owners see every Official
+    Admin regardless of who they supervise; a non-super-admin holder sees
+    only themselves (if they're an Official Admin) plus the Official Admins
+    who have them set as supervisor. Visibility only — no edit checks here.
+    """
+
+    def setUp(self):
+        # Super admin — no restriction, sees everyone.
+        self.boss = _make_agent('vteamboss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+
+        # A supervisor holding the new permission, and an Official Admin
+        # herself — mirrors the "Vrenely" scenario in the task.
+        self.vrenely = _make_agent('vrenely', role='admin', role_type='supervisor')
+        self.vrenely.can_access_admin_tabs = True
+        self.vrenely.is_official_admin = True
+        self.vrenely.save()
+
+        # An Official Admin supervised by Vrenely.
+        self.supervised = _make_agent('supervisedadmin', role='admin', role_type='supervisor')
+        self.supervised.is_official_admin = True
+        self.supervised.supervisor = self.vrenely
+        self.supervised.save()
+
+        # An Official Admin supervised by someone else entirely.
+        self.other_supervisor = _make_agent('othersupervisor', role='admin', role_type='supervisor')
+        self.other_admin = _make_agent('otheradmin', role='admin', role_type='supervisor')
+        self.other_admin.is_official_admin = True
+        self.other_admin.supervisor = self.other_supervisor
+        self.other_admin.save()
+
+        # A non-Official-Admin on Vrenely's own team — must never appear.
+        self.regular_teammate = _make_agent('regularteammate', role='agent', role_type='agent')
+        self.regular_teammate.supervisor = self.vrenely
+        self.regular_teammate.save()
+
+        # Billable Five9 profiles so Official Admins show on BOTH tabs
+        # (Admin Codings additionally requires a billable profile).
+        for a in (self.vrenely, self.supervised, self.other_admin):
+            Five9Profile.objects.create(agent=a, five9_username=a.agent_name, billable=True)
+
+    def _pks(self, url_name, username):
+        self.client.login(username=username, password='x')
+        resp = self.client.get(reverse(url_name) + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        pks = [row['agent'].pk for row in resp.context['rows']]
+        self.client.logout()
+        return pks
+
+    def test_super_admin_sees_all_official_admins_on_both_tabs(self):
+        for url_name in ('admin_codings', 'admin_adherence'):
+            pks = self._pks(url_name, 'vteamboss')
+            self.assertIn(self.vrenely.pk, pks)
+            self.assertIn(self.supervised.pk, pks)
+            self.assertIn(self.other_admin.pk, pks)
+
+    def test_supervisor_sees_only_self_and_supervised_admins(self):
+        for url_name in ('admin_codings', 'admin_adherence'):
+            pks = self._pks(url_name, 'vrenely')
+            self.assertIn(self.vrenely.pk, pks)
+            self.assertIn(self.supervised.pk, pks)
+
+    def test_official_admin_of_different_supervisor_is_invisible(self):
+        for url_name in ('admin_codings', 'admin_adherence'):
+            pks = self._pks(url_name, 'vrenely')
+            self.assertNotIn(self.other_admin.pk, pks)
+            self.assertNotIn(self.other_supervisor.pk, pks)
+
+    def test_non_official_admins_never_appear(self):
+        # Regular teammate is on Vrenely's own team but isn't an Official
+        # Admin — never shows, for her or for the super admin.
+        for username in ('vteamboss', 'vrenely'):
+            for url_name in ('admin_codings', 'admin_adherence'):
+                pks = self._pks(url_name, username)
+                self.assertNotIn(self.regular_teammate.pk, pks)

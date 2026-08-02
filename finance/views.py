@@ -71,6 +71,36 @@ def admin_tabs_access_required(view_func):
     return _wrapped
 
 
+def _admin_tabs_access(user):
+    """
+    Determine Admin Codings / Admin Adherence visibility scope for a user.
+
+    Returns (has_access, team_pks):
+      - has_access: whether the user may see these tabs at all.
+      - team_pks:   None  => may see ALL Official Admins (super admin /
+                             superuser — no restriction, even if they also
+                             happen to supervise some);
+                    a set => may see only these agent PKs (their own team:
+                             direct reports + self). Since the roster query
+                             is always additionally filtered to
+                             is_official_admin=True, including a non-admin's
+                             own pk here is harmless — it just won't match.
+    """
+    if user.is_superuser:
+        return True, None
+    try:
+        agent = user.agent
+    except Exception:
+        return False, set()
+    if agent.is_super_admin:
+        return True, None
+    if agent.can_access_admin_tabs:
+        team = set(Agent.objects.filter(supervisor=agent).values_list('pk', flat=True))
+        team.add(agent.pk)
+        return True, team
+    return False, set()
+
+
 # ─── Week helpers ─────────────────────────────────────────────────────────────
 
 def _get_week_start(request):
@@ -796,6 +826,9 @@ def admin_codings(request):
     ).distinct().select_related('user', 'supervisor__user').order_by(
         'user__last_name', 'user__first_name'
     )
+    _, team_pks = _admin_tabs_access(request.user)
+    if team_pks is not None:
+        agents = agents.filter(pk__in=team_pks)
 
     # Billable username display map
     agent_ids = [a.pk for a in agents]
@@ -1200,7 +1233,9 @@ def delete_admin_coding_ajax(request):
 @login_required
 @admin_tabs_access_required
 def admin_adherence(request):
-    """Adherence tab for Official Admins only — super admin access."""
+    """Adherence tab for Official Admins only. Super admins/owners see all
+    Official Admins; other permission holders see only their own team
+    (themselves + the Official Admins who have them as supervisor)."""
     from adherence.views import _build_maps, _build_rows
     from adherence.models import AdherenceNote
     from django.db.models import Count as _Count
@@ -1215,6 +1250,9 @@ def admin_adherence(request):
     ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles').order_by(
         'user__last_name', 'user__first_name'
     )
+    _, team_pks = _admin_tabs_access(request.user)
+    if team_pks is not None:
+        agents = agents.filter(pk__in=team_pks)
     agents = list(agents)
 
     # Shift/record/OT maps from adherence logic
@@ -1292,6 +1330,9 @@ def admin_adherence_export(request):
     ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles').order_by(
         'user__last_name', 'user__first_name'
     )
+    _, team_pks = _admin_tabs_access(request.user)
+    if team_pks is not None:
+        agents = agents.filter(pk__in=team_pks)
     agents = list(agents)
 
     shift_map, record_map, _, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
