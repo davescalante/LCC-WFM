@@ -1439,3 +1439,183 @@ def admin_adherence_export(request):
     )
     wb.save(response)
     return response
+
+
+# ─── Combined Adherence export (regular + Official Admins) ───────────────────
+
+def _adherence_export_hhmmss(decimal_hours):
+    """Decimal hours -> 'H:MM:SS' string. Mirrors adherence.templatetags.adherence_filters.to_hhmmss."""
+    if not decimal_hours:
+        return ''
+    total_seconds = round(float(decimal_hours) * 3600)
+    h = total_seconds // 3600
+    m = (total_seconds % 3600) // 60
+    s = total_seconds % 60
+    return f'{h}:{m:02d}:{s:02d}'
+
+
+def _adherence_export_hex(color):
+    """Normalize a CSS hex color (e.g. '#fff' or '#e8f5e9') to a 6-digit hex for openpyxl."""
+    hex_str = color.lstrip('#')
+    if len(hex_str) == 3:
+        hex_str = ''.join(ch * 2 for ch in hex_str)
+    return hex_str
+
+
+@login_required
+@finance_access_required
+def adherence_export(request):
+    """Export a single combined Adherence workbook: the regular Adherence tab's
+    roster plus Official Admins from Admin Adherence, one row per person.
+    Sources every value from adherence._build_maps/_build_rows exactly as both
+    on-screen tabs already do — no new adherence/bonus/scheduling math."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    from adherence.views import _build_maps, _build_rows, _get_adherence_agent_pks
+
+    week_start = _get_week_start(request)
+    week_dates = _week_dates(week_start)
+    week_end = week_dates[-1]
+
+    # Regular roster — same PKs the regular Adherence tab shows (excludes
+    # Official Admins, applies the pay-window rule for recent separations).
+    regular_pks = _get_adherence_agent_pks(week_dates, week_start)
+    regular_agents = list(
+        Agent.objects.filter(pk__in=regular_pks)
+        .select_related('user', 'supervisor__user')
+        .prefetch_related('five9_profiles')
+    )
+    shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = (
+        _build_maps(regular_agents, week_dates)
+    )
+    rows = _build_rows(
+        regular_agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
+        extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
+        tmpl_by_agent_dow=tmpl_by_agent_dow,
+    )
+
+    # Official Admin roster — same query Admin Adherence uses. No team-scoping:
+    # this view is gated by finance_access_required (super admin only), which
+    # _admin_tabs_access always resolves to full access for anyway.
+    admin_agents = list(
+        Agent.objects.filter(status='active', is_official_admin=True)
+        .select_related('user', 'supervisor__user')
+        .prefetch_related('five9_profiles')
+    )
+    if admin_agents:
+        a_shift_map, a_record_map, _, a_ot_map, a_extra_hrs_map, a_split_labels_map, a_tmpl_by_agent_dow = (
+            _build_maps(admin_agents, week_dates)
+        )
+        admin_coded_map = {}
+        for c in Coding.objects.filter(date__in=week_dates, agent__in=admin_agents, is_admin_coding=True):
+            key = (c.agent_id, c.date)
+            admin_coded_map[key] = admin_coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
+        rows += _build_rows(
+            admin_agents, week_dates, a_shift_map, a_record_map, admin_coded_map, ot_map=a_ot_map,
+            extra_hrs_map=a_extra_hrs_map, split_labels_map=a_split_labels_map,
+            tmpl_by_agent_dow=a_tmpl_by_agent_dow,
+        )
+
+    def _display_name(agent):
+        return agent.user.get_full_name() or agent.agent_name or agent.user.username
+
+    def _supervisor_name(agent):
+        return str(agent.supervisor) if agent.supervisor_id else ''
+
+    rows.sort(key=lambda r: (_supervisor_name(r['agent']), _display_name(r['agent'])))
+
+    commission_map = {
+        pa.agent_id: pa.commission_deduction
+        for pa in PayrollAdjustment.objects.filter(
+            agent__in=[r['agent'].pk for r in rows], week_start=week_start
+        )
+    }
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Adherence"
+
+    day_headers = [d.strftime('%a') for d in week_dates]
+    headers = [
+        'Username', 'Employee ID', 'Legal Name', 'Agent Name', 'Supervisor',
+        'Commission Deduction %', 'Scheduled Hours',
+    ] + day_headers
+
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='1A3A5C')
+    center = Alignment(horizontal='center')
+    wrap_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    met_font = Font(color='166534')
+    short_font = Font(color='C0392B')
+
+    ws.append([f"Adherence — Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}"])
+    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
+    ws['A1'].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(headers)
+    for col in range(1, len(headers) + 1):
+        c = ws.cell(row=3, column=col)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = center
+
+    for row in rows:
+        agent = row['agent']
+        commission_pct = commission_map.get(agent.pk, Decimal('0'))
+
+        ws.append([
+            row.get('billable_five9_username', ''),
+            agent.employee_id or '',
+            _display_name(agent),
+            agent.agent_name or '',
+            _supervisor_name(agent),
+            float(commission_pct),
+            timedelta(hours=float(row['sched_hours'] or 0)),
+        ] + [None] * 7)
+        r = ws.max_row
+        ws.cell(row=r, column=6).number_format = '0.0"%"'
+        ws.cell(row=r, column=7).number_format = '[h]:mm:ss'
+
+        for i, cell in enumerate(row['cells']):
+            col = 8 + i
+            status = cell['status']
+            if cell['missing_hrs'] is not None:
+                hrs_line = f"-{_adherence_export_hhmmss(cell['missing_hrs'])}"
+                font = short_font
+            elif cell['display_hrs'] is not None:
+                hrs_line = _adherence_export_hhmmss(cell['display_hrs'])
+                font = met_font
+            else:
+                hrs_line = None
+                font = Font()
+
+            if status and hrs_line:
+                text = f"{status}\n{hrs_line}"
+            elif status:
+                text = status
+                font = Font()
+            else:
+                text = None
+
+            xl_cell = ws.cell(row=r, column=col, value=text)
+            xl_cell.fill = PatternFill('solid', fgColor=_adherence_export_hex(cell['color']))
+            xl_cell.font = font
+            xl_cell.alignment = wrap_center
+
+    col_widths = [17, 14, 30, 22, 20, 12, 14] + [11] * 7
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.row_dimensions[3].height = 30
+    for r in range(4, ws.max_row + 1):
+        ws.row_dimensions[r].height = 30
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = (
+        f'attachment; filename="adherence_{week_start.isoformat()}.xlsx"'
+    )
+    wb.save(response)
+    log_action(request.user, 'Adherence report exported', f'Week {week_start.isoformat()}')
+    return response

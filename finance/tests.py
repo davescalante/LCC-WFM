@@ -8,8 +8,10 @@ from django.contrib.auth.models import User
 
 import openpyxl
 
-from scheduling.models import Agent, Five9Profile, AgentSeparation
-from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding
+from django.core.cache import cache
+
+from scheduling.models import Agent, Five9Profile, AgentSeparation, Shift
+from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, PayrollAdjustment
 from finance.models import BillingSettings
 from finance.views import _split_agent_display_name
 
@@ -927,3 +929,179 @@ class AdminCodingsEditScopeTests(TestCase):
         }), content_type='application/json')
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(Coding.objects.filter(pk=coding.pk).exists())
+
+
+class AdherenceExportTests(TestCase):
+    """Combined Adherence export — regular Adherence roster + Official Admins,
+    one row per person, values sourced from adherence._build_rows exactly."""
+
+    def setUp(self):
+        # _get_adherence_agent_pks caches its roster per week_start for 5 minutes;
+        # clear it so each test sees only the agents it creates for _WEEK_START.
+        cache.clear()
+        self.boss = _make_agent('adhexportboss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+        self.client.login(username='adhexportboss', password='x')
+
+    def _export_ws(self, week_start=_WEEK_START):
+        resp = self.client.get(reverse('adherence_export') + f'?week={week_start.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp['Content-Type'], XLSX_MIME)
+        return openpyxl.load_workbook(io.BytesIO(resp.content)).active
+
+    def _display_name(self, agent):
+        return agent.user.get_full_name() or agent.agent_name or agent.user.username
+
+    def _rows_for(self, ws, agent):
+        """All data-row indices (1-indexed) whose Legal Name column matches this agent."""
+        name = self._display_name(agent)
+        return [r for r in range(4, ws.max_row + 1) if ws.cell(row=r, column=3).value == name]
+
+    def _row_for(self, ws, agent):
+        rows = self._rows_for(ws, agent)
+        self.assertEqual(len(rows), 1, f"Expected exactly one row for {agent}, found {len(rows)}")
+        return rows[0]
+
+    def test_roster_union_regular_and_admin_no_duplicates(self):
+        regular = _make_agent('adhexpreg1')
+        Shift.objects.create(agent=regular, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        admin = _make_agent('adhexpadmin1')
+        admin.is_official_admin = True
+        admin.save()
+
+        ws = self._export_ws()
+        self._row_for(ws, regular)   # raises if not exactly one row
+        self._row_for(ws, admin)     # raises if not exactly one row
+
+    def test_met_day_shows_status_and_green_completed_hours(self):
+        agent = _make_agent('adhexpmet1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        cell = ws.cell(row=r, column=8)  # Monday
+        self.assertEqual(cell.value, "P\n8:00:00")
+        self.assertTrue(cell.font.color.rgb.upper().endswith('166534'))
+        self.assertTrue(cell.fill.fgColor.rgb.upper().endswith('E8F5E9'))
+
+    def test_short_day_shows_status_and_red_shortfall(self):
+        agent = _make_agent('adhexpshort1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='T', actual_hours=Decimal('7.75'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        cell = ws.cell(row=r, column=8)  # Monday: 8h scheduled, 7h45m worked -> 15 min short
+        self.assertEqual(cell.value, "T\n-0:15:00")
+        self.assertTrue(cell.font.color.rgb.upper().endswith('C0392B'))
+
+    def test_official_admin_row_uses_admin_codings_not_regular_codings(self):
+        admin = _make_agent('adhexpadmin2')
+        admin.is_official_admin = True
+        admin.save()
+        Shift.objects.create(agent=admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=admin, date=_WEEK_START, status='P', actual_hours=None)
+        # Regular coding (must be ignored) vs. admin coding (must be the one used)
+        Coding.objects.create(agent=admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(9, 30),
+                               is_admin_coding=False)
+        Coding.objects.create(agent=admin, date=_WEEK_START, start_time=time(9, 0), end_time=time(11, 0),
+                               is_admin_coding=True)
+
+        ws = self._export_ws()
+        r = self._row_for(ws, admin)
+        cell = ws.cell(row=r, column=8)  # Monday: 8h scheduled, 2h admin-coded -> 6h short
+        self.assertEqual(cell.value, "P\n-6:00:00")
+
+    def test_identity_columns_populate(self):
+        supervisor = _make_agent('adhexpsupv1')
+        agent = _make_agent('adhexpid1')
+        agent.employee_id = 'EMP-500'
+        agent.agent_name = 'Johnny P'
+        agent.supervisor = supervisor
+        agent.save()
+        Five9Profile.objects.create(agent=agent, five9_username='idtest.f9', billable=True, is_primary=True)
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=1).value, 'idtest.f9')
+        self.assertEqual(ws.cell(row=r, column=2).value, 'EMP-500')
+        self.assertEqual(ws.cell(row=r, column=4).value, 'Johnny P')
+        self.assertEqual(ws.cell(row=r, column=5).value, str(supervisor))
+
+    def test_identity_columns_blank_safe_when_missing(self):
+        agent = _make_agent('adhexpid2')
+        agent.agent_name = ''
+        agent.employee_id = None
+        agent.save()  # no Five9Profile, no supervisor; User has no first/last name
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertFalse(ws.cell(row=r, column=1).value)  # Username blank
+        self.assertFalse(ws.cell(row=r, column=2).value)  # Employee ID blank
+        self.assertEqual(ws.cell(row=r, column=3).value, 'adhexpid2')  # Legal Name falls back to username
+        self.assertFalse(ws.cell(row=r, column=5).value)  # Supervisor blank
+
+    def test_commission_deduction_populates_and_defaults_zero(self):
+        agent = _make_agent('adhexpcomm1')
+        PayrollAdjustment.objects.create(agent=agent, week_start=_WEEK_START, commission_deduction=Decimal('5.5'))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+        agent_no_adj = _make_agent('adhexpcomm2')
+        AdherenceRecord.objects.create(agent=agent_no_adj, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        self.assertEqual(ws.cell(row=self._row_for(ws, agent), column=6).value, 5.5)
+        self.assertEqual(ws.cell(row=self._row_for(ws, agent_no_adj), column=6).value, 0.0)
+
+    def test_scheduled_hours_reflects_vto_zeroing(self):
+        agent = _make_agent('adhexpvto1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), status='VTO', actual_hours=None)
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=7).value, timedelta(hours=8))
+
+    def test_scheduled_hours_is_real_duration_not_text(self):
+        agent = _make_agent('adhexpdur1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        cell = ws.cell(row=r, column=7)
+        self.assertIsInstance(cell.value, timedelta)
+        self.assertEqual(cell.number_format, '[h]:mm:ss')
+
+    def test_off_day_cell_is_blank(self):
+        agent = _make_agent('adhexpoff1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=5), is_off=True,
+                              start_time=time(0, 0), end_time=time(0, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertIsNone(ws.cell(row=r, column=13).value)  # Saturday, day 6 -> column 8+5
+
+    def test_filename_and_content_type(self):
+        resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp['Content-Type'], XLSX_MIME)
+        self.assertIn(f'adherence_{_WEEK_START.isoformat()}.xlsx', resp['Content-Disposition'])
+
+    def test_non_super_admin_denied(self):
+        self.client.logout()
+        _make_agent('adhexpplain1', role='admin', role_type='supervisor')
+        self.client.login(username='adhexpplain1', password='x')
+        resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_unauthenticated_denied(self):
+        self.client.logout()
+        resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 302)

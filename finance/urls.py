@@ -10,4 +10,5 @@ urlpatterns = [
     path('payroll/export/', views.payroll_export, name='payroll_export'),
     path('settings/', views.finance_settings, name='finance_settings'),
     path('codings/export/', views.codings_export, name='codings_export'),
+    path('adherence/export/', views.adherence_export, name='adherence_export'),
 ]
