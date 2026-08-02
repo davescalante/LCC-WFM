@@ -291,10 +291,6 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
         Q(status='active', track_attendance=True, is_official_admin=False) |
         Q(status='inactive', separations__status='finalized',
           separations__remove_from_adherence_date__gt=week_start)
-    ).exclude(
-        # Admin-role users with attendance tracking belong on the Admin
-        # Attendance tab instead — keep the two tabs mutually exclusive.
-        role='admin'
     ).filter(
         Q(shifts__date__in=week_dates) |
         Q(overtime_shifts__date__in=week_dates) |
@@ -303,16 +299,6 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
     ).values_list('pk', flat=True).distinct())
     cache.set(cache_key, pks, 300)
     return pks
-
-
-def _get_admin_attendance_agent_pks():
-    """
-    PKs for the Admin Attendance tab: active admin-role users who have
-    attendance tracking turned on. (Agents never appear here.)
-    """
-    return set(Agent.objects.filter(
-        status='active', role='admin', track_attendance=True,
-    ).values_list('pk', flat=True))
 
 
 def _get_week_start(request):
@@ -1187,7 +1173,7 @@ def admin_attendance_rows(request):
         week_start = _get_week_start(request)
         week_dates = [week_start + timedelta(days=i) for i in range(7)]
 
-        agent_pks = _get_admin_attendance_agent_pks()
+        agent_pks = _get_adherence_agent_pks(week_dates, week_start)
         if team_pks is not None:
             agent_pks = {pk for pk in agent_pks if pk in team_pks}
 
