@@ -8,7 +8,7 @@ from django.contrib.auth.models import User
 import openpyxl
 
 from scheduling.models import Agent, Five9Profile, AgentSeparation
-from adherence.models import DailyUpload, DailyAgentHours, Coding
+from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding
 from finance.models import BillingSettings
 from finance.views import _split_agent_display_name
 
@@ -41,6 +41,10 @@ def _add_hours(agent, login_seconds, nr_seconds, week_day=0):
         login_seconds=login_seconds,
         not_ready_seconds=nr_seconds,
     )
+
+
+def _status(agent, week_day, status):
+    return AdherenceRecord.objects.create(agent=agent, date=_WEEK[week_day], status=status)
 
 
 class NRCapCheck1Tests(TestCase):
@@ -146,6 +150,88 @@ class NRCapMaxOfTwoTests(TestCase):
         _add_hours(self.agent, 5 * 3600, 100 * 3600)
         result = self._call()[self.agent.pk]
         self.assertGreaterEqual(float(result['final_hrs']), 0.0)
+
+
+class VTOWeeklyAllowanceTests(TestCase):
+    """Any VTO-type status (VTO/P+VTO/T+VTO) in the week raises the weekly
+    NR allowance to the flat cap and skips the 12.5% ratio check entirely."""
+
+    def setUp(self):
+        self.s = _settings(
+            nr_cap_regular_hours=Decimal('6.00'),
+            nr_cap_kill_team_hours=Decimal('7.00'),
+            nr_ratio=Decimal('0.1250'),
+            nr_ratio_max_hours=Decimal('48.00'),
+        )
+
+    def _call(self, agent):
+        from finance.views import _get_billable_weekly_data
+        return _get_billable_weekly_data([agent], _WEEK, self.s)
+
+    def test_vto_exactly_at_cap_no_deduction(self):
+        # 20 h login, 6 h NR, VTO present → deduction 0 (flat cap, not ratio)
+        agent = _make_agent('vto_at_cap')
+        _add_hours(agent, 20 * 3600, 6 * 3600)
+        _status(agent, 0, 'VTO')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_deduction']), 0.0, places=2)
+        self.assertAlmostEqual(float(result['final_hrs']), 20.0, places=2)
+
+    def test_vto_above_cap_deducts_excess_only(self):
+        # 20 h login, 6 h 30 m NR, VTO present → deduction 30 m
+        agent = _make_agent('vto_above_cap')
+        _add_hours(agent, 20 * 3600, int(6.5 * 3600))
+        _status(agent, 0, 'VTO')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_deduction']), 0.5, places=2)
+        self.assertAlmostEqual(float(result['final_hrs']), 19.5, places=2)
+
+    def test_kill_team_vto_uses_7h_cap(self):
+        agent = _make_agent('vto_kill_team', role_type='kill_team')
+        _add_hours(agent, 20 * 3600, int(7.5 * 3600))
+        _status(agent, 0, 'VTO')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_cap_hrs']), 7.0, places=2)
+        self.assertAlmostEqual(float(result['nr_deduction']), 0.5, places=2)
+
+    def test_p_vto_triggers_flat_cap(self):
+        agent = _make_agent('p_vto_test')
+        _add_hours(agent, 20 * 3600, int(6.5 * 3600))
+        _status(agent, 0, 'P+VTO')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_deduction']), 0.5, places=2)
+
+    def test_t_vto_triggers_flat_cap(self):
+        agent = _make_agent('t_vto_test')
+        _add_hours(agent, 20 * 3600, int(6.5 * 3600))
+        _status(agent, 0, 'T+VTO')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_deduction']), 0.5, places=2)
+
+    def test_no_vto_ratio_path_unchanged(self):
+        # Regression: same shape as NRCapCheck2Tests.test_nr_above_ratio_triggers_check2 —
+        # 20 h login, 6 h NR, no VTO → ratio check still binds (unaffected by this change)
+        agent = _make_agent('no_vto_test')
+        _add_hours(agent, 20 * 3600, 6 * 3600)
+        _status(agent, 0, 'P')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_deduction']), 3.5, places=2)
+        self.assertAlmostEqual(float(result['final_hrs']), 16.5, places=2)
+
+    def test_nr_allowed_hrs_is_flat_cap_when_vto(self):
+        agent = _make_agent('allowed_vto_test')
+        _add_hours(agent, 20 * 3600, int(6.5 * 3600))
+        _status(agent, 0, 'VTO')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_allowed_hrs']), 6.0, places=2)
+
+    def test_nr_allowed_hrs_is_ratio_when_no_vto(self):
+        # min(cap=6, login*ratio=20*0.125=2.5) = 2.5 — what Billing Report v2 displays
+        agent = _make_agent('allowed_no_vto_test')
+        _add_hours(agent, 20 * 3600, 6 * 3600)
+        _status(agent, 0, 'P')
+        result = self._call(agent)[agent.pk]
+        self.assertAlmostEqual(float(result['nr_allowed_hrs']), 2.5, places=2)
 
 
 XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'

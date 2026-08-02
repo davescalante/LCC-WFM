@@ -13,7 +13,7 @@ from django.db.models import Q, Sum
 from scheduling.models import Agent, Five9Profile, OvertimeShift, log_action
 from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, PayrollAdjustment, Coding
 from .models import BillingSettings, BillingSettingsHistory
-from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
+from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING, VTO_TYPE_STATUSES
 from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
 
 # ─── Access control ───────────────────────────────────────────────────────────
@@ -120,11 +120,13 @@ def _get_billable_weekly_data(agents, week_dates, settings):
     # ── Adherence bonus (already tracked in adherence tab) ────────────────
     bonus_map = {}    # agent_id -> True/False/None
     has_status = set()
-    records_by_agent = {}
+    vto_week_agents = set()  # agent_id -> had a VTO/P+VTO/T+VTO day this week
     for rec in AdherenceRecord.objects.filter(agent__in=agent_ids, date__in=week_dates).values('agent_id', 'status'):
         aid = rec['agent_id']
         if rec['status']:
             has_status.add(aid)
+            if rec['status'] in VTO_TYPE_STATUSES:
+                vto_week_agents.add(aid)
             if rec['status'] in BONUS_DISQUALIFYING:
                 bonus_map[aid] = False
             elif aid not in bonus_map and rec['status'] in BONUS_QUALIFYING:
@@ -165,16 +167,22 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         coded_hrs = coded_hrs_map.get(aid, Decimal('0'))
         pre_total = raw_login_hrs + coded_hrs
 
-        # Weekly NR deduction — apply the larger of two checks, never both
+        # Weekly NR deduction — apply the larger of two checks, never both.
+        # Any VTO-type status this week forces the flat cap (skips the ratio
+        # check entirely, same as the existing >48h ceiling).
         total_nr_hrs = Decimal(str(nr_secs_map.get(aid, 0))) / Decimal('3600')
         nr_cap = settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team' else settings.nr_cap_regular_hours
+        has_vto = aid in vto_week_agents
         check1_ded = max(Decimal('0'), total_nr_hrs - nr_cap)
-        if pre_total <= settings.nr_ratio_max_hours:
-            check2_ded = max(Decimal('0'), total_nr_hrs - raw_login_hrs * settings.nr_ratio)
-        else:
+        if has_vto or pre_total > settings.nr_ratio_max_hours:
             check2_ded = Decimal('0')
+        else:
+            check2_ded = max(Decimal('0'), total_nr_hrs - raw_login_hrs * settings.nr_ratio)
         nr_deduction = max(check1_ded, check2_ded)
         final_hrs = max(Decimal('0'), pre_total - nr_deduction)
+        nr_allowed_hrs = nr_cap if has_vto else (
+            min(nr_cap, raw_login_hrs * settings.nr_ratio) if pre_total <= settings.nr_ratio_max_hours else nr_cap
+        )
 
         # OT
         ot_reg = ot_regular_map.get(aid, Decimal('0'))
@@ -217,6 +225,7 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             'five9_username': primary_billable_map.get(aid, ''),
             'total_nr_hrs': total_nr_hrs,
             'nr_cap_hrs': nr_cap,
+            'nr_allowed_hrs': nr_allowed_hrs,
             'nr_deduction': nr_deduction,
             'actual_hrs': raw_login_hrs,
             'coded_hrs': coded_hrs,
@@ -999,13 +1008,7 @@ def billing_export_v2(request):
         connected_hrs = d.get('pre_cap_total', login_hrs + coded_hrs)
         deduction_hrs = d.get('nr_deduction', Decimal('0'))
         final_hrs = d.get('final_hrs', connected_hrs - deduction_hrs)
-
-        nr_cap = (settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team'
-                  else settings.nr_cap_regular_hours)
-        if connected_hrs <= settings.nr_ratio_max_hours:
-            allowed_hrs = min(nr_cap, login_hrs * settings.nr_ratio)
-        else:
-            allowed_hrs = nr_cap
+        allowed_hrs = d.get('nr_allowed_hrs', Decimal('0'))
 
         def _secs(hrs):
             return timedelta(seconds=round(float(hrs) * 3600))
