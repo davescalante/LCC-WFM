@@ -63,7 +63,6 @@ class AgentAccessMiddleware:
         request.agent_ot_cancel_badge = 0
         request.ot_request_badge = 0
         request.has_finance_access = False
-        request.can_access_admin_attendance = False
 
         if request.user.is_authenticated:
             try:
@@ -116,13 +115,8 @@ class AgentAccessMiddleware:
                         )
                     request.ot_request_badge = ot_badge
                     request.has_finance_access = getattr(profile, 'is_super_admin', False)
-                    request.can_access_admin_attendance = (
-                        getattr(profile, 'is_super_admin', False)
-                        or getattr(profile, 'can_access_admin_attendance', False)
-                    )
             except Exception:
                 if request.user.is_superuser:
                     request.has_finance_access = True
-                    request.can_access_admin_attendance = True
 
         return self.get_response(request)

@@ -8,7 +8,6 @@ from django.db.models import Q, Count as DbCount
 from django.core.cache import cache
 
 from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_POST
 from django.urls import reverse
@@ -687,62 +686,6 @@ def _apply_supervisor_filter(agents_qs, supervisor_id):
     return agents_qs
 
 
-# ── Admin Attendance access ───────────────────────────────────────────────────
-
-def _get_user_agent(user):
-    """Return the Agent profile linked to a user, or None."""
-    return Agent.objects.filter(user=user).select_related('user').first()
-
-
-def _admin_attendance_access(user):
-    """
-    Determine Admin Attendance access for a user.
-
-    Returns (has_access, team_pks):
-      - has_access: whether the user may open the Admin Attendance page.
-      - team_pks:   None  => may see ALL agents (super admin / superuser);
-                    a set => may see only these agent PKs (their own team:
-                             direct reports + self).
-    """
-    if user.is_superuser:
-        return True, None
-    agent = _get_user_agent(user)
-    if agent is None:
-        return False, set()
-    if agent.is_super_admin:
-        return True, None
-    if agent.can_access_admin_attendance:
-        team = set(Agent.objects.filter(supervisor=agent).values_list('pk', flat=True))
-        team.add(agent.pk)
-        return True, team
-    return False, set()
-
-
-def _attendance_edit_denied(user, agent_id):
-    """
-    Server-side guard for attendance edits (status, codings, commission).
-
-    Team-scoped supervisors (can_access_admin_attendance, not super admin) may
-    only edit agents on their own team. Super admins, superusers, and all other
-    existing staff are unrestricted, so behaviour for current users is unchanged
-    — no existing user has can_access_admin_attendance set.
-    """
-    if user.is_superuser or agent_id is None:
-        return False
-    agent = _get_user_agent(user)
-    if agent is None or agent.is_super_admin:
-        return False
-    if agent.can_access_admin_attendance:
-        try:
-            target = int(agent_id)
-        except (TypeError, ValueError):
-            return True
-        if target == agent.pk:
-            return False
-        return not Agent.objects.filter(pk=target, supervisor=agent).exists()
-    return False
-
-
 # ── AJAX endpoints ────────────────────────────────────────────────────────────
 
 @login_required
@@ -762,9 +705,6 @@ def save_commission(request):
         amount = Decimal(amount_str) if amount_str else Decimal('0')
     except InvalidOperation:
         return JsonResponse({'ok': False, 'error': 'invalid amount'}, status=400)
-
-    if _attendance_edit_denied(request.user, agent_id):
-        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
 
     agent = get_object_or_404(Agent, pk=agent_id)
     PayrollAdjustment.objects.update_or_create(
@@ -788,9 +728,6 @@ def save_adherence_cell(request):
         day_date = date.fromisoformat(date_str)
     except (ValueError, TypeError):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
-
-    if _attendance_edit_denied(request.user, agent_id):
-        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
 
     agent = get_object_or_404(Agent, pk=agent_id)
 
@@ -836,9 +773,6 @@ def add_coding_ajax(request):
 
     if not all([agent_id, date_str, start_time, end_time]):
         return JsonResponse({'ok': False, 'error': 'missing fields'}, status=400)
-
-    if _attendance_edit_denied(request.user, agent_id):
-        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
 
     # Normalize H:MM:SS → HH:MM:SS so leading zero is optional
     def _pad_time(s):
@@ -903,9 +837,6 @@ def edit_coding_ajax(request):
     if not coding:
         return JsonResponse({'ok': False, 'error': 'Not found'}, status=404)
 
-    if _attendance_edit_denied(request.user, coding.agent_id):
-        return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
-
     def _pad(s):
         parts = s.split(':')
         if parts:
@@ -954,8 +885,6 @@ def delete_coding_ajax(request):
     coding_id = data.get('coding_id')
     coding = Coding.objects.filter(pk=coding_id, is_admin_coding=False).select_related('agent').first()
     if coding:
-        if _attendance_edit_denied(request.user, coding.agent_id):
-            return JsonResponse({'ok': False, 'error': 'Not permitted for this agent.'}, status=403)
         agent_id = coding.agent_id
         coding_date = coding.date
         log_action(request.user, 'Deleted coding',
@@ -1118,115 +1047,6 @@ def adherence_rows_fragment(request):
             {'error': str(exc), 'detail': traceback.format_exc()},
             status=500
         )
-
-
-@login_required
-def admin_attendance(request):
-    """
-    Admin Attendance — the adherence grid, scoped by role.
-
-    Super admins / superusers see everyone (like the main Adherence tab);
-    supervisors granted access see only their own team (direct reports + self).
-    Reuses the adherence dashboard template; rows load async from
-    admin_attendance_rows.
-    """
-    has_access, _team = _admin_attendance_access(request.user)
-    if not has_access:
-        messages.error(request, "Access denied.")
-        return redirect('dashboard')
-
-    week_start = _get_week_start(request)
-    week_dates = [week_start + timedelta(days=i) for i in range(7)]
-    week_end = week_dates[-1]
-
-    today = timezone.localdate()
-    current_week = today - timedelta(days=today.weekday())
-    return render(request, 'adherence/dashboard.html', {
-        'week_dates': week_dates,
-        'week_start': week_start,
-        'week_end': week_end,
-        'today': today,
-        'current_week': current_week,
-        'is_current_week': week_start == current_week,
-        'prev_week': (week_start - timedelta(days=7)).isoformat(),
-        'next_week': (week_start + timedelta(days=7)).isoformat(),
-        'status_choices': AdherenceRecord.STATUS_CHOICES,
-        'supervisors': [],
-        'selected_supervisor': '',
-        'supervisor_pks_json': '[]',
-        # Admin Attendance overrides for the shared dashboard template
-        'page_title': 'Admin Attendance',
-        'rows_url': reverse('admin_attendance_rows'),
-        'is_admin_attendance': True,
-        'force_full_load': True,
-        'hide_supervisor_filter': True,
-    })
-
-
-@login_required
-def admin_attendance_rows(request):
-    """Rows fragment for the Admin Attendance page — scoped by role."""
-    has_access, team_pks = _admin_attendance_access(request.user)
-    if not has_access:
-        return JsonResponse({'error': 'Access denied.'}, status=403)
-    try:
-        week_start = _get_week_start(request)
-        week_dates = [week_start + timedelta(days=i) for i in range(7)]
-
-        agent_pks = _get_adherence_agent_pks(week_dates, week_start)
-        if team_pks is not None:
-            agent_pks = {pk for pk in agent_pks if pk in team_pks}
-
-        agents = list(Agent.objects.filter(pk__in=agent_pks).select_related(
-            'user', 'supervisor__user'
-        ).prefetch_related('five9_profiles').order_by(
-            'supervisor__user__last_name', 'supervisor__user__first_name',
-            'user__last_name', 'user__first_name'
-        ))
-
-        from finance.models import BillingSettings as _BillingSettings
-        _week_billing = _BillingSettings.get_for_week(week_start)
-
-        shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow = _build_maps(agents, week_dates)
-        rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
-                           extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
-                           tmpl_by_agent_dow=tmpl_by_agent_dow, billing_settings=_week_billing)
-
-        adj_map = {
-            pa.agent_id: pa.commission_deduction
-            for pa in PayrollAdjustment.objects.filter(week_start=week_start, agent__in=agents)
-        }
-        note_count_map = {
-            (n['agent_id'], n['date']): n['count']
-            for n in AdherenceNote.objects.filter(
-                agent__in=agents, date__in=week_dates
-            ).values('agent_id', 'date').annotate(count=DbCount('pk'))
-        }
-        for row in rows:
-            row['commission_deduction'] = adj_map.get(row['agent'].pk, Decimal('0'))
-            for cell in row['cells']:
-                cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
-
-        cos_days, cos_week = _calculate_cos(rows, week_dates, default_tardy=_week_billing.default_tardy_hours)
-
-        ctx = {
-            'rows': rows,
-            'week_start': week_start,
-            'today': timezone.localdate(),
-            'status_choices': AdherenceRecord.STATUS_CHOICES,
-            'selected_supervisor': '',
-            'show_cos': True,
-            'cos_days': cos_days,
-            'cos_week': cos_week,
-            'is_group_request': False,
-        }
-
-        tbody_html = render_to_string('adherence/rows_tbody.html', ctx, request=request)
-        tfoot_html = render_to_string('adherence/rows_tfoot.html', ctx, request=request)
-        return JsonResponse({'tbody_html': tbody_html, 'tfoot_html': tfoot_html})
-    except Exception as exc:
-        import traceback
-        return JsonResponse({'error': str(exc), 'detail': traceback.format_exc()}, status=500)
 
 
 @login_required

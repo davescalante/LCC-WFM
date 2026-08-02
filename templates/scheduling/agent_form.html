@@ -63,11 +63,6 @@
                 <label for="{{ agent_form.is_super_admin.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Super Admin</label>
                 <span style="font-size:11px;color:#888;">Full access to Finance section</span>
             </div>
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                {{ agent_form.can_access_admin_attendance }}
-                <label for="{{ agent_form.can_access_admin_attendance.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Admin Attendance Access</label>
-                <span style="font-size:11px;color:#888;">Supervisor can view &amp; edit their own team's attendance</span>
-            </div>
             {% endif %}
             {% endif %}
         </div>
