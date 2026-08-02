@@ -1056,7 +1056,7 @@ def codings_week(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active').select_related('user', 'supervisor__user').order_by(
+    agents = Agent.objects.filter(status='active', is_official_admin=False).select_related('user', 'supervisor__user').order_by(
         'supervisor__user__last_name', 'supervisor__user__first_name',
         'user__last_name', 'user__first_name'
     )

@@ -1,10 +1,11 @@
 from decimal import Decimal
 from datetime import date, timedelta, time
 from django.test import TestCase
+from django.urls import reverse
 from django.contrib.auth.models import User
 
 from scheduling.models import Agent, Shift
-from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours
+from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding
 from finance.models import BillingSettings
 
 
@@ -193,3 +194,61 @@ class CostOfScheduleVTests(TestCase):
         self.assertEqual(day_data[0]['sched_hours'], 0.0)
         self.assertIsNone(day_data[0]['cos_pct'])
         self.assertEqual(cos_week['sched_hours'], 0.0)
+
+
+class CodingsRosterExcludesOfficialAdminsTests(TestCase):
+    """
+    Part 3: Official Admins are excluded from the regular Codings tab's
+    roster (they only appear on Admin Codings) — mirrors the is_official_admin
+    exclusion already used by _get_adherence_agent_pks / payroll_export.
+    """
+
+    def setUp(self):
+        # Staff login (not a portal-restricted 'agent' role) to view the tab.
+        staff_user = User.objects.create_user('codingsviewer', password='x')
+        self.staff = Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='Codings Viewer', status='active',
+        )
+        self.client.login(username='codingsviewer', password='x')
+
+        regular_user = User.objects.create_user('regularagent', password='x')
+        self.regular = Agent.objects.create(
+            user=regular_user, role='agent', role_type='agent',
+            agent_name='Regular Agent', status='active', track_attendance=True,
+        )
+        admin_user = User.objects.create_user('officialadmin', password='x')
+        self.official = Agent.objects.create(
+            user=admin_user, role='admin', role_type='supervisor',
+            agent_name='Official Admin', status='active', is_official_admin=True,
+        )
+
+        # A regular (non-admin) coding for each, so both would show real hours
+        # if included — proves exclusion is about the roster, not zero-filling.
+        Coding.objects.create(
+            agent=self.regular, date=_WEEK_START,
+            start_time=time(9, 0), end_time=time(11, 0), is_admin_coding=False,
+        )
+        Coding.objects.create(
+            agent=self.official, date=_WEEK_START,
+            start_time=time(9, 0), end_time=time(11, 0), is_admin_coding=False,
+        )
+
+    def _get_rows(self):
+        resp = self.client.get(reverse('codings_week') + f'?week_start={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        return resp.context['rows']
+
+    def test_official_admin_absent_from_roster(self):
+        pks = [row['agent'].pk for row in self._get_rows()]
+        self.assertNotIn(self.official.pk, pks)
+
+    def test_regular_agent_still_present(self):
+        pks = [row['agent'].pk for row in self._get_rows()]
+        self.assertIn(self.regular.pk, pks)
+
+    def test_remaining_agent_totals_unchanged(self):
+        rows = self._get_rows()
+        regular_row = next(r for r in rows if r['agent'].pk == self.regular.pk)
+        # 2h coding, in seconds — unaffected by the official admin's exclusion.
+        self.assertEqual(regular_row['total_seconds'], 2 * 3600)
