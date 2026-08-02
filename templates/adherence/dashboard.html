@@ -1,17 +1,19 @@
 {% extends 'base.html' %}
 {% load adherence_filters %}
-{% block title %} - Adherence{% endblock %}
+{% block title %} - {{ page_title|default:"Adherence" }}{% endblock %}
 {% block content %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <div style="display:flex;align-items:center;gap:16px;">
-        <h1 style="margin:0;">Adherence</h1>
+        <h1 style="margin:0;">{{ page_title|default:"Adherence" }}</h1>
         <span id="save-status" style="font-size:12px;display:none;padding:3px 10px;border-radius:12px;"></span>
     </div>
+    {% if not is_admin_attendance %}
     <div style="display:flex;gap:10px;">
         <a href="{% url 'codings_week' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">+ Codings</a>
         <a href="{% url 'payroll_export' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#27ae60;color:white;">Payroll Export</a>
     </div>
+    {% endif %}
 </div>
 
 <!-- Week navigation -->
@@ -28,7 +30,7 @@
                 style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;width:auto;margin:0;"
                 onchange="this.form.submit()">
         </form>
-        {% include 'includes/supervisor_filter.html' %}
+        {% if not hide_supervisor_filter %}{% include 'includes/supervisor_filter.html' %}{% endif %}
     </div>
 </div>
 
@@ -379,6 +381,10 @@ let _adhLoading = false;
 
 // Supervisor PKs for progressive loading (injected from server context).
 const _ADH_SUPERVISOR_PKS = {{ supervisor_pks_json|safe }};
+// Rows endpoint + load mode. Defaults preserve the main Adherence page;
+// the Admin Attendance page overrides these to its own scoped endpoint.
+const _ADH_ROWS_URL = '{{ rows_url|default:"/adherence/rows/" }}';
+const _ADH_FORCE_FULL = {{ force_full_load|yesno:"true,false" }};
 
 function _removeSkeleton() {
     // Remove the initial skeleton rows (loading row + extra skel rows).
@@ -395,7 +401,7 @@ function _showLoadError() {
 
 // Full replace load — used by poll and when a supervisor filter is active.
 function _loadAdhRowsFull(params) {
-    const url = '/adherence/rows/?' + params.toString();
+    const url = _ADH_ROWS_URL + '?' + params.toString();
     return fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
         .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(data => {
@@ -418,7 +424,7 @@ async function _loadAdhRowsProgressive(params) {
     for (const grp of groups) {
         const grpParams = new URLSearchParams(params.toString());
         grpParams.set('group', grp);
-        const url = '/adherence/rows/?' + grpParams.toString();
+        const url = _ADH_ROWS_URL + '?' + grpParams.toString();
         try {
             const r = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
             if (!r.ok) throw new Error(r.status);
@@ -466,8 +472,8 @@ function loadAdhRows() {
     const selectedSupervisor = params.get('supervisor') || '{{ selected_supervisor|escapejs }}';
 
     let loader;
-    if (selectedSupervisor) {
-        // Supervisor filter active — single filtered request.
+    if (selectedSupervisor || _ADH_FORCE_FULL) {
+        // Supervisor filter active (or scoped Admin Attendance) — single request.
         loader = _loadAdhRowsFull(params);
     } else {
         // No filter — load groups progressively for faster first-paint.
