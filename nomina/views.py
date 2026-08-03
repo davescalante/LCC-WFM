@@ -1,59 +1,49 @@
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.utils import timezone
 
 from wfm.utils import get_week_start, parse_week_param
 from .access import nomina_access_required
+from .models import NominaWeek, WeeklyPayInput
+
+# The manual paste-in fields, in display order. (label, field, is_deduction)
+INPUT_FIELDS = [
+    ('LPO', 'lpo', False),
+    ('Spiff (USD)', 'spiff_usd', False),
+    ('Welcome', 'welcome', False),
+    ('Referral', 'referral', False),
+    ('Kill Team QA', 'kill_team_qa', False),
+    ('Comedor', 'comedor', True),
+    ('Transportation', 'transportation', True),
+]
 
 
 def _week(request):
-    raw = request.GET.get('week_start') or request.GET.get('week')
+    raw = request.GET.get('week_start') or request.GET.get('week') or request.POST.get('week_start')
     week_start = parse_week_param(raw) or get_week_start()
     week_dates = [week_start + timedelta(days=i) for i in range(7)]
     return week_start, week_dates
 
 
-@login_required
-@nomina_access_required
-def dashboard(request):
-    """Nómina landing page — super admin only."""
-    week_start, week_dates = _week(request)
-    return render(request, 'nomina/dashboard.html', {
-        'week_start': week_start,
-        'week_end': week_dates[-1],
-        'prev_week': (week_start - timedelta(days=7)).isoformat(),
-        'next_week': (week_start + timedelta(days=7)).isoformat(),
-        'today': timezone.localdate(),
-    })
+def _dec(val):
+    try:
+        return Decimal(str(val).strip() or '0')
+    except (InvalidOperation, ValueError):
+        return Decimal('0')
 
 
-@login_required
-@nomina_access_required
-def agent_nomina(request):
-    """Agent Nómina — the auto-computed columns, live from the existing engine.
-
-    Reuses finance's `_get_billable_weekly_data` (the same source as Billing v2)
-    for hours, base pay, adherence bonus and commission. Infinity employees only
-    (LCC excluded); Official Admins are handled on the Admin Nómina. The manual
-    paste columns (LPO, spiffs, comedor, …) and overrides are added in later
-    phases — shown here as placeholders so the full shape is visible.
-    """
-    from finance.views import _get_billable_weekly_data
-    from finance.models import BillingSettings
+def _infinity_agents(week_start):
     from scheduling.models import Agent
-
-    week_start, week_dates = _week(request)
-    settings = BillingSettings.get_for_week(week_start)
-
     pay_window = Q(status='active') | Q(
         status='inactive', separations__status='finalized',
         separations__remove_from_adherence_date__gt=week_start,
     )
-    agents = list(
+    return list(
         Agent.objects.filter(pay_window)
         .filter(Q(track_attendance=True) | Q(five9_profiles__billable=True))
         .filter(employer='Infinity')       # INFINITY only — LCC excluded
@@ -64,36 +54,126 @@ def agent_nomina(request):
         .order_by('user__last_name', 'user__first_name')
     )
 
-    data = _get_billable_weekly_data(agents, week_dates, settings)
 
-    rows = []
-    for a in agents:
-        d = data.get(a.pk, {})
-        rows.append({
-            'agent': a,
-            'emp': a.employee_id or '',
-            'legal_name': a.user.get_full_name() or a.user.username,
-            'username': a.user.username,
-            'hours': d.get('final_hrs', Decimal('0')),
-            'rate': d.get('hourly_mxn', Decimal('0')),
-            'base_pay': d.get('base_pay_mxn', Decimal('0')),
-            'adherence_bonus': d.get('bonus_mxn', Decimal('0')),
-            'commission_pct': d.get('commission_pct', Decimal('0')),
-            'auto_total': d.get('total_pay_mxn', Decimal('0')),
-        })
-
-    totals = {
-        'hours': sum((r['hours'] for r in rows), Decimal('0')),
-        'base_pay': sum((r['base_pay'] for r in rows), Decimal('0')),
-        'adherence_bonus': sum((r['adherence_bonus'] for r in rows), Decimal('0')),
-        'auto_total': sum((r['auto_total'] for r in rows), Decimal('0')),
-    }
-
-    return render(request, 'nomina/agent_nomina.html', {
-        'rows': rows,
-        'totals': totals,
+def _nav(week_start, week_dates):
+    return {
         'week_start': week_start,
         'week_end': week_dates[-1],
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
+    }
+
+
+@login_required
+@nomina_access_required
+def dashboard(request):
+    """Nómina landing page — super admin only."""
+    week_start, week_dates = _week(request)
+    ctx = _nav(week_start, week_dates)
+    ctx['today'] = timezone.localdate()
+    return render(request, 'nomina/dashboard.html', ctx)
+
+
+@login_required
+@nomina_access_required
+def inputs(request):
+    """The paste/entry grid for the manual columns (LPO, spiffs, comedor, …).
+
+    One row per Infinity agent; type or paste values, hit Save. Persists to
+    WeeklyPayInput per agent/week and the week's spiff FX rate to NominaWeek.
+    """
+    week_start, week_dates = _week(request)
+    agents = _infinity_agents(week_start)
+    nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
+
+    if request.method == 'POST':
+        nweek.spiff_fx_rate = _dec(request.POST.get('spiff_fx_rate') or nweek.spiff_fx_rate)
+        nweek.save()
+        for a in agents:
+            vals = {f: _dec(request.POST.get(f'{f}_{a.pk}')) for _, f, _ in INPUT_FIELDS}
+            WeeklyPayInput.objects.update_or_create(
+                agent=a, week_start=week_start, defaults=vals,
+            )
+        messages.success(request, f"Nómina inputs saved for the week of {week_start:%b %d}.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    existing = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
+        agent__in=agents, week_start=week_start)}
+    rows = []
+    for a in agents:
+        wi = existing.get(a.pk)
+        cells = []
+        for label, f, is_ded in INPUT_FIELDS:
+            v = getattr(wi, f) if wi else Decimal('0')
+            cells.append({'field': f, 'display': '' if v == 0 else f'{v:.2f}'})
+        rows.append({
+            'agent': a,
+            'name': a.agent_name or a.user.get_full_name() or a.user.username,
+            'username': a.user.username,
+            'cells': cells,
+        })
+
+    ctx = _nav(week_start, week_dates)
+    ctx.update({'rows': rows, 'fields': INPUT_FIELDS, 'spiff_fx_rate': nweek.spiff_fx_rate})
+    return render(request, 'nomina/inputs.html', ctx)
+
+
+@login_required
+@nomina_access_required
+def agent_nomina(request):
+    """Agent Nómina — auto-computed columns (from the existing engine) combined
+    with the manual paste inputs, into a live subtotal/total. Infinity only."""
+    from finance.views import _get_billable_weekly_data
+    from finance.models import BillingSettings
+
+    week_start, week_dates = _week(request)
+    settings = BillingSettings.get_for_week(week_start)
+    nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
+    fx = nweek.spiff_fx_rate
+
+    agents = _infinity_agents(week_start)
+    data = _get_billable_weekly_data(agents, week_dates, settings)
+    inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
+        agent__in=agents, week_start=week_start)}
+
+    rows = []
+    tot_base = tot_bonus = tot_lpo = tot_spiff = tot_sub = tot_total = Decimal('0')
+    for a in agents:
+        d = data.get(a.pk, {})
+        wi = inputs_map.get(a.pk)
+        base = d.get('base_pay_mxn', Decimal('0'))
+        bonus = d.get('bonus_mxn', Decimal('0'))
+        comm_pct = d.get('commission_pct', Decimal('0'))
+
+        lpo = wi.lpo if wi else Decimal('0')
+        net_lpo = (lpo * (Decimal('1') - comm_pct / Decimal('100'))).quantize(Decimal('0.01'))
+        spiff_mxn = ((wi.spiff_usd if wi else Decimal('0')) * fx).quantize(Decimal('0.01'))
+        welcome = wi.welcome if wi else Decimal('0')
+        referral = wi.referral if wi else Decimal('0')
+        kill_qa = wi.kill_team_qa if wi else Decimal('0')
+        comedor = wi.comedor if wi else Decimal('0')
+        transport = wi.transportation if wi else Decimal('0')
+
+        subtotal = base + bonus + net_lpo + spiff_mxn + welcome + referral + kill_qa
+        total = subtotal - comedor - transport  # loans/holiday added later; may go negative (G6)
+
+        rows.append({
+            'agent': a, 'emp': a.employee_id or '',
+            'legal_name': a.user.get_full_name() or a.user.username,
+            'username': a.user.username,
+            'hours': d.get('final_hrs', Decimal('0')), 'rate': d.get('hourly_mxn', Decimal('0')),
+            'base_pay': base, 'adherence_bonus': bonus,
+            'lpo': lpo, 'net_lpo': net_lpo, 'comm_pct': comm_pct, 'spiff_mxn': spiff_mxn,
+            'welcome': welcome, 'referral': referral, 'kill_qa': kill_qa,
+            'subtotal': subtotal, 'comedor': comedor, 'transport': transport, 'total': total,
+        })
+        tot_base += base; tot_bonus += bonus; tot_lpo += net_lpo; tot_spiff += spiff_mxn
+        tot_sub += subtotal; tot_total += total
+
+    ctx = _nav(week_start, week_dates)
+    ctx.update({
+        'rows': rows,
+        'totals': {'base': tot_base, 'bonus': tot_bonus, 'net_lpo': tot_lpo,
+                   'spiff': tot_spiff, 'subtotal': tot_sub, 'total': tot_total},
     })
+    return render(request, 'nomina/agent_nomina.html', ctx)
