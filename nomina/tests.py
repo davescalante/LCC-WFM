@@ -158,6 +158,28 @@ class NominaSpiffUploadTests(TestCase):
             week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
 
 
+class NominaKillTeamScopeTests(TestCase):
+    """The Kill Team QA module is role-scoped: only Kill Team agents appear (the
+    bonus doesn't apply to anyone else). Other modules stay full-roster."""
+
+    def setUp(self):
+        _make_agent('kt_super', is_super_admin=True)
+        self.client.login(username='kt_super', password='x')
+        self.kt = _make_infinity('ktone', '9001')
+        self.kt.role_type = 'kill_team'; self.kt.save()
+        self.reg = _make_infinity('regone', '9002')   # role_type='agent'
+
+    def test_killqa_shows_only_kill_team(self):
+        resp = self.client.get(reverse('nomina:input_type', args=['killqa']))
+        self.assertContains(resp, 'ktone')
+        self.assertNotContains(resp, 'regone')
+
+    def test_other_modules_show_all(self):
+        resp = self.client.get(reverse('nomina:input_type', args=['lpo']))
+        self.assertContains(resp, 'ktone')
+        self.assertContains(resp, 'regone')
+
+
 class NominaFxRateTests(TestCase):
     """The weekly USD→MXN rate is a scalar — a comma is a DECIMAL point (es-MX
     '18,50'), never a thousands separator. A comma must not inflate it 100x, and

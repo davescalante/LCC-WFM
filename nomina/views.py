@@ -30,7 +30,8 @@ INPUT_TYPES = [
     {'key': 'referral', 'field': 'referral', 'label': 'Referral', 'unit': 'MXN', 'deduction': False,
      'aggregate': False, 'match': 'auto', 'desc': 'Referral bonus. Columns: Username + Amount.'},
     {'key': 'killqa', 'field': 'kill_team_qa', 'label': 'Kill Team QA', 'unit': 'MXN', 'deduction': False,
-     'aggregate': False, 'match': 'auto', 'desc': 'Kill Team / QA bonus. Columns: Username + Amount.'},
+     'aggregate': False, 'match': 'auto', 'roles': ['kill_team'],
+     'desc': 'Kill Team QA bonus — Kill Team agents only. Columns: Username + Amount.'},
     {'key': 'comedor', 'field': 'comedor', 'label': 'Comedor', 'unit': 'MXN', 'deduction': True,
      'aggregate': True, 'match': 'auto',
      'desc': 'Cafeteria POS export — sums all charges per person. Columns: Employee ID + Price.'},
@@ -260,6 +261,8 @@ def input_type(request, key):
     field = t['field']
     week_start, week_dates = _week(request)
     agents = _infinity_agents(week_start)
+    if t.get('roles'):   # some modules are role-scoped (e.g. Kill Team QA → Kill Team only)
+        agents = [a for a in agents if a.role_type in t['roles']]
     by_username, dupe_usernames = {}, set()
     for a in agents:
         k = a.user.username.strip().lower()
