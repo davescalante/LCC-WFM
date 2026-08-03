@@ -526,9 +526,9 @@ XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 class AgentListExportTests(TestCase):
     """Part 2: filter-respecting Excel export with export-only columns."""
 
-    HEADER = ['Full name', 'Role type', 'Supervisor', 'Status',
+    HEADER = ['Legal name', 'Role type', 'Supervisor', 'Status',
               'Primary Five9 username', 'Start date',
-              'Complete years with us', 'Cell phone (formatted)']
+              'Complete years with us', 'Full phone number']
 
     def setUp(self):
         self.sup = _make_agent('xsup', role_type='supervisor')
@@ -684,10 +684,13 @@ class AgentListExportTests(TestCase):
         resp = self.client.get(reverse('agent_list'))
         self.assertContains(resp, 'Export Excel')
         self.assertContains(resp, 'choose columns')             # the picker modal
-        self.assertContains(resp, 'Complete years with us')     # an export-only field, now selectable
+        self.assertContains(resp, 'Agent name')                 # agent name is offered
+        self.assertContains(resp, 'Legal name')                 # legal name (was "Full name")
         self.assertContains(resp, 'Employee ID')                # a non-financial newly-available field
         self.assertContains(resp, 'value="full_name" checked')  # default field pre-checked
         self.assertNotContains(resp, 'Hourly rate')             # financial — gated to super admins
+        self.assertNotContains(resp, 'First name')              # removed — no such field in the app
+        self.assertNotContains(resp, 'Phone country code')      # removed — full number instead
 
     def test_hourly_rate_hidden_and_blocked_for_non_super(self):
         # A non-super admin can't see the financial column and can't force it
@@ -741,7 +744,7 @@ class AgentListExportPayWindowTests(TestCase):
         self.assertEqual(resp['Content-Type'], XLSX_MIME)
         ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
         rows = list(ws.iter_rows(values_only=True))
-        return [r[0] for r in rows[1:]]
+        return [r[0] or '' for r in rows[1:]]   # Legal name may be blank (no legal name set)
 
     def test_still_owed_agent_included(self):
         self._separated_agent('owed1', self.next_monday)
