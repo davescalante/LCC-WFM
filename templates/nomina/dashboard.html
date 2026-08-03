@@ -49,11 +49,11 @@
 
 <h2 style="font-size:16px;margin:0 0 10px;">Modules <span style="font-size:12px;font-weight:400;color:#888;">— building next</span></h2>
 <div class="nom-grid">
+    <a class="nom-card" href="{% url 'nomina:break_abuse' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Break Abuse</h3><p>Log incidents → zeroes that week's adherence bonus.</p></a>
+    <a class="nom-card" href="{% url 'nomina:holidays' %}"><span class="nom-tag ready">READY</span><h3>Holidays</h3><p>Company holiday calendar + triple-pay when worked.</p></a>
     <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Welcome Bonus</h3><p>Editable eligibility table (username · amount · # weeks, auto-drops off).</p></div>
     <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Loans (Préstamo)</h3><p>Add loans (1wk ×1.25 / 2wk ×1.35), auto weekly drawdown, active-loan view.</p></div>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Break Abuse</h3><p>Log incidents → zeroes that week's adherence bonus.</p></div>
     <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Vacation Tracker</h3><p>Tenure-based accrual, approvals, used/remaining balances.</p></div>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Holidays</h3><p>Company holiday calendar + triple-pay when worked.</p></div>
     <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Overrides</h3><p>Make every computed cell editable &amp; saved per week.</p></div>
     <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Exports</h3><p>Yours/Mine Excel in your exact format, with auto-notes.</p></div>
 </div>

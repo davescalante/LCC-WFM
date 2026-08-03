@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+{% block title %} - Break Abuse{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Break Abuse</h1>
+    <a href="{% url 'nomina:dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Nómina</a>
+</div>
+
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fef2f2;">
+    <p style="margin:0;font-size:13px;color:#334;">Log a break-abuse incident (agent · date · note). <strong>Any incident this week zeroes that agent's adherence bonus.</strong></p>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Log an incident</h2>
+        <form method="post">
+            {% csrf_token %}
+            <label>Agent</label>
+            <select name="agent" required>
+                <option value="">— select —</option>
+                {% for a in agents %}<option value="{{ a.pk }}">{{ a }} · {{ a.user.username }}</option>{% endfor %}
+            </select>
+            <label>Date</label>
+            <input type="date" name="date" value="{{ week_start|date:'Y-m-d' }}" required>
+            <label>Note (optional)</label>
+            <input type="text" name="note" placeholder="e.g. 45 min over break — Teams screenshot">
+            <button type="submit" class="btn btn-primary" style="margin-top:10px;">Log incident</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>This week's incidents</h2>
+        {% if incidents %}
+        <table style="width:100%;font-size:13px;">
+            <thead><tr><th>Agent</th><th>Date</th><th>Note</th><th></th></tr></thead>
+            <tbody>
+            {% for i in incidents %}
+            <tr>
+                <td style="font-weight:600;">{{ i.agent }}</td>
+                <td>{{ i.date|date:"M d" }}</td>
+                <td style="color:#666;">{{ i.note|default:"—" }}</td>
+                <td style="text-align:right;">
+                    <form method="post" style="margin:0;" onsubmit="return confirm('Remove this incident?');">
+                        {% csrf_token %}<input type="hidden" name="delete" value="{{ i.pk }}">
+                        <button type="submit" class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;font-size:13px;">No incidents logged this week.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

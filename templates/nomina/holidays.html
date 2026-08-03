@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block title %} - Holidays{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Holidays</h1>
+    <a href="{% url 'nomina:dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Nómina</a>
+</div>
+
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;">Company-wide holiday dates. An agent who <strong>works</strong> a designated holiday earns a <strong>2× premium</strong> on those hours (on top of the 1× already in their pay = triple).</p>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Add a holiday</h2>
+        <form method="post">
+            {% csrf_token %}
+            <label>Date</label>
+            <input type="date" name="date" required>
+            <label>Name (optional)</label>
+            <input type="text" name="name" placeholder="e.g. Día de la Independencia">
+            <button type="submit" class="btn btn-primary" style="margin-top:10px;">Save holiday</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>Holiday calendar</h2>
+        {% if holidays %}
+        <table style="width:100%;font-size:13px;">
+            <thead><tr><th>Date</th><th>Name</th><th></th></tr></thead>
+            <tbody>
+            {% for h in holidays %}
+            <tr>
+                <td style="font-weight:600;">{{ h.date|date:"M d, Y" }}</td>
+                <td style="color:#666;">{{ h.name|default:"—" }}</td>
+                <td style="text-align:right;">
+                    <form method="post" style="margin:0;" onsubmit="return confirm('Remove this holiday?');">
+                        {% csrf_token %}<input type="hidden" name="delete" value="{{ h.pk }}">
+                        <button type="submit" class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;font-size:13px;">No holidays defined yet.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

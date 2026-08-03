@@ -38,13 +38,8 @@ class WeeklyPayInput(models.Model):
 
 
 class Holiday(models.Model):
-    """A company-wide holiday date.
-
-    Used by the Nómina engine (later phases): an agent who WORKS a designated
-    holiday earns triple pay on those hours; a scheduled agent marked 'Holiday'
-    who does not work is paid their scheduled hours at the standard rate. This
-    model only records which dates are holidays — no pay logic lives here yet.
-    """
+    """A company-wide holiday date. An agent who WORKS a designated holiday earns
+    a 2× premium on those hours (on top of the 1× already in their pay = triple)."""
     date = models.DateField(unique=True)
     name = models.CharField(max_length=100, blank=True)
 
@@ -53,3 +48,18 @@ class Holiday(models.Model):
 
     def __str__(self):
         return f"{self.date} — {self.name}" if self.name else str(self.date)
+
+
+class BreakAbuseIncident(models.Model):
+    """A logged break-abuse incident. Any incident in a pay week zeroes that
+    agent's adherence bonus for the week."""
+    agent = models.ForeignKey('scheduling.Agent', on_delete=models.CASCADE, related_name='break_abuse_incidents')
+    date = models.DateField()
+    note = models.CharField(max_length=255, blank=True)
+    logged_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.agent} — break abuse {self.date}"

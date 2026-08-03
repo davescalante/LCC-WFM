@@ -20,10 +20,9 @@
 
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">
-        <strong>Auto</strong> columns (Hours, Base Pay, Adherence, Comm%) come live from the existing engine.
-        <strong>Manual</strong> columns (LPO, Spiff, Welcome, Referral, Kill&nbsp;QA, Comedor, Transport) come from
+        <strong>Auto</strong> columns come live from the existing engine; <strong>manual</strong> columns from
         <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">Edit Inputs</a>. Net LPO = LPO × (1 − Comm%);
-        Spiff shown in MXN. Holiday &amp; Loans arrive in later phases. <strong>Infinity only.</strong>
+        Spiff in MXN; <strong>Holiday</strong> = holiday hours × rate × 2; a <span style="color:#b91c1c;font-weight:700;">BA</span> flag = break abuse (adherence zeroed). Loans arrive next. <strong>Infinity only.</strong>
     </p>
 </div>
 
@@ -42,6 +41,7 @@
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Welcome</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Referral</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Kill QA</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#7c3aed;">Holiday</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#eef5ee;">Subtotal</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Comedor</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Transport</th>
@@ -52,23 +52,24 @@
         {% for r in rows %}
         <tr style="border-bottom:1px solid #eee;">
             <td style="padding:5px 8px;font-family:Arial;">{{ r.emp }}</td>
-            <td style="padding:5px 8px;font-family:Arial;font-weight:600;color:#1a3a5c;">{{ r.legal_name }}</td>
+            <td style="padding:5px 8px;font-family:Arial;font-weight:600;color:#1a3a5c;">{{ r.legal_name }}{% if r.break_abuse %} <span style="background:#fee2e2;color:#b91c1c;font-size:9px;font-weight:800;padding:1px 5px;border-radius:8px;">BA</span>{% endif %}</td>
             <td style="padding:5px 8px;text-align:right;">{{ r.hours|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.base_pay|floatformat:2 }}</td>
-            <td style="padding:5px 8px;text-align:right;">${{ r.adherence_bonus|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;{% if r.break_abuse %}color:#b91c1c;{% endif %}">${{ r.adherence_bonus|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:center;">{% if r.comm_pct %}{{ r.comm_pct|floatformat:0 }}%{% else %}<span style="color:#ccc;">—</span>{% endif %}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.net_lpo|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.spiff_mxn|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.welcome|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.referral|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.kill_qa|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;color:#7c3aed;">${{ r.holiday_pay|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;font-weight:700;background:#f6fbf6;">${{ r.subtotal|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.comedor|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.transport|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;font-weight:800;background:#f2f7ff;{% if r.total < 0 %}color:#b91c1c;{% endif %}">${{ r.total|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="15" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Infinity agents with data for this week. (Load real data to see figures.)</td></tr>
+        <tr><td colspan="16" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Infinity agents with data for this week. (Load real data to see figures.)</td></tr>
         {% endfor %}
     </tbody>
     {% if rows %}
@@ -81,6 +82,7 @@
             <td style="padding:8px;text-align:right;">${{ totals.net_lpo|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;">${{ totals.spiff|floatformat:2 }}</td>
             <td colspan="3"></td>
+            <td style="padding:8px;text-align:right;color:#7c3aed;">${{ totals.holiday|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;">${{ totals.subtotal|floatformat:2 }}</td>
             <td colspan="2"></td>
             <td style="padding:8px;text-align:right;background:#e8f0fe;">${{ totals.total|floatformat:2 }}</td>
