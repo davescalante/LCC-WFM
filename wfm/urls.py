@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from finance import views as finance_views
+from nomina import views as nomina_views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -10,6 +11,7 @@ urlpatterns = [
     path('erlang/', include('erlang.urls')),
     path('finance/', include('finance.urls')),
     path('nomina/', include('nomina.urls')),
+    path('vacations/', nomina_views.vacations, name='vacations'),
     path('admin-codings/', finance_views.admin_codings, name='admin_codings'),
     path('admin-codings/add/', finance_views.add_admin_coding_ajax, name='add_admin_coding_ajax'),
     path('admin-codings/edit/', finance_views.edit_admin_coding_ajax, name='edit_admin_coding_ajax'),

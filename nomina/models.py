@@ -130,6 +130,23 @@ class NominaOverride(models.Model):
         return f"{self.agent} — {self.week_start} — {self.field}={self.value}"
 
 
+class VacationAdjustment(models.Model):
+    """A super-admin manual adjustment to an agent's available vacation days for a
+    given year (carryover, corrections). Available = accrued − used + days."""
+    agent = models.ForeignKey('scheduling.Agent', on_delete=models.CASCADE, related_name='vacation_adjustments')
+    year = models.PositiveIntegerField()
+    days = models.DecimalField(max_digits=5, decimal_places=1, default=Decimal('0'))
+    note = models.CharField(max_length=255, blank=True)
+    updated_by = models.ForeignKey('scheduling.Agent', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('agent', 'year')
+
+    def __str__(self):
+        return f"{self.agent} {self.year}: {self.days:+} days"
+
+
 class UnmatchedInputRow(models.Model):
     """A file row from an input-module upload that couldn't be matched to an agent.
     Persisted (not just flashed) so the operator must consciously ACKNOWLEDGE each

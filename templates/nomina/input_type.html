@@ -14,9 +14,9 @@
 </div>
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">{{ t.desc }} Values are in <strong>{{ t.unit }}</strong>.
-    {% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
+    {% if not t.manual_add %}{% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
     Upload maps by column headers (Username / Employee ID + Amount) — unmatched rows are shown so nothing is dropped.
-    <strong>Uploading replaces</strong> this module's values for the week with the file's contents (a fresh upload wins).</p>
+    <strong>Uploading replaces</strong> this module's values for the week with the file's contents (a fresh upload wins).{% endif %}</p>
 </div>
 
 {% if show_pesos %}

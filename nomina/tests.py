@@ -158,6 +158,53 @@ class NominaSpiffUploadTests(TestCase):
             week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
 
 
+class NominaVacationsPageTests(TestCase):
+    """The top-level Vacations page: admins see everyone, agents see only their own
+    row, super admins can adjust available days, others are read-only."""
+
+    def setUp(self):
+        self.admin = _make_agent('vac_admin')                                # role='admin'
+        self.a1 = _make_agent('vac_a1', role='agent', role_type='regular_agent')
+        self.a2 = _make_agent('vac_a2', role='agent', role_type='regular_agent')
+        self.superadm = _make_agent('vac_super', is_super_admin=True)
+        self.url = reverse('vacations')
+
+    def test_agent_sees_only_their_own_row(self):
+        self.client.login(username='vac_a1', password='x')
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'vac_a1')          # own agent name
+        self.assertNotContains(resp, 'vac_a2')       # not other agents
+
+    def test_admin_sees_everyone(self):
+        self.client.login(username='vac_admin', password='x')
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'vac_a1')
+        self.assertContains(resp, 'vac_a2')
+
+    def test_admin_search_filters(self):
+        self.client.login(username='vac_admin', password='x')
+        resp = self.client.get(self.url, {'q': 'vac_a2'})
+        self.assertContains(resp, 'vac_a2')
+        self.assertNotContains(resp, 'vac_a1')
+
+    def test_super_admin_adjusts_available_days(self):
+        from nomina.models import VacationAdjustment
+        from nomina.views import vacation_balance
+        self.client.login(username='vac_super', password='x')
+        # a1 has 0 accrued/used → set available to 20 → stores a +20 adjustment.
+        self.client.post(self.url, {'agent': self.a1.pk, 'available': '20'}, follow=True)
+        adj = VacationAdjustment.objects.get(agent=self.a1)
+        self.assertEqual(adj.days, Decimal('20.0'))
+        _acc, _used, remaining = vacation_balance(self.a1)
+        self.assertEqual(remaining, Decimal('20.0'))
+
+    def test_non_super_admin_cannot_edit(self):
+        from nomina.models import VacationAdjustment
+        self.client.login(username='vac_admin', password='x')   # admin, not super
+        self.client.post(self.url, {'agent': self.a1.pk, 'available': '20'}, follow=True)
+        self.assertFalse(VacationAdjustment.objects.filter(agent=self.a1).exists())
+
+
 class NominaVacationApprovalTests(TestCase):
     """Vacation stays a normal request (any supervisor approves), and 'V' days
     draw down the LFT balance. But an OVER-balance approval is blocked for

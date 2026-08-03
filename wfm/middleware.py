@@ -7,7 +7,7 @@ INACTIVITY_TIMEOUT = 4 * 3600   # 4 hours
 ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 
 # URL path prefixes agents are allowed to access
-_AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
+_AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/vacations/', '/accounts/', '/static/', '/favicon')
 _INACTIVE_ALLOWED = ('/agent/inactive/', '/accounts/', '/static/', '/favicon')
 
 

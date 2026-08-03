@@ -716,21 +716,30 @@ def _lft_vacation_days(years):
     return 22 + 2 * ((years - 6) // 5)  # +2 every 5 yrs beyond year 6-10 band
 
 
+def _service_start(agent):
+    starts = [ep.start_date for ep in agent.employment_periods.all() if ep.start_date]
+    return min(starts) if starts else agent.start_date
+
+
 def vacation_balance(agent, year=None):
     """(accrued, used, remaining) LFT vacation days for `agent` in `year`.
     Accrued = LFT schedule by completed years of service; Used = 'V' adherence
-    days that calendar year. Shared by the Vacation tab and the request flow."""
+    days that calendar year; plus any super-admin manual adjustment. Shared by the
+    Vacations page and the request flow."""
     from adherence.models import AdherenceRecord
+    from .models import VacationAdjustment
     today = timezone.localdate()
     year = year or today.year
-    starts = [ep.start_date for ep in agent.employment_periods.all() if ep.start_date]
-    start = min(starts) if starts else agent.start_date
+    start = _service_start(agent)
     years = 0
     if start:
         years = max(0, today.year - start.year - ((today.month, today.day) < (start.month, start.day)))
     accrued = _lft_vacation_days(years)
     used = AdherenceRecord.objects.filter(agent=agent, status='V', date__year=year).count()
-    return accrued, used, accrued - used
+    adj = VacationAdjustment.objects.filter(agent=agent, year=year).first()
+    adjustment = adj.days if adj else Decimal('0')
+    remaining = Decimal(accrued) - used + adjustment
+    return accrued, used, remaining
 
 
 def vacation_request_check(agent, start_date, end_date):
@@ -752,36 +761,77 @@ def vacation_request_check(agent, start_date, end_date):
 
 
 @login_required
-@nomina_access_required
-def vacation(request):
-    """Vacation tracker — tenure-based accrual (LFT), used ('V' days), remaining."""
+def vacations(request):
+    """Top-level Vacations page. Admins (role='admin') see everyone; agents see
+    only their own row. Read-only for everyone except super admins, who can adjust
+    a person's available days (carryover / corrections)."""
     from scheduling.models import Agent
-    week_start, week_dates = _week(request)
+    from .models import VacationAdjustment
+    viewer = getattr(request.user, 'agent', None)
+    is_super = request.user.is_superuser or getattr(viewer, 'is_super_admin', False)
+    is_admin = is_super or (viewer is not None and viewer.role == 'admin')
     today = timezone.localdate()
-    agents = list(Agent.objects.filter(status='active').select_related('user')
-                  .prefetch_related('employment_periods').order_by('user__last_name', 'user__first_name'))
+    year = today.year
 
-    from adherence.models import AdherenceRecord
-    used_map = {}
-    for r in AdherenceRecord.objects.filter(
-        agent__in=agents, status='V', date__year=today.year).values('agent_id'):
-        used_map[r['agent_id']] = used_map.get(r['agent_id'], 0) + 1
+    # Super-admin: save an available-days adjustment for one agent.
+    if request.method == 'POST':
+        if not is_super:
+            messages.error(request, "Only super admins can edit vacation days.")
+            return redirect('vacations')
+        try:
+            target = Agent.objects.get(pk=request.POST.get('agent'))
+        except (Agent.DoesNotExist, ValueError, TypeError):
+            messages.error(request, "Agent not found.")
+            return redirect('vacations')
+        accrued, used, _rem = vacation_balance(target, year)
+        new_available = _dec(request.POST.get('available'))
+        adjustment = (new_available - (Decimal(accrued) - used)).quantize(Decimal('0.1'))
+        VacationAdjustment.objects.update_or_create(
+            agent=target, year=year,
+            defaults={'days': adjustment, 'note': (request.POST.get('note') or '').strip(),
+                      'updated_by': viewer})
+        messages.success(request, f"{target}: available days set to {new_available:g}.")
+        return redirect(f"{request.path}?{request.META.get('QUERY_STRING', '')}")
+
+    # Which agents does the viewer see?
+    if is_admin:
+        agents = Agent.objects.filter(status='active')
+        q = (request.GET.get('q') or '').strip()
+        if q:
+            agents = agents.filter(
+                Q(agent_name__icontains=q) | Q(user__first_name__icontains=q) |
+                Q(user__last_name__icontains=q) | Q(user__username__icontains=q))
+        sup = request.GET.get('supervisor')
+        if sup:
+            try:
+                agents = agents.filter(supervisor_id=int(sup))
+            except (ValueError, TypeError):
+                pass
+    elif viewer is not None:
+        agents = Agent.objects.filter(pk=viewer.pk)   # agents see only themselves
+    else:
+        agents = Agent.objects.none()
+    agents = list(agents.select_related('user').prefetch_related('employment_periods')
+                  .order_by('user__last_name', 'user__first_name'))
 
     rows = []
     for a in agents:
-        starts = [ep.start_date for ep in a.employment_periods.all() if ep.start_date]
-        start = min(starts) if starts else a.start_date
-        years = 0
-        if start:
-            years = max(0, today.year - start.year - ((today.month, today.day) < (start.month, start.day)))
-        accrued = _lft_vacation_days(years)
-        used = used_map.get(a.pk, 0)
-        rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
-                     'start': start, 'years': years, 'accrued': accrued, 'used': used,
-                     'remaining': accrued - used})
-    ctx = _nav(week_start, week_dates)
-    ctx['rows'] = rows
-    return render(request, 'nomina/vacation.html', ctx)
+        accrued, used, remaining = vacation_balance(a, year)
+        rows.append({
+            'agent': a,
+            'agent_name': a.agent_name or a.user.username,
+            'legal_name': a.user.get_full_name() or '—',
+            'start': _service_start(a),
+            'accrued': accrued, 'used': used, 'available': remaining,
+        })
+
+    supervisors = Agent.objects.filter(status='active', role='admin').select_related('user').order_by(
+        'user__last_name') if is_admin else []
+    return render(request, 'nomina/vacations.html', {
+        'rows': rows, 'is_admin': is_admin, 'is_super': is_super, 'year': year,
+        'q': request.GET.get('q', ''), 'supervisors': supervisors,
+        'selected_supervisor': request.GET.get('supervisor', ''),
+    })
 
 
 # Auto columns that can be overridden on the Agent Nómina.
