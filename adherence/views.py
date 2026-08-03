@@ -986,11 +986,14 @@ def adherence_week(request):
     # Each supervisor group is loaded separately for faster first-paint.
     supervisor_pks = [str(s.pk) for s in supervisors]
     supervisor_pks_json = json.dumps(supervisor_pks)
+    from nomina.models import Holiday   # display-only holiday tags on the date headers
+    holiday_dates = set(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
     return render(request, 'adherence/dashboard.html', {
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
         'today': today,
+        'holiday_dates': holiday_dates,
         'current_week': current_week,
         'is_current_week': week_start == current_week,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),

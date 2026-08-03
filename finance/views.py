@@ -1362,12 +1362,15 @@ def admin_adherence(request):
         for cell in row['cells']:
             cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
+    from nomina.models import Holiday   # display-only holiday tags on the date headers
+    holiday_dates = set(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
     return render(request, 'finance/admin_adherence.html', {
         'rows': rows,
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
         'today': timezone.localdate(),
+        'holiday_dates': holiday_dates,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'status_choices': AdherenceRecord.STATUS_CHOICES,

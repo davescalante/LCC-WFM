@@ -63,6 +63,8 @@
 .day-name      { font-size: 12px; font-weight: 700; }
 .day-date      { font-size: 10px; font-weight: 400; color: #888; margin-top: 1px; }
 .day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
+.day-holiday   { font-size: 8px; font-weight: 800; letter-spacing: .5px; color: #b45309; margin-top: 2px; text-transform: uppercase; }
+thead th.col-holiday { background: #fef3c7; border-bottom-color: #f59e0b !important; }
 
 tbody tr.row-a         { background: #fff; }
 tbody tr.row-b         { background: #f9fafb; }
@@ -170,10 +172,11 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="fc fc-2 th-left">Five9 User</th>
             <th class="fc fc-3" style="text-align:center;">ID</th>
             {% for d in week_dates %}
-            <th class="th-day {% if d == today %}col-today{% endif %}">
+            <th class="th-day {% if d == today %}col-today{% endif %}{% if d in holiday_dates %} col-holiday{% endif %}">
                 {% if d == today %}<div class="day-today-label">TODAY</div>{% endif %}
                 <div class="day-name">{{ d|date:"D" }}</div>
                 <div class="day-date">{{ d|date:"M j" }}</div>
+                {% if d in holiday_dates %}<div class="day-holiday">Holiday</div>{% endif %}
             </th>
             {% endfor %}
             <th class="th-sum border-l" style="font-size:11px;width:46px;color:#27ae60;">P</th>
