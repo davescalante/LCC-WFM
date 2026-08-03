@@ -205,6 +205,59 @@ class NominaVacationsPageTests(TestCase):
         self.assertFalse(VacationAdjustment.objects.filter(agent=self.a1).exists())
 
 
+class NominaVacationPayTests(TestCase):
+    """Vacation piece A: a 'V' day is paid — min(scheduled, 8) hours, or 8 if a day
+    off — folded into Pay (48) and Total Hours; plus the 'on vacation' indicator."""
+
+    def test_scheduled_vacation_day_pays_min_sched_8(self):
+        import datetime
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord
+        from scheduling.models import Shift
+        a = _make_infinity('vacpay', '9200')     # hourly_rate defaults to 62.50
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        day = week[1]
+        Shift.objects.create(agent=a, date=day, is_off=False,
+                             start_time=datetime.time(9, 0), end_time=datetime.time(17, 0))  # 8h
+        AdherenceRecord.objects.update_or_create(agent=a, date=day, defaults={'status': 'V'})
+        rows, totals = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['vac_hrs'], Decimal('8'))
+        self.assertEqual(r['vac_pay'], Decimal('500.00'))    # 8 × 62.50
+        self.assertEqual(r['base_pay'], Decimal('500.00'))   # Pay(48) = base 0 + vacation 500
+        self.assertEqual(r['total_hrs'], Decimal('8'))       # vacation folded into hours
+        self.assertEqual(totals['on_vacation'], 1)
+
+    def test_vacation_on_day_off_pays_flat_8(self):
+        import datetime
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord
+        a = _make_infinity('vacpay2', '9201')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        AdherenceRecord.objects.update_or_create(agent=a, date=week[3], defaults={'status': 'V'})  # no shift
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['vac_hrs'], Decimal('8'))         # flat 8 when unscheduled
+        self.assertEqual(r['vac_pay'], Decimal('500.00'))
+
+    def test_scheduled_over_8_capped(self):
+        import datetime
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord
+        from scheduling.models import Shift
+        a = _make_infinity('vacpay3', '9202')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        Shift.objects.create(agent=a, date=week[1], is_off=False,
+                             start_time=datetime.time(8, 0), end_time=datetime.time(18, 0))  # 10h
+        AdherenceRecord.objects.update_or_create(agent=a, date=week[1], defaults={'status': 'V'})
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['vac_hrs'], Decimal('8'))         # capped at 8
+
+
 class NominaWelcomeBonusTests(TestCase):
     """Welcome Bonus is a POSITIVE for the enrolled agent — paid the enrollment
     amount in a covered week, but only when they earned that week's adherence bonus."""

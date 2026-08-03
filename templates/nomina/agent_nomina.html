@@ -18,6 +18,13 @@
     </div>
 </div>
 
+{% if totals.on_vacation %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#ecfeff;border-left:4px solid #06b6d4;">
+    <p style="margin:0;font-size:13px;color:#0e7490;">&#127958; <strong>{{ totals.on_vacation }}</strong> {% if totals.on_vacation == 1 %}person{% else %}people{% endif %} on vacation this week
+    — <strong>{{ totals.vac_hrs|floatformat:0 }}</strong> paid vacation hours folded into their pay.</p>
+</div>
+{% endif %}
+
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">
         <strong>Auto</strong> columns come live from the existing engine; <strong>manual</strong> columns from

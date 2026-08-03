@@ -157,6 +157,29 @@ def _holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
     return out
 
 
+def _vacation_hours(agents, week_dates):
+    """{agent_id: paid vacation hours this week}. Each 'V' day pays min(scheduled
+    hours, 8); a 'V' on an unscheduled day (day off) pays a flat 8."""
+    from adherence.models import AdherenceRecord
+    v_days = {}
+    for r in AdherenceRecord.objects.filter(
+            agent__in=agents, date__in=week_dates, status='V').values('agent_id', 'date'):
+        v_days.setdefault(r['agent_id'], []).append(r['date'])
+    if not v_days:
+        return {}
+    from adherence.views import _build_maps, _scheduled_hours
+    shift_map = _build_maps(agents, week_dates)[0]
+    out = {}
+    for aid, days in v_days.items():
+        total = Decimal('0')
+        for d in days:
+            shift = shift_map.get((aid, d))
+            sched = _scheduled_hours(shift) if shift else Decimal('0')
+            total += min(sched, Decimal('8')) if sched > 0 else Decimal('8')
+        out[aid] = total
+    return out
+
+
 def _nav(week_start, week_dates):
     return {
         'week_start': week_start,
@@ -448,6 +471,7 @@ def _agent_nomina_data(week_start, week_dates):
         agent__in=agents, date__in=week_dates).values_list('agent_id', flat=True))
     holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
     hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
+    vac_hours = _vacation_hours(agents, week_dates)   # paid vacation hours ('V' days)
     enrolls = {e.agent_id: e for e in WelcomeBonusEnrollment.objects.filter(agent__in=agents)}
     loan_ded = {}
     for ln in Loan.objects.filter(agent__in=agents):
@@ -462,8 +486,9 @@ def _agent_nomina_data(week_start, week_dates):
 
     rows = []
     tot_base = tot_bonus = tot_lpo = tot_spiff = tot_hol = tot_sub = tot_ded = tot_total = Decimal('0')
-    tot_worked_hrs = tot_hol_hrs = tot_total_hrs = Decimal('0')
+    tot_worked_hrs = tot_hol_hrs = tot_total_hrs = tot_vac_hrs = Decimal('0')
     tot_referral = tot_welcome = tot_kill = tot_comedor = tot_transport = tot_loan = Decimal('0')
+    on_vacation = 0
     for a in agents:
         d = data.get(a.pk, {})
         wi = inputs_map.get(a.pk)
@@ -492,31 +517,41 @@ def _agent_nomina_data(week_start, week_dates):
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))
         loan = ov(a.pk, 'loan', loan_ded.get(a.pk, Decimal('0')))
 
-        subtotal = base + bonus + net_lpo + spiff_mxn + welcome + referral + kill_qa + holiday_pay
+        # Vacation days are paid: their hours fold into hours worked / Pay (48).
+        vac_hrs = vac_hours.get(a.pk, Decimal('0'))
+        vac_pay = (vac_hrs * rate).quantize(Decimal('0.01'))
+        if vac_hrs > 0:
+            on_vacation += 1
+        pay48 = base + vac_pay   # Pay (48) = base pay + vacation pay
+
+        subtotal = pay48 + bonus + net_lpo + spiff_mxn + welcome + referral + kill_qa + holiday_pay
         total = subtotal - comedor - transport - loan  # may go negative (G6)
 
         final_hrs = d.get('final_hrs', Decimal('0'))
         worked_hrs = max(Decimal('0'), final_hrs - hol_hrs)   # regular hours (holiday broken out)
+        total_hrs = final_hrs + vac_hrs                       # includes paid vacation hours
         rows.append({
             'agent': a, 'emp': a.employee_id or '',
             'legal_name': a.user.get_full_name() or a.user.username,
             'username': a.user.username, 'break_abuse': broke,
             'hours': final_hrs, 'rate': rate,
-            'worked_hrs': worked_hrs, 'holiday_hrs': hol_hrs, 'total_hrs': final_hrs,
-            'base_pay': base, 'adherence_bonus': bonus,
+            'worked_hrs': worked_hrs, 'holiday_hrs': hol_hrs, 'total_hrs': total_hrs,
+            'vac_hrs': vac_hrs, 'vac_pay': vac_pay,
+            'base_pay': pay48, 'adherence_bonus': bonus,
             'net_lpo': net_lpo, 'comm_pct': comm_pct, 'spiff_mxn': spiff_mxn,
             'welcome': welcome, 'referral': referral, 'kill_qa': kill_qa, 'holiday_pay': holiday_pay,
             'subtotal': subtotal, 'comedor': comedor, 'transport': transport, 'loan': loan, 'total': total,
         })
-        tot_base += base; tot_bonus += bonus; tot_lpo += net_lpo; tot_spiff += spiff_mxn
+        tot_base += pay48; tot_bonus += bonus; tot_lpo += net_lpo; tot_spiff += spiff_mxn
         tot_hol += holiday_pay; tot_sub += subtotal; tot_ded += (comedor + transport + loan); tot_total += total
-        tot_worked_hrs += worked_hrs; tot_hol_hrs += hol_hrs; tot_total_hrs += final_hrs
+        tot_worked_hrs += worked_hrs; tot_hol_hrs += hol_hrs; tot_total_hrs += total_hrs; tot_vac_hrs += vac_hrs
         tot_referral += referral; tot_welcome += welcome; tot_kill += kill_qa
         tot_comedor += comedor; tot_transport += transport; tot_loan += loan
 
     totals = {'base': tot_base, 'bonus': tot_bonus, 'net_lpo': tot_lpo, 'spiff': tot_spiff,
               'holiday': tot_hol, 'subtotal': tot_sub, 'total': tot_total,
               'worked_hrs': tot_worked_hrs, 'holiday_hrs': tot_hol_hrs, 'total_hrs': tot_total_hrs,
+              'vac_hrs': tot_vac_hrs, 'on_vacation': on_vacation,
               'referral': tot_referral, 'welcome': tot_welcome, 'kill_qa': tot_kill,
               'comedor': tot_comedor, 'transport': tot_transport, 'loan': tot_loan}
     return rows, totals
@@ -547,10 +582,12 @@ AGENT_EXPORT_COLS = [
 
 
 def _agent_note(r):
-    """Auto-note for the 'Yours' sheet (only the two locked triggers)."""
+    """Auto-note for the 'Yours' sheet."""
     notes = []
     if r['net_lpo']:
         notes.append(f"LPO should be ${r['net_lpo']:.2f}")
+    if r.get('vac_hrs'):
+        notes.append(f"Vacation: {r['vac_hrs']:g} hrs paid = ${r['vac_pay']:.2f}")
     return " · ".join(notes)
 
 
