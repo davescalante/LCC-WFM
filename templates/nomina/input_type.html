@@ -114,9 +114,12 @@
         inputs.forEach(function (inp) {
             var v = parse(inp.value);
             usd += v;
+            // Round per person (mirrors the server's per-row quantize) so the footer
+            // total matches the nómina to the cent, not round-of-sum.
+            var p = Math.round(v * rate * 100) / 100;
             var cell = document.getElementById(inp.getAttribute('data-pesos'));
-            if (cell) cell.textContent = (rate && v) ? fmt(v * rate) : '';
-            if (rate) pesos += v * rate;
+            if (cell) cell.textContent = (rate && v) ? fmt(p) : '';
+            if (rate) pesos += p;
         });
         if (usdTot) usdTot.textContent = fmt(usd);
         if (pesosTot) pesosTot.textContent = rate ? fmt(pesos) : '';

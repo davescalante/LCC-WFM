@@ -62,6 +62,25 @@ def _dec(val):
     return -d if neg else d
 
 
+def _parse_rate(raw):
+    """Parse a scalar rate (e.g. the weekly USD→MXN spiff rate). A rate is always
+    a small number, so a comma can ONLY be a decimal separator — never a thousands
+    grouping. This is the opposite of _dec (which strips commas as thousands),
+    so a Mexican-style '18,50' correctly reads as 18.50, not 1850. Returns None
+    for blank/unparseable input so the caller can reject it."""
+    s = str(raw or '').strip().replace('$', '').replace(' ', '')
+    if not s:
+        return None
+    if ',' in s and '.' not in s:      # '18,50' → decimal comma
+        s = s.replace(',', '.')
+    else:                              # '1,850.00' → comma is (unexpected) grouping
+        s = s.replace(',', '')
+    try:
+        return Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def _pay_window(week_start):
     return Q(status='active') | Q(
         status='inactive', separations__status='finalized',
@@ -144,9 +163,19 @@ def inputs(request):
 
     if request.method == 'POST' and 'spiff_fx_rate' in request.POST:
         raw = (request.POST.get('spiff_fx_rate') or '').strip()
-        nweek.spiff_fx_rate = _dec(raw) if raw else None  # blank stays empty
-        nweek.save()
-        messages.success(request, "Spiff rate saved." if raw else "Spiff rate cleared.")
+        if not raw:
+            nweek.spiff_fx_rate = None       # blank stays empty
+            nweek.save()
+            messages.success(request, "Spiff rate cleared.")
+        else:
+            rate = _parse_rate(raw)          # comma = decimal point, never thousands
+            if rate is None or not (Decimal('0') < rate < Decimal('1000')):
+                messages.error(request, "Enter a valid exchange rate (e.g. 18.50). "
+                                        "It looks off — check for a stray comma or typo.")
+            else:
+                nweek.spiff_fx_rate = rate
+                nweek.save()
+                messages.success(request, f"Spiff rate saved: {rate:.4f}")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     # Per-type filled count (agents with a non-zero value this week)
@@ -169,7 +198,14 @@ def _read_rows(uploaded):
     if name.endswith('.csv'):
         import csv, io
         text = uploaded.read().decode('utf-8-sig', errors='replace')
-        r = list(csv.reader(io.StringIO(text)))
+        # Sniff the delimiter — Excel in some locales exports ';' or tab, which a
+        # comma-only reader would read as ONE column and silently import nothing.
+        first = next((ln for ln in text.splitlines() if ln.strip()), '')
+        delim = ','
+        for cand in (';', '\t'):
+            if first.count(cand) > first.count(delim):
+                delim = cand
+        r = list(csv.reader(io.StringIO(text), delimiter=delim))
         return (r[0] if r else []), r[1:]
     import openpyxl, io
     wb = openpyxl.load_workbook(io.BytesIO(uploaded.read()), data_only=True, read_only=True)
@@ -224,7 +260,14 @@ def input_type(request, key):
     field = t['field']
     week_start, week_dates = _week(request)
     agents = _infinity_agents(week_start)
-    by_username = {a.user.username.strip().lower(): a for a in agents}
+    by_username, dupe_usernames = {}, set()
+    for a in agents:
+        k = a.user.username.strip().lower()
+        if k in by_username:
+            dupe_usernames.add(k)   # case-only collision — ambiguous
+        by_username[k] = a
+    for k in dupe_usernames:        # drop ambiguous keys → fall back to ID / unmatched
+        by_username.pop(k, None)
     by_empid = {(a.employee_id or '').strip(): a for a in agents if a.employee_id}
     unmatched = []
 
