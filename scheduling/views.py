@@ -3469,10 +3469,22 @@ def request_detail(request, pk):
             return redirect('agent_my_requests')
     except Exception:
         pass
+    vac = None
+    if ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
+        from nomina.views import vacation_request_check
+        accrued, used, remaining, new_days, overdraw = vacation_request_check(
+            ar.agent, ar.vacation_start, ar.vacation_end)
+        is_super = request.user.is_superuser or getattr(viewer, 'is_super_admin', False)
+        vac = {
+            'accrued': accrued, 'used': used, 'remaining': remaining,
+            'req_days': new_days, 'overdraw': overdraw,
+            'block_for_viewer': overdraw and not is_super,   # supervisor can't approve
+        }
     return render(request, 'scheduling/request_detail.html', {
         'ar': ar,
         'DAY_NAMES': _DAY_NAMES,
         'action_block': _request_action_block_reason(ar, viewer),
+        'vac': vac,
     })
 
 
@@ -3507,6 +3519,19 @@ def request_approve(request, pk):
     # the coding manually. Approval/Done only track the request's status.
     if ar.request_type == 'vacation' and ar.vacation_start and ar.vacation_end:
         from adherence.models import AdherenceRecord
+        from nomina.views import vacation_request_check
+        is_super = request.user.is_superuser or getattr(viewer, 'is_super_admin', False)
+        _acc, _used, remaining, new_days, overdraw = vacation_request_check(
+            agent, ar.vacation_start, ar.vacation_end)
+        # Over-balance vacation can only be approved by a super admin (David/Jhon).
+        if overdraw and not is_super:
+            messages.error(
+                request,
+                f"{agent} is exceeding their available vacation days "
+                f"({new_days} requested, {remaining} remaining). Only a super admin "
+                f"(David or Jhon) can approve this — please contact them."
+            )
+            return redirect('request_detail', pk=pk)
         d = ar.vacation_start
         count = 0
         while d <= ar.vacation_end:

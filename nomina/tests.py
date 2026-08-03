@@ -158,6 +158,84 @@ class NominaSpiffUploadTests(TestCase):
             week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
 
 
+class NominaVacationApprovalTests(TestCase):
+    """Vacation stays a normal request (any supervisor approves), and 'V' days
+    draw down the LFT balance. But an OVER-balance approval is blocked for
+    supervisors — only a super admin (David/Jhon) can approve the overdraw."""
+
+    def setUp(self):
+        import datetime
+        from scheduling.models import AgentRequest, EmploymentPeriod
+        self.AgentRequest = AgentRequest
+        self.today = get_week_start()   # a real date
+        import datetime as _dt
+        today = _dt.date.today()
+        # Requester: ~1 completed year → 12 accrued LFT days.
+        self.emp = _make_agent('vacagent', role='agent', role_type='regular_agent')
+        EmploymentPeriod.objects.create(agent=self.emp, start_date=_dt.date(today.year - 1, 1, 1))
+        # A supervisor (not super admin) and a super admin.
+        self.sup = _make_agent('vacsup')                 # role='admin', not super
+        self.super = _make_agent('vacsuper', is_super_admin=True)
+        self.yr = today.year
+
+    def _req(self, start, end):
+        return self.AgentRequest.objects.create(
+            agent=self.emp, request_type='vacation', status='pending',
+            is_staff_request=False, vacation_start=start, vacation_end=end)
+
+    def _use_days(self, n):
+        import datetime
+        from adherence.models import AdherenceRecord
+        for i in range(n):
+            AdherenceRecord.objects.update_or_create(
+                agent=self.emp, date=datetime.date(self.yr, 1, 5 + i), defaults={'status': 'V'})
+
+    # ---- balance math ----
+    def test_balance_and_overdraw_flags(self):
+        from nomina.views import vacation_request_check
+        import datetime
+        self._use_days(11)   # 11 used of 12 → 1 remaining
+        acc, used, rem, new_days, over = vacation_request_check(
+            self.emp, datetime.date(self.yr, 3, 2), datetime.date(self.yr, 3, 4))
+        self.assertEqual((acc, used, rem), (12, 11, 1))
+        self.assertEqual(new_days, 3)
+        self.assertTrue(over)                 # 3 requested > 1 remaining
+
+    # ---- endpoint: within balance ----
+    def test_supervisor_approves_within_balance(self):
+        import datetime
+        from adherence.models import AdherenceRecord
+        ar = self._req(datetime.date(self.yr, 3, 2), datetime.date(self.yr, 3, 4))
+        self.client.login(username='vacsup', password='x')
+        self.client.post(reverse('request_approve', args=[ar.pk]), follow=True)
+        v = AdherenceRecord.objects.filter(agent=self.emp, status='V',
+                                           date__range=(ar.vacation_start, ar.vacation_end)).count()
+        self.assertEqual(v, 3)               # approved → 3 V days marked
+
+    # ---- endpoint: overdraw blocked for supervisor, allowed for super ----
+    def test_supervisor_blocked_on_overdraw(self):
+        import datetime
+        from adherence.models import AdherenceRecord
+        self._use_days(11)
+        ar = self._req(datetime.date(self.yr, 3, 2), datetime.date(self.yr, 3, 4))
+        self.client.login(username='vacsup', password='x')
+        self.client.post(reverse('request_approve', args=[ar.pk]), follow=True)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'pending')   # not approved
+        self.assertEqual(AdherenceRecord.objects.filter(
+            agent=self.emp, status='V', date__range=(ar.vacation_start, ar.vacation_end)).count(), 0)
+
+    def test_super_admin_approves_overdraw(self):
+        import datetime
+        from adherence.models import AdherenceRecord
+        self._use_days(11)
+        ar = self._req(datetime.date(self.yr, 3, 2), datetime.date(self.yr, 3, 4))
+        self.client.login(username='vacsuper', password='x')
+        self.client.post(reverse('request_approve', args=[ar.pk]), follow=True)
+        self.assertEqual(AdherenceRecord.objects.filter(
+            agent=self.emp, status='V', date__range=(ar.vacation_start, ar.vacation_end)).count(), 3)
+
+
 class NominaHolidayPayTests(TestCase):
     """End-to-end proof of the holiday-worked premium: an agent who works a
     designated holiday earns a 2× premium on those hours (on top of the 1×

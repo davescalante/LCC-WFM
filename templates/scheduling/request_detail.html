@@ -52,7 +52,17 @@
             <div style="font-size:13px;color:#555;line-height:2;">
                 <div><strong>Start Date:</strong> {{ ar.vacation_start }}</div>
                 <div><strong>End Date:</strong> {{ ar.vacation_end }}</div>
+                {% if vac %}
+                <div><strong>Vacation balance:</strong> requesting {{ vac.req_days }} day{{ vac.req_days|pluralize }} ·
+                    <span style="{% if vac.overdraw %}color:#b91c1c;font-weight:700;{% endif %}">{{ vac.remaining }} of {{ vac.accrued }} day{{ vac.accrued|pluralize }} remaining</span></div>
+                {% endif %}
             </div>
+            {% if vac.overdraw %}
+            <div class="alert alert-warning" style="margin-top:10px;font-size:13px;line-height:1.5;">
+                &#9888; This request exceeds the agent's available vacation days. Only a super admin
+                (<strong>David</strong> or <strong>Jhon</strong>) can approve it — please contact them.
+            </div>
+            {% endif %}
         {% elif ar.request_type == 'day_off_change' %}
             <div style="font-size:13px;color:#555;line-height:2;">
                 <div><strong>Change Type:</strong> {% if ar.day_off_type == 'one_time' %}One-Time{% elif ar.day_off_type == 'permanent' %}Permanent{% else %}{{ ar.day_off_type }}{% endif %}</div>
@@ -138,10 +148,17 @@
         {% if ar.status == 'pending' %}
         <div class="card">
             <h2>Actions</h2>
+            {% if vac.block_for_viewer %}
+            <div class="alert alert-warning" style="font-size:13px;margin-bottom:10px;line-height:1.5;">
+                &#9888; This is an over-balance vacation request — only a super admin (<strong>David</strong> or <strong>Jhon</strong>)
+                can approve it. Please contact them. You can still Reject it below.
+            </div>
+            {% else %}
             <form method="post" action="{% url 'request_approve' pk=ar.pk %}" style="display:inline;" onsubmit="this.querySelector('button').disabled=true;">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-primary" style="margin-right:8px;margin-bottom:8px;">Approve</button>
             </form>
+            {% endif %}
             <button class="btn btn-danger" style="margin-bottom:8px;" onclick="document.getElementById('reject-section').style.display='block';this.style.display='none';">Reject</button>
 
             <div id="reject-section" style="display:none;margin-top:12px;">

@@ -716,6 +716,41 @@ def _lft_vacation_days(years):
     return 22 + 2 * ((years - 6) // 5)  # +2 every 5 yrs beyond year 6-10 band
 
 
+def vacation_balance(agent, year=None):
+    """(accrued, used, remaining) LFT vacation days for `agent` in `year`.
+    Accrued = LFT schedule by completed years of service; Used = 'V' adherence
+    days that calendar year. Shared by the Vacation tab and the request flow."""
+    from adherence.models import AdherenceRecord
+    today = timezone.localdate()
+    year = year or today.year
+    starts = [ep.start_date for ep in agent.employment_periods.all() if ep.start_date]
+    start = min(starts) if starts else agent.start_date
+    years = 0
+    if start:
+        years = max(0, today.year - start.year - ((today.month, today.day) < (start.month, start.day)))
+    accrued = _lft_vacation_days(years)
+    used = AdherenceRecord.objects.filter(agent=agent, status='V', date__year=year).count()
+    return accrued, used, accrued - used
+
+
+def vacation_request_check(agent, start_date, end_date):
+    """For a vacation request over [start, end]: (accrued, used, remaining,
+    new_days, overdraw). `new_days` = days in the current year not already marked
+    'V'; `overdraw` = approving would push the balance negative."""
+    from adherence.models import AdherenceRecord
+    today = timezone.localdate()
+    accrued, used, remaining = vacation_balance(agent, today.year)
+    existing = set(AdherenceRecord.objects.filter(
+        agent=agent, status='V', date__range=(start_date, end_date)
+    ).values_list('date', flat=True))
+    new_days, d = 0, start_date
+    while d <= end_date:
+        if d.year == today.year and d not in existing:
+            new_days += 1
+        d += timedelta(days=1)
+    return accrued, used, remaining, new_days, new_days > remaining
+
+
 @login_required
 @nomina_access_required
 def vacation(request):
