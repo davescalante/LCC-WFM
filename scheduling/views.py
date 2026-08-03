@@ -198,9 +198,8 @@ def dashboard(request):
 # Columns available in the Users export. The user picks which to include each time
 # (defaults to the classic set). (key, label, default column width).
 USER_EXPORT_FIELDS = [
-    ('full_name', 'Full name', 24),
-    ('first_name', 'First name', 16),
-    ('last_name', 'Last name', 18),
+    ('agent_name', 'Agent name', 22),
+    ('full_name', 'Legal name', 24),
     ('username', 'Username', 16),
     ('email', 'Email', 26),
     ('employee_id', 'Employee ID', 12),
@@ -213,8 +212,7 @@ USER_EXPORT_FIELDS = [
     ('all_five9', 'All Five9 usernames', 28),
     ('start_date', 'Start date', 12),
     ('years', 'Complete years with us', 10),
-    ('phone', 'Cell phone (formatted)', 18),
-    ('phone_country', 'Phone country code', 12),
+    ('phone', 'Full phone number', 18),
     ('hourly_rate', 'Hourly rate (MXN)', 12),
 ]
 # The original 8-column export — the default when nothing is picked.
@@ -333,9 +331,8 @@ def agent_list(request):
                 prefix = '+1' if a.phone_country_code == '+1' else '+521'
                 phone = prefix + digits[-10:]
             vals = {
-                'full_name': a.user.get_full_name() or a.agent_name,
-                'first_name': a.user.first_name or None,
-                'last_name': a.user.last_name or None,
+                'agent_name': a.agent_name or None,
+                'full_name': a.user.get_full_name() or None,   # legal name
                 'username': a.user.username,
                 'email': a.user.email or None,
                 'employee_id': a.employee_id or None,
@@ -349,7 +346,6 @@ def agent_list(request):
                 'start_date': start.isoformat() if start else None,
                 'years': years,
                 'phone': phone,
-                'phone_country': a.phone_country_code or None,
                 'hourly_rate': float(a.hourly_rate) if a.hourly_rate is not None else None,
             }
             ws.append([vals[k] for k in selected])
