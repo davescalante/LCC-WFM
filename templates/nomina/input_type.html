@@ -67,6 +67,27 @@
 </div>
 {% endif %}
 
+{% if t.manual_add %}
+<div class="card">
+    <h2>Add an agent</h2>
+    <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:0;">{% csrf_token %}
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Agent</label>
+            <select name="add_agent" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;min-width:240px;">
+                <option value="">— pick an agent —</option>
+                {% for a in addable %}<option value="{{ a.pk }}">{{ a.name }} ({{ a.username }})</option>{% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Amount ({{ t.unit }})</label>
+            <input type="text" name="add_amount" inputmode="decimal" placeholder="0.00" required
+                   style="width:120px;text-align:right;padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-family:monospace;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:7px 16px;">Add</button>
+    </form>
+    <p style="font-size:12px;color:#888;margin:10px 0 0;">Per week — this list starts empty every week. Add each person, then edit amounts below and <strong>Save</strong>.</p>
+</div>
+{% else %}
 <div class="grid-2">
     <div class="card">
         <h2>Upload a file</h2>
@@ -88,6 +109,7 @@
         {% endif %}
     </div>
 </div>
+{% endif %}
 
 <form method="post">{% csrf_token %}
     <div class="card" style="overflow-x:auto;padding:0;">
@@ -98,6 +120,7 @@
             {% if show_emp %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>{% endif %}
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{% if show_pesos %}Dollars (USD){% else %}{{ t.label }} ({{ t.unit }}){% endif %}</th>
             {% if show_pesos %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Pesos (MXN)</th>{% endif %}
+            {% if t.manual_add %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;"></th>{% endif %}
         </tr></thead>
         <tbody>
             {% for r in rows %}
@@ -111,9 +134,13 @@
                         style="width:110px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
                 </td>
                 {% if show_pesos %}<td id="pesos_{{ r.agent.pk }}" style="padding:5px 10px;text-align:right;font-family:monospace;color:#166534;">{{ r.pesos }}</td>{% endif %}
+                {% if t.manual_add %}<td style="padding:4px 8px;text-align:center;">
+                    <button type="submit" name="remove" value="{{ r.agent.pk }}" title="Remove"
+                        style="background:none;border:none;color:#b91c1c;font-size:16px;cursor:pointer;line-height:1;">&times;</button>
+                </td>{% endif %}
             </tr>
             {% empty %}
-            <tr><td colspan="5" style="padding:30px;text-align:center;color:#888;">No matching agents for this module. (Load real data.)</td></tr>
+            <tr><td colspan="6" style="padding:30px;text-align:center;color:#888;">{% if t.manual_add %}No one added yet this week — use “Add an agent” above.{% else %}No matching agents for this module. (Load real data.){% endif %}</td></tr>
             {% endfor %}
         </tbody>
         {% if show_total and rows %}

@@ -38,7 +38,9 @@ INPUT_TYPES = [
      'desc': 'Cafeteria POS export — matched by Employee # (EMP), all charges per person summed. '
              'Columns: EMP # + Precio.'},
     {'key': 'transportation', 'field': 'transportation', 'label': 'Transportation', 'unit': 'MXN', 'deduction': True,
-     'aggregate': False, 'match': 'auto', 'desc': 'Transportation deduction. Columns: Username + Amount.'},
+     'aggregate': False, 'match': 'auto', 'manual_add': True, 'totals': True,
+     'show_emp': False, 'name_only_agent': True,
+     'desc': 'Manual, per-week — add an agent and enter the amount. The list starts empty each week.'},
 ]
 INPUT_TYPE_BY_KEY = {t['key']: t for t in INPUT_TYPES}
 
@@ -328,11 +330,32 @@ def input_type(request, key):
         messages.success(request, f"Acknowledged {n} row(s)." if val == 'all' else "Acknowledged.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
-    if request.method == 'POST':  # manual save
-        for a in agents:
+    if request.method == 'POST' and request.POST.get('add_agent'):  # manual-add modules
+        aid, amt = request.POST.get('add_agent'), _dec(request.POST.get('add_amount'))
+        if aid:
             WeeklyPayInput.objects.update_or_create(
-                agent=a, week_start=week_start,
-                defaults={field: _dec(request.POST.get(f'v_{a.pk}'))})
+                agent_id=aid, week_start=week_start, defaults={field: amt})
+            messages.success(request, f"Added to {t['label']}.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    if request.method == 'POST' and request.POST.get('remove'):  # drop from a manual-add list
+        WeeklyPayInput.objects.filter(
+            agent_id=request.POST['remove'], week_start=week_start).update(**{field: 0})
+        messages.success(request, "Removed.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    if request.method == 'POST':  # manual save — only the agents rendered in the grid
+        agent_pks = {a.pk for a in agents}
+        for k, val in request.POST.items():
+            if not k.startswith('v_'):
+                continue
+            try:
+                aid = int(k[2:])
+            except ValueError:
+                continue
+            if aid in agent_pks:
+                WeeklyPayInput.objects.update_or_create(
+                    agent_id=aid, week_start=week_start, defaults={field: _dec(val)})
         messages.success(request, f"{t['label']} saved.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
@@ -370,12 +393,22 @@ def input_type(request, key):
         rows.append(row)
     if sort_by_value:   # people with a value float to the top
         rows.sort(key=lambda r: (r['val'] == 0, -r['val'], r['name'].lower()))
+    manual_add = t.get('manual_add', False)
+    addable = None
+    if manual_add:   # list = only the people added this week; dropdown = everyone else
+        addable = [{'pk': r['agent'].pk, 'name': r['name'], 'username': r['username']}
+                   for r in rows if r['val'] == 0]
+        addable.sort(key=lambda a: a['name'].lower())
+        rows = [r for r in rows if r['val'] != 0]
+        rows.sort(key=lambda r: r['name'].lower())
+        amt_total = sum((r['val'] for r in rows), Decimal('0'))
     unmatched = list(UnmatchedInputRow.objects.filter(
         week_start=week_start, input_key=key, acknowledged=False))
     ctx = _nav(week_start, week_dates)
     ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched,
                 'show_pesos': show_pesos, 'show_emp': show_emp, 'show_total': show_total,
                 'default_amt': default_amt, 'fx_rate': fx_rate,
+                'manual_add': manual_add, 'addable': addable,
                 'amt_total': amt_total if show_total else None,
                 'pesos_total': pesos_total if (show_pesos and fx_rate) else None})
     return render(request, 'nomina/input_type.html', ctx)

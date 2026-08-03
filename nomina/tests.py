@@ -233,6 +233,41 @@ class NominaComedorUploadTests(TestCase):
         self.assertEqual(unmatched.first().who.strip(), '9999')
 
 
+class NominaTransportationTests(TestCase):
+    """Transportation is manual-only: no upload, an add-an-agent flow, per-week."""
+
+    def setUp(self):
+        from nomina.models import WeeklyPayInput
+        self.WeeklyPayInput = WeeklyPayInput
+        _make_agent('tr_super', is_super_admin=True)
+        self.client.login(username='tr_super', password='x')
+        self.a = _make_infinity('trone', '8001')
+        self.ws = get_week_start()
+        self.url = reverse('nomina:input_type', args=['transportation'])
+
+    def test_manual_only_no_upload(self):
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'Add an agent')
+        self.assertNotContains(resp, 'Upload a file')
+
+    def test_add_shows_then_remove(self):
+        self.client.post(self.url, {'add_agent': self.a.pk, 'add_amount': '150'}, follow=True)
+        wi = self.WeeklyPayInput.objects.get(agent=self.a, week_start=self.ws)
+        self.assertEqual(wi.transportation, Decimal('150'))
+        resp = self.client.get(self.url)
+        self.assertContains(resp, f'name="v_{self.a.pk}"')   # now an editable list row
+        self.client.post(self.url, {'remove': self.a.pk}, follow=True)
+        wi.refresh_from_db()
+        self.assertEqual(wi.transportation, Decimal('0'))
+
+    def test_starts_empty_each_week(self):
+        import datetime
+        self.client.post(self.url, {'add_agent': self.a.pk, 'add_amount': '150'}, follow=True)
+        nxt = (self.ws + datetime.timedelta(days=7)).isoformat()
+        resp = self.client.get(self.url + f'?week_start={nxt}')
+        self.assertContains(resp, 'No one added yet this week')
+
+
 class NominaFxRateTests(TestCase):
     """The weekly USD→MXN rate is a scalar — a comma is a DECIMAL point (es-MX
     '18,50'), never a thousands separator. A comma must not inflate it 100x, and
