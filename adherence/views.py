@@ -780,6 +780,19 @@ def save_adherence_cell(request):
     _prev_status = _existing.status if _existing else ''
     _prev_display = ('A' if _prev_status == 'Absent' else _prev_status) if _prev_status else '—'
 
+    # Vacation safety net: a non-super admin cannot place a "V" that pushes the
+    # agent past their available vacation days. Super admins may (it goes negative).
+    if status == 'V' and _prev_status != 'V':
+        is_super = request.user.is_superuser or getattr(
+            getattr(request.user, 'agent', None), 'is_super_admin', False)
+        if not is_super:
+            from nomina.views import vacation_balance
+            _acc, _used, remaining = vacation_balance(agent, day_date.year)
+            if remaining < 1:
+                return JsonResponse({'ok': False, 'rejected': True, 'error':
+                    f"{agent} cannot use any more vacation days. Please reach out to "
+                    f"David or Jhon — as super admins they can add it."}, status=200)
+
     if status:
         AdherenceRecord.objects.update_or_create(
             agent=agent,

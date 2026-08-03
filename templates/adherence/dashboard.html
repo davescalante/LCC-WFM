@@ -568,7 +568,7 @@ function showStatus(msg, color, bg) {
     el.style.display = 'inline';
 }
 
-async function saveCell(agentId, dateStr, status) {
+async function saveCell(agentId, dateStr, status, sel, oldVal) {
     pendingSaves++;
     showStatus('Saving…', '#b45309', '#fef3c7');
 
@@ -579,6 +579,20 @@ async function saveCell(agentId, dateStr, status) {
             body: JSON.stringify({agent_id: agentId, date: dateStr, status}),
         });
         const data = await resp.json();
+        if (data.rejected) {
+            // Rule violation (e.g. vacation over-balance): undo the change and explain.
+            if (sel) {
+                const prev = oldVal || '';
+                sel.value = prev;
+                sel.dataset.prev = prev;
+                sel.closest('td').style.background = prev ? (STATUS_COLORS[prev] || '#f5f5f5') : '';
+                _applyStatusStyle(sel);
+                recomputeCoS();
+            }
+            showStatus('⚠ Not allowed', '#991b1b', '#fee2e2');
+            alert(data.error || 'Not allowed.');
+            return;
+        }
         if (!data.ok) throw new Error(data.error || 'error');
     } catch (e) {
         showStatus('⚠ Save failed — check your connection', '#991b1b', '#fee2e2');
@@ -595,9 +609,10 @@ async function saveCell(agentId, dateStr, status) {
 
 function _commitStatusChange(sel) {
     const td = sel.closest('td');
+    const oldVal = sel.dataset.prev || '';   // for revert if the server rejects it
     // Empty status: clear inline bg so CSS (today-blue, row alternation) can take effect.
     td.style.background = sel.value ? (STATUS_COLORS[sel.value] || '#f5f5f5') : '';
-    saveCell(td.dataset.agent, td.dataset.date, sel.value);
+    saveCell(td.dataset.agent, td.dataset.date, sel.value, sel, oldVal);
     recomputeCoS();
     _applyStatusStyle(sel);
     sel.dataset.prev = sel.value;

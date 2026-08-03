@@ -205,6 +205,42 @@ class NominaVacationsPageTests(TestCase):
         self.assertFalse(VacationAdjustment.objects.filter(agent=self.a1).exists())
 
 
+class NominaVacationAdherenceGateTests(TestCase):
+    """Safety net when a 'V' is placed directly on the adherence grid: a non-super
+    can't push an agent past their available vacation days; a super admin can."""
+
+    def setUp(self):
+        import datetime
+        self.placer = _make_agent('adh_admin')                 # admin/supervisor, non-super
+        self.superadm = _make_agent('adh_super', is_super_admin=True)
+        self.target = _make_agent('adh_target', role='agent', role_type='regular_agent')  # 0 accrued
+        self.date = datetime.date.today()
+        self.url = reverse('save_adherence_cell')
+
+    def _post_v(self):
+        import json
+        return self.client.post(self.url, data=json.dumps({
+            'agent_id': self.target.pk, 'date': self.date.isoformat(), 'status': 'V'}),
+            content_type='application/json')
+
+    def test_non_super_blocked_when_no_days_left(self):
+        from adherence.models import AdherenceRecord
+        self.client.login(username='adh_admin', password='x')
+        data = self._post_v().json()
+        self.assertFalse(data['ok'])
+        self.assertTrue(data.get('rejected'))
+        self.assertIn('cannot use any more vacation', data['error'])
+        self.assertFalse(AdherenceRecord.objects.filter(
+            agent=self.target, date=self.date, status='V').exists())
+
+    def test_super_admin_can_place_going_negative(self):
+        from adherence.models import AdherenceRecord
+        self.client.login(username='adh_super', password='x')
+        self.assertTrue(self._post_v().json()['ok'])
+        self.assertTrue(AdherenceRecord.objects.filter(
+            agent=self.target, date=self.date, status='V').exists())
+
+
 class NominaVacationApprovalTests(TestCase):
     """Vacation stays a normal request (any supervisor approves), and 'V' days
     draw down the LFT balance. But an OVER-balance approval is blocked for
