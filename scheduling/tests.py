@@ -526,9 +526,9 @@ XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 class AgentListExportTests(TestCase):
     """Part 2: filter-respecting Excel export with export-only columns."""
 
-    HEADER = ['Full name', 'Role type', 'Supervisor', 'Status',
+    HEADER = ['Legal name', 'Role type', 'Supervisor', 'Status',
               'Primary Five9 username', 'Start date',
-              'Complete years with us', 'Cell phone (formatted)']
+              'Complete years with us', 'Full phone number']
 
     def setUp(self):
         self.sup = _make_agent('xsup', role_type='supervisor')
@@ -677,11 +677,36 @@ class AgentListExportTests(TestCase):
         self.assertIsNone(row[6])   # years
         self.assertIsNone(row[7])   # phone
 
-    def test_on_screen_table_unchanged(self):
+    def test_export_button_opens_column_picker(self):
+        # The export button opens a column-picker popup listing the available
+        # fields. xviewer is a coordinator (not a super admin), so financial
+        # fields like Hourly rate are NOT offered.
         resp = self.client.get(reverse('agent_list'))
-        self.assertNotContains(resp, 'Complete years')
-        self.assertNotContains(resp, 'Five9 username')
         self.assertContains(resp, 'Export Excel')
+        self.assertContains(resp, 'choose columns')             # the picker modal
+        self.assertContains(resp, 'Agent name')                 # agent name is offered
+        self.assertContains(resp, 'Legal name')                 # legal name (was "Full name")
+        self.assertContains(resp, 'Employee ID')                # a non-financial newly-available field
+        self.assertContains(resp, 'value="full_name" checked')  # default field pre-checked
+        self.assertNotContains(resp, 'Hourly rate')             # financial — gated to super admins
+        self.assertNotContains(resp, 'First name')              # removed — no such field in the app
+        self.assertNotContains(resp, 'Phone country code')      # removed — full number instead
+
+    def test_hourly_rate_hidden_and_blocked_for_non_super(self):
+        # A non-super admin can't see the financial column and can't force it
+        # into the export by crafting the query — the server drops it.
+        ws = self._export_ws('&fields=hourly_rate&fields=full_name')
+        self.assertNotIn('Hourly rate (MXN)', [c.value for c in ws[1]])
+
+    def test_hourly_rate_available_to_super_admin(self):
+        self.viewer.is_super_admin = True
+        self.viewer.save()
+        resp = self.client.get(reverse('agent_list'))
+        self.assertContains(resp, 'Hourly rate (MXN)')
+        ws = self._export_ws('&fields=username&fields=hourly_rate')
+        header = [c.value for c in ws[1]]
+        self.assertIn('Hourly rate (MXN)', header)
+        self.assertIn('Username', header)
 
 
 from .models import AgentSeparation
@@ -719,7 +744,7 @@ class AgentListExportPayWindowTests(TestCase):
         self.assertEqual(resp['Content-Type'], XLSX_MIME)
         ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
         rows = list(ws.iter_rows(values_only=True))
-        return [r[0] for r in rows[1:]]
+        return [r[0] or '' for r in rows[1:]]   # Legal name may be blank (no legal name set)
 
     def test_still_owed_agent_included(self):
         self._separated_agent('owed1', self.next_monday)

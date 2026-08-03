@@ -195,8 +195,42 @@ def dashboard(request):
     })
 
 
+# Columns available in the Users export. The user picks which to include each time
+# (defaults to the classic set). (key, label, default column width).
+USER_EXPORT_FIELDS = [
+    ('agent_name', 'Agent name', 22),
+    ('full_name', 'Legal name', 24),
+    ('username', 'Username', 16),
+    ('email', 'Email', 26),
+    ('employee_id', 'Employee ID', 12),
+    ('employer', 'Employer', 14),
+    ('role', 'Role', 12),
+    ('role_type', 'Role type', 16),
+    ('status', 'Status', 12),
+    ('supervisor', 'Supervisor', 20),
+    ('primary_five9', 'Primary Five9 username', 22),
+    ('all_five9', 'All Five9 usernames', 28),
+    ('start_date', 'Start date', 12),
+    ('years', 'Complete years with us', 10),
+    ('phone', 'Full phone number', 18),
+    ('hourly_rate', 'Hourly rate (MXN)', 12),
+]
+# The original 8-column export — the default when nothing is picked.
+USER_EXPORT_DEFAULTS = ['full_name', 'role_type', 'supervisor', 'status',
+                        'primary_five9', 'start_date', 'years', 'phone']
+# Financial columns — offered/exported only to super admins (financial info is
+# hidden from everyone else). Enforced server-side, not just in the picker.
+USER_EXPORT_FINANCIAL = {'hourly_rate'}
+
+
 @login_required
 def agent_list(request):
+    # Financial columns (e.g. hourly rate) are for super admins only.
+    is_super = request.user.is_superuser or getattr(
+        getattr(request.user, 'agent', None), 'is_super_admin', False)
+    allowed_export_fields = [f for f in USER_EXPORT_FIELDS
+                             if f[0] not in USER_EXPORT_FINANCIAL or is_super]
+    allowed_keys = {f[0] for f in allowed_export_fields}
     supervisors = Agent.objects.filter(
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
@@ -255,13 +289,20 @@ def agent_list(request):
         if status_q is not None:  # 'all' needs no narrowing
             agents = agents.filter(status_q | pay_window_q).distinct()
 
+        # Which columns the user picked in the export popup (preserve registry
+        # order; drop anything they're not allowed to see; fall back to the
+        # classic set — minus any restricted field — if nothing was selected).
+        picked = set(request.GET.getlist('fields'))
+        selected = [k for k, _l, _w in allowed_export_fields if k in picked] \
+            or [k for k in USER_EXPORT_DEFAULTS if k in allowed_keys]
+        label_by_key = {k: l for k, l, _w in USER_EXPORT_FIELDS}
+        width_by_key = {k: w for k, _l, w in USER_EXPORT_FIELDS}
+
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Users"
 
-        headers = ['Full name', 'Role type', 'Supervisor', 'Status',
-                   'Primary Five9 username', 'Start date',
-                   'Complete years with us', 'Cell phone (formatted)']
+        headers = [label_by_key[k] for k in selected]
         ws.append(headers)
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill("solid", fgColor="1A3A5C")
@@ -289,22 +330,30 @@ def agent_list(request):
             if digits:
                 prefix = '+1' if a.phone_country_code == '+1' else '+521'
                 phone = prefix + digits[-10:]
-            ws.append([
-                a.user.get_full_name() or a.agent_name,
-                a.get_role_type_display() or None,
-                str(a.supervisor) if a.supervisor else None,
-                a.get_status_display(),
-                primary_five9,
-                start.isoformat() if start else None,
-                years,
-                phone,
-            ])
-            # Text format ('@') keeps Excel from ever coercing the phone
-            ws.cell(row=ws.max_row, column=8).number_format = '@'
+            vals = {
+                'agent_name': a.agent_name or None,
+                'full_name': a.user.get_full_name() or None,   # legal name
+                'username': a.user.username,
+                'email': a.user.email or None,
+                'employee_id': a.employee_id or None,
+                'employer': a.employer or None,
+                'role': a.get_role_display() if a.role else None,
+                'role_type': a.get_role_type_display() or None,
+                'status': a.get_status_display(),
+                'supervisor': str(a.supervisor) if a.supervisor else None,
+                'primary_five9': primary_five9,
+                'all_five9': ', '.join(p.five9_username for p in a.five9_profiles.all()) or None,
+                'start_date': start.isoformat() if start else None,
+                'years': years,
+                'phone': phone,
+                'hourly_rate': float(a.hourly_rate) if a.hourly_rate is not None else None,
+            }
+            ws.append([vals[k] for k in selected])
+            if 'phone' in selected:   # text format ('@') keeps Excel from coercing the phone
+                ws.cell(row=ws.max_row, column=selected.index('phone') + 1).number_format = '@'
 
-        col_widths = [24, 16, 20, 12, 22, 12, 10, 18]
-        for i, w in enumerate(col_widths, 1):
-            ws.column_dimensions[get_column_letter(i)].width = w
+        for i, k in enumerate(selected, 1):
+            ws.column_dimensions[get_column_letter(i)].width = width_by_key.get(k, 16)
 
         resp = HttpResponse(
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -333,6 +382,8 @@ def agent_list(request):
         'status_filter': status_filter,
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'selected_role_type': role_type_filter,
+        'export_fields': [{'key': k, 'label': l, 'checked': k in USER_EXPORT_DEFAULTS}
+                          for k, l, _w in allowed_export_fields],
     })
 
 
