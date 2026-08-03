@@ -671,6 +671,7 @@ def loans(request):
                     agent_id=agent_id, principal=principal, term_weeks=term,
                     rate=Decimal('1.35') if term == 2 else Decimal('1.25'),
                     start_week=week_start,
+                    granted_by=getattr(request.user, 'agent', None),   # loan manager
                 )
                 messages.success(request, "Loan added.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
@@ -917,36 +918,60 @@ def _admin_nomina_data(week_start, week_dates):
     inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
 
+    # Holiday hours worked (NR-adjusted, per-day 12.5% allowance) + premium.
+    holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
+    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
+    # Prestamo GIVEN: each manager is credited this week's repayments for loans they granted.
+    granted = {}
+    for ln in Loan.objects.filter(granted_by__in=agents):
+        inst = ln.installment_for_week(week_start)
+        if inst:
+            granted[ln.granted_by_id] = granted.get(ln.granted_by_id, Decimal('0')) + inst
+    # Prestamo OWED: the admin's own loan repayment this week (deducted).
+    owed = {}
+    for ln in Loan.objects.filter(agent__in=agents):
+        inst = ln.installment_for_week(week_start)
+        if inst:
+            owed[ln.agent_id] = owed.get(ln.agent_id, Decimal('0')) + inst
+
     rows = []
-    tot_base = tot_bonus = tot_sub = tot_total = Decimal('0')
+    tot = {k: Decimal('0') for k in (
+        'hours', 'holiday_hrs', 'holiday_pay', 'spiffs', 'lpo', 'referral', 'given',
+        'subtotal', 'bonus', 'comedor', 'repay', 'transport', 'total')}
     for a in agents:
         d = data.get(a.pk, {})
         wi = inputs_map.get(a.pk)
+        rate = d.get('hourly_mxn', Decimal('0'))
+        hours = d.get('final_hrs', Decimal('0'))
         base = d.get('base_pay_mxn', Decimal('0'))
         admin_bonus = d.get('admin_bonus_mxn', Decimal('0'))
-
-        commissions = wi.lpo if wi else Decimal('0')
+        hol_hrs = hol_hours.get(a.pk, Decimal('0'))
+        holiday_pay = (hol_hrs * rate * 2).quantize(Decimal('0.01'))
         spiffs = ((wi.spiff_usd if wi else Decimal('0')) * fx).quantize(Decimal('0.01'))
+        lpo = wi.lpo if wi else Decimal('0')
         referral = wi.referral if wi else Decimal('0')
         comedor = wi.comedor if wi else Decimal('0')
         transport = wi.transportation if wi else Decimal('0')
+        prestamo_given = granted.get(a.pk, Decimal('0'))     # loans they handed out (added)
+        prestamo_repay = owed.get(a.pk, Decimal('0'))        # their own loan (deducted)
 
-        subtotal = base + spiffs + commissions + referral
-        total = subtotal + admin_bonus - comedor - transport  # loans/holiday later
+        subtotal = base + holiday_pay + spiffs + lpo + referral + prestamo_given
+        total = subtotal + admin_bonus - comedor - prestamo_repay - transport
 
         rows.append({
             'agent': a, 'emp': a.employee_id or '',
-            'name': a.user.get_full_name() or a.user.username,
-            'username': a.user.username,
-            'wage': d.get('hourly_mxn', Decimal('0')), 'hours': d.get('final_hrs', Decimal('0')),
-            'base_pay': base, 'spiffs': spiffs, 'commissions': commissions,
-            'referral': referral, 'subtotal': subtotal, 'admin_bonus': admin_bonus,
-            'comedor': comedor, 'transport': transport, 'total': total,
+            'name': a.user.get_full_name() or a.user.username, 'username': a.user.username,
+            'wage': rate, 'hours': hours, 'holiday_hrs': hol_hrs, 'holiday_pay': holiday_pay,
+            'base_pay': base, 'spiffs': spiffs, 'lpo': lpo, 'referral': referral,
+            'prestamo_given': prestamo_given, 'subtotal': subtotal, 'admin_bonus': admin_bonus,
+            'comedor': comedor, 'prestamo_repay': prestamo_repay, 'transport': transport, 'total': total,
         })
-        tot_base += base; tot_bonus += admin_bonus; tot_sub += subtotal; tot_total += total
+        tot['hours'] += hours; tot['holiday_hrs'] += hol_hrs; tot['holiday_pay'] += holiday_pay
+        tot['spiffs'] += spiffs; tot['lpo'] += lpo; tot['referral'] += referral; tot['given'] += prestamo_given
+        tot['subtotal'] += subtotal; tot['bonus'] += admin_bonus; tot['comedor'] += comedor
+        tot['repay'] += prestamo_repay; tot['transport'] += transport; tot['total'] += total
 
-    totals = {'base': tot_base, 'bonus': tot_bonus, 'subtotal': tot_sub, 'total': tot_total}
-    return rows, totals
+    return rows, tot
 
 
 @login_required
@@ -963,10 +988,12 @@ def admin_nomina(request):
 
 
 ADMIN_EXPORT_COLS = [
-    ('ID', 'emp'), ('Nombre', 'name'), ('Admin Wage', 'wage'), ('Hours Worked', 'hours'),
-    ('Base Pay', 'base_pay'), ('Spiffs', 'spiffs'), ('Comissions', 'commissions'),
-    ('Refferal', 'referral'), ('Subtotal', 'subtotal'), ('Bonus', 'admin_bonus'),
-    ('Cafeteria', 'comedor'), (' Transportation', 'transport'), ('Total', 'total'),
+    ('ID', 'emp'), ('Username', 'username'), ('Nombre', 'name'),
+    ('Admin Wage', 'wage'), ('Hours Worked', 'hours'), ('Holiday', 'holiday_hrs'),
+    ('Holiday Pay', 'holiday_pay'), ('Spiffs', 'spiffs'), ('LPO', 'lpo'), ('Refferal', 'referral'),
+    ('Prestamo', 'prestamo_given'), ('Subtotal', 'subtotal'), ('Bonus', 'admin_bonus'),
+    ('Cafeteria', 'comedor'), ('Prestamo', 'prestamo_repay'),
+    ('Transportation', 'transport'), ('Total', 'total'),
 ]
 
 

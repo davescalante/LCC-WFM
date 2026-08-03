@@ -205,6 +205,43 @@ class NominaVacationsPageTests(TestCase):
         self.assertFalse(VacationAdjustment.objects.filter(agent=self.a1).exists())
 
 
+class NominaAdminLoanTests(TestCase):
+    """Admin Nómina loans: the manager who handed out a loan is CREDITED this week's
+    repayment (Prestamo given); an admin who took a loan has it DEDUCTED (Prestamo owed)."""
+
+    def _admin(self, username):
+        u = User.objects.create_user(username, password='x')
+        return Agent.objects.create(
+            user=u, role='admin', role_type='supervisor', agent_name=username,
+            status='active', employer='Infinity', is_official_admin=True)
+
+    def setUp(self):
+        import datetime
+        from nomina.models import Loan
+        self.Loan = Loan
+        self.ws = get_week_start()
+        self.week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        self.mgr = self._admin('mgradmin')
+        self.borrower = _make_infinity('loanborrower', '9101')   # regular agent borrower
+        self.admin_borrower = self._admin('adminborrower')
+
+    def test_manager_credited_and_admin_repayment_deducted(self):
+        from nomina.views import _admin_nomina_data
+        # Manager grants a 1-wk $1000 loan to the agent → $1250 back, all this week.
+        self.Loan.objects.create(agent=self.borrower, granted_by=self.mgr,
+            principal=Decimal('1000'), term_weeks=1, rate=Decimal('1.25'), start_week=self.ws)
+        # The admin_borrower takes their OWN 1-wk $500 loan → $625 repaid this week.
+        self.Loan.objects.create(agent=self.admin_borrower,
+            principal=Decimal('500'), term_weeks=1, rate=Decimal('1.25'), start_week=self.ws)
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        mgr = next(r for r in rows if r['agent'].pk == self.mgr.pk)
+        ab = next(r for r in rows if r['agent'].pk == self.admin_borrower.pk)
+        self.assertEqual(mgr['prestamo_given'], Decimal('1250.00'))   # credited what they handed out
+        self.assertEqual(mgr['prestamo_repay'], Decimal('0'))
+        self.assertEqual(ab['prestamo_repay'], Decimal('625.00'))     # their own loan deducted
+        self.assertEqual(ab['prestamo_given'], Decimal('0'))
+
+
 class NominaVacationAdherenceGateTests(TestCase):
     """Safety net when a 'V' is placed directly on the adherence grid: a non-super
     can't push an agent past their available vacation days; a super admin can."""

@@ -20,8 +20,9 @@
 
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fff7ed;">
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">
-        Official Admins. Base = Hours × Admin Wage; plus the fixed <strong>Admin Bonus</strong>, admin spiffs/commissions/referral;
-        minus comedor/transport. Bonus penalties (incomplete/tardy/login) &amp; holiday arrive in later phases. <strong>Infinity only.</strong>
+        Official Admins. Base = Hours × Admin Wage (in Subtotal); plus Holiday pay, Spiffs, LPO, Referral, and
+        <strong>Prestamo</strong> (loans they handed out as a manager → credited this week's repayments); then the fixed
+        <strong>Admin Bonus</strong>; minus Cafeteria, their own <strong>Prestamo</strong> repayment, and Transportation. <strong>Infinity only.</strong>
     </p>
 </div>
 
@@ -30,50 +31,66 @@
     <thead>
         <tr style="background:#f0f4f8;">
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:left;">ID</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:left;">Username</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:left;">Nombre</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Wage</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Hours</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Base Pay</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Admin Wage</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Hours Worked</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#7c3aed;">Holiday</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#7c3aed;">Holiday Pay</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Spiffs</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Commissions</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Referral</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">LPO</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Refferal</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#166534;">Prestamo</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#eef5ee;">Subtotal</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Admin Bonus</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Comedor</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Transport</th>
-            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#e8f0fe;">TOTAL</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;">Bonus</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Cafeteria</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Prestamo</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Transportation</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#e8f0fe;">Total</th>
         </tr>
     </thead>
     <tbody style="font-family:monospace;">
         {% for r in rows %}
         <tr style="border-bottom:1px solid #eee;">
             <td style="padding:5px 8px;font-family:Arial;">{{ r.emp }}</td>
+            <td style="padding:5px 8px;font-family:Arial;color:#666;">{{ r.username }}</td>
             <td style="padding:5px 8px;font-family:Arial;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.wage|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">{{ r.hours|floatformat:2 }}</td>
-            <td style="padding:5px 8px;text-align:right;">${{ r.base_pay|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;color:#7c3aed;">{{ r.holiday_hrs|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;color:#7c3aed;">${{ r.holiday_pay|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.spiffs|floatformat:2 }}</td>
-            <td style="padding:5px 8px;text-align:right;">${{ r.commissions|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;">${{ r.lpo|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.referral|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;color:#166534;">${{ r.prestamo_given|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;font-weight:700;background:#f6fbf6;">${{ r.subtotal|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;">${{ r.admin_bonus|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.comedor|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.prestamo_repay|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.transport|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;font-weight:800;background:#f2f7ff;{% if r.total < 0 %}color:#b91c1c;{% endif %}">${{ r.total|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="13" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Official Admins for this week. (Load real data to see figures.)</td></tr>
+        <tr><td colspan="17" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Official Admins for this week. (Load real data to see figures.)</td></tr>
         {% endfor %}
     </tbody>
     {% if rows %}
     <tfoot style="font-family:monospace;">
         <tr style="background:#f8fafc;font-weight:800;border-top:2px solid #94a3b8;">
-            <td style="padding:8px;font-family:Arial;" colspan="4">TOTALS ({{ rows|length }})</td>
-            <td style="padding:8px;text-align:right;">${{ totals.base|floatformat:2 }}</td>
-            <td colspan="3"></td>
-            <td style="padding:8px;text-align:right;">${{ totals.subtotal|floatformat:2 }}</td>
+            <td style="padding:8px;font-family:Arial;" colspan="3">TOTALS ({{ rows|length }})</td>
+            <td></td>
+            <td style="padding:8px;text-align:right;">{{ totals.hours|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;color:#7c3aed;">{{ totals.holiday_hrs|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;color:#7c3aed;">${{ totals.holiday_pay|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;">${{ totals.spiffs|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;">${{ totals.lpo|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;">${{ totals.referral|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;color:#166534;">${{ totals.given|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;background:#eef5ee;">${{ totals.subtotal|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;">${{ totals.bonus|floatformat:2 }}</td>
-            <td colspan="2"></td>
+            <td style="padding:8px;text-align:right;color:#b91c1c;">${{ totals.comedor|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;color:#b91c1c;">${{ totals.repay|floatformat:2 }}</td>
+            <td style="padding:8px;text-align:right;color:#b91c1c;">${{ totals.transport|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;background:#e8f0fe;">${{ totals.total|floatformat:2 }}</td>
         </tr>
     </tfoot>

@@ -57,6 +57,10 @@ class Loan(models.Model):
     each covered week deducts one installment from that agent's nómina."""
     TERM_CHOICES = [(1, '1 week (×1.25)'), (2, '2 weeks (×1.35)')]
     agent = models.ForeignKey('scheduling.Agent', on_delete=models.CASCADE, related_name='nomina_loans')
+    granted_by = models.ForeignKey(
+        'scheduling.Agent', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='loans_granted',
+        help_text="The loan manager who handed this out — credited the amount back on their Admin Nómina")
     principal = models.DecimalField(max_digits=10, decimal_places=2)
     term_weeks = models.PositiveSmallIntegerField(choices=TERM_CHOICES, default=1)
     rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('1.25'))
