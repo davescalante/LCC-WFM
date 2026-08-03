@@ -462,6 +462,8 @@ def _agent_nomina_data(week_start, week_dates):
 
     rows = []
     tot_base = tot_bonus = tot_lpo = tot_spiff = tot_hol = tot_sub = tot_ded = tot_total = Decimal('0')
+    tot_worked_hrs = tot_hol_hrs = tot_total_hrs = Decimal('0')
+    tot_referral = tot_welcome = tot_kill = tot_comedor = tot_transport = tot_loan = Decimal('0')
     for a in agents:
         d = data.get(a.pk, {})
         wi = inputs_map.get(a.pk)
@@ -484,7 +486,8 @@ def _agent_nomina_data(week_start, week_dates):
         if kq_raw == 0 and a.role_type == 'kill_team':
             kq_raw = Decimal(str(INPUT_TYPE_BY_KEY['killqa'].get('default_amount') or 0))
         kill_qa = ov(a.pk, 'kill_qa', kq_raw)
-        holiday_pay = ov(a.pk, 'holiday', (hol_hours.get(a.pk, Decimal('0')) * rate * 2).quantize(Decimal('0.01')))
+        hol_hrs = hol_hours.get(a.pk, Decimal('0'))
+        holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2).quantize(Decimal('0.01')))
         comedor = ov(a.pk, 'comedor', wi.comedor if wi else Decimal('0'))
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))
         loan = ov(a.pk, 'loan', loan_ded.get(a.pk, Decimal('0')))
@@ -492,11 +495,14 @@ def _agent_nomina_data(week_start, week_dates):
         subtotal = base + bonus + net_lpo + spiff_mxn + welcome + referral + kill_qa + holiday_pay
         total = subtotal - comedor - transport - loan  # may go negative (G6)
 
+        final_hrs = d.get('final_hrs', Decimal('0'))
+        worked_hrs = max(Decimal('0'), final_hrs - hol_hrs)   # regular hours (holiday broken out)
         rows.append({
             'agent': a, 'emp': a.employee_id or '',
             'legal_name': a.user.get_full_name() or a.user.username,
             'username': a.user.username, 'break_abuse': broke,
-            'hours': d.get('final_hrs', Decimal('0')), 'rate': rate,
+            'hours': final_hrs, 'rate': rate,
+            'worked_hrs': worked_hrs, 'holiday_hrs': hol_hrs, 'total_hrs': final_hrs,
             'base_pay': base, 'adherence_bonus': bonus,
             'net_lpo': net_lpo, 'comm_pct': comm_pct, 'spiff_mxn': spiff_mxn,
             'welcome': welcome, 'referral': referral, 'kill_qa': kill_qa, 'holiday_pay': holiday_pay,
@@ -504,9 +510,15 @@ def _agent_nomina_data(week_start, week_dates):
         })
         tot_base += base; tot_bonus += bonus; tot_lpo += net_lpo; tot_spiff += spiff_mxn
         tot_hol += holiday_pay; tot_sub += subtotal; tot_ded += (comedor + transport + loan); tot_total += total
+        tot_worked_hrs += worked_hrs; tot_hol_hrs += hol_hrs; tot_total_hrs += final_hrs
+        tot_referral += referral; tot_welcome += welcome; tot_kill += kill_qa
+        tot_comedor += comedor; tot_transport += transport; tot_loan += loan
 
     totals = {'base': tot_base, 'bonus': tot_bonus, 'net_lpo': tot_lpo, 'spiff': tot_spiff,
-              'holiday': tot_hol, 'subtotal': tot_sub, 'total': tot_total}
+              'holiday': tot_hol, 'subtotal': tot_sub, 'total': tot_total,
+              'worked_hrs': tot_worked_hrs, 'holiday_hrs': tot_hol_hrs, 'total_hrs': tot_total_hrs,
+              'referral': tot_referral, 'welcome': tot_welcome, 'kill_qa': tot_kill,
+              'comedor': tot_comedor, 'transport': tot_transport, 'loan': tot_loan}
     return rows, totals
 
 
@@ -525,11 +537,12 @@ def agent_nomina(request):
 # Agent export column order — mirrors the LCC AGENT NOMINA file.
 AGENT_EXPORT_COLS = [
     ('EMP', 'emp'), ('Legal name', 'legal_name'), ('User', 'username'),
-    ('Hours Worked', 'hours'), ('Holiday Pay', 'holiday_pay'), ('Pay (48)', 'base_pay'),
+    ('Hours Worked', 'worked_hrs'), ('Holiday', 'holiday_hrs'), ('Holiday Pay', 'holiday_pay'),
+    ('Total Hours', 'total_hrs'), ('Pay (48)', 'base_pay'),
     ('LPO', 'net_lpo'), ('Referral', 'referral'), ('Welcome Bonus', 'welcome'),
     ('Kill Team QA Bonus', 'kill_qa'), ('Spiff', 'spiff_mxn'), ('Adherence', 'adherence_bonus'),
     ('Sub Total', 'subtotal'), ('Cafeteria', 'comedor'), ('Prestamo', 'loan'),
-    (' Transportation', 'transport'), ('Total', 'total'),
+    ('Transportation', 'transport'), ('Total', 'total'),
 ]
 
 
