@@ -130,6 +130,26 @@ class NominaOverride(models.Model):
         return f"{self.agent} — {self.week_start} — {self.field}={self.value}"
 
 
+class UnmatchedInputRow(models.Model):
+    """A file row from an input-module upload that couldn't be matched to an agent.
+    Persisted (not just flashed) so the operator must consciously ACKNOWLEDGE each
+    one — nothing gets silently dropped from payroll. Re-uploading a module clears
+    and rebuilds its set for that week/type."""
+    week_start = models.DateField()
+    input_key = models.CharField(max_length=20)     # which module: 'spiff', 'lpo', …
+    who = models.CharField(max_length=200)           # the username/ID string from the file
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    acknowledged = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['who']
+        indexes = [models.Index(fields=['week_start', 'input_key', 'acknowledged'])]
+
+    def __str__(self):
+        return f"{self.input_key} {self.week_start} — {self.who} (${self.amount})"
+
+
 class BreakAbuseIncident(models.Model):
     """A logged break-abuse incident. Any incident in a pay week zeroes that
     agent's adherence bonus for the week."""

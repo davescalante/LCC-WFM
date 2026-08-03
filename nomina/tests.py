@@ -120,6 +120,29 @@ class NominaSpiffUploadTests(TestCase):
         jo = self.WeeklyPayInput.objects.get(agent=self.josaranda, week_start=self.ws)
         self.assertEqual(jo.spiff_usd, Decimal('15.00'))   # not $0 from a one-column mis-parse
 
+    def test_unmatched_rows_persist_until_acknowledged(self):
+        from nomina.models import UnmatchedInputRow
+        self._upload()
+        open_qs = UnmatchedInputRow.objects.filter(
+            week_start=self.ws, input_key='spiff', acknowledged=False)
+        self.assertEqual(open_qs.count(), 1)   # the #N/A row
+        # It still shows on a fresh GET (persistent, not flashed once)
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'need review')
+        # Acknowledge it → gone
+        row = open_qs.first()
+        self.client.post(self.url, {'ack': str(row.pk)}, follow=True)
+        self.assertEqual(open_qs.count(), 0)
+        resp = self.client.get(self.url)
+        self.assertNotContains(resp, 'need review')
+
+    def test_acknowledge_all(self):
+        from nomina.models import UnmatchedInputRow
+        self._upload()
+        self.client.post(self.url, {'ack': 'all'}, follow=True)
+        self.assertEqual(UnmatchedInputRow.objects.filter(
+            week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
+
 
 class NominaFxRateTests(TestCase):
     """The weekly USD→MXN rate is a scalar — a comma is a DECIMAL point (es-MX

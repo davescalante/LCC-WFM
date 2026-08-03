@@ -12,7 +12,7 @@ from wfm.utils import get_week_start, parse_week_param
 from .access import loan_access_required, nomina_access_required
 from .models import (
     BreakAbuseIncident, Holiday, Loan, NominaOverride, NominaWeek,
-    WeeklyPayInput, WelcomeBonusEnrollment,
+    UnmatchedInputRow, WeeklyPayInput, WelcomeBonusEnrollment,
 )
 
 # The manual paste-in fields, in display order. (label, field, is_deduction)
@@ -300,9 +300,23 @@ def input_type(request, key):
         for aid, val in totals.items():
             WeeklyPayInput.objects.update_or_create(
                 agent_id=aid, week_start=week_start, defaults={field: val})
-        request.session[f'nomina_unmatched_{key}'] = [
-            {'who': str(u['who']), 'amount': str(u['amount'])} for u in unmatched]
-        messages.success(request, f"Imported {len(totals)} {t['label']} value(s); {len(unmatched)} row(s) unmatched.")
+        # Persist unmatched rows so they stay visible until acknowledged — a fresh
+        # upload rebuilds this week/type's set from scratch.
+        UnmatchedInputRow.objects.filter(week_start=week_start, input_key=key).delete()
+        UnmatchedInputRow.objects.bulk_create([
+            UnmatchedInputRow(week_start=week_start, input_key=key,
+                              who=str(u['who'])[:200], amount=u['amount'])
+            for u in unmatched])
+        messages.success(request, f"Imported {len(totals)} {t['label']} value(s); "
+                                  f"{len(unmatched)} row(s) need acknowledgement." if unmatched
+                                  else f"Imported {len(totals)} {t['label']} value(s); all rows matched.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    if request.method == 'POST' and request.POST.get('ack'):  # acknowledge unmatched row(s)
+        val = request.POST['ack']
+        qs = UnmatchedInputRow.objects.filter(week_start=week_start, input_key=key, acknowledged=False)
+        n = qs.update(acknowledged=True) if val == 'all' else qs.filter(pk=val).update(acknowledged=True)
+        messages.success(request, f"Acknowledged {n} row(s)." if val == 'all' else "Acknowledged.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     if request.method == 'POST':  # manual save
@@ -339,7 +353,8 @@ def input_type(request, key):
         rows.append(row)
     if show_pesos:   # people with spiffs float to the top, like the file
         rows.sort(key=lambda r: (r['val'] == 0, -r['val'], r['name'].lower()))
-    unmatched = request.session.pop(f'nomina_unmatched_{key}', [])
+    unmatched = list(UnmatchedInputRow.objects.filter(
+        week_start=week_start, input_key=key, acknowledged=False))
     ctx = _nav(week_start, week_dates)
     ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched, 'show_pesos': show_pesos,
                 'fx_rate': fx_rate,

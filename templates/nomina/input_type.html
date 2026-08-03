@@ -37,11 +37,33 @@
 
 {% if unmatched %}
 <div class="card" style="background:#fef2f2;border:1px solid #fca5a5;">
-    <h3 style="margin-top:0;color:#b91c1c;">{{ unmatched|length }} unmatched row(s) — not imported</h3>
-    <table style="width:100%;font-size:13px;"><thead><tr><th style="text-align:left;">Who (from file)</th><th style="text-align:right;">Amount</th></tr></thead>
-        <tbody>{% for u in unmatched %}<tr><td>{{ u.who }}</td><td style="text-align:right;font-family:monospace;">{{ u.amount }}</td></tr>{% endfor %}</tbody>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <h3 style="margin:0;color:#b91c1c;">&#9888; {{ unmatched|length }} unmatched row(s) — need review</h3>
+        <form method="post" style="margin:0;">{% csrf_token %}
+            <input type="hidden" name="ack" value="all">
+            <button type="submit" class="btn" style="background:#b91c1c;color:#fff;padding:6px 12px;">Acknowledge all</button>
+        </form>
+    </div>
+    <p style="font-size:12px;color:#7f1d1d;margin:6px 0 10px;">These people are <strong>not</strong> being paid this amount. Fix the name/ID in the file
+    (or their profile) and re-upload, enter them by hand below, or <strong>Acknowledge</strong> to confirm you're intentionally skipping them.
+    This notice stays until every row is acknowledged.</p>
+    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+        <thead><tr style="text-align:left;border-bottom:1px solid #fca5a5;">
+            <th style="padding:4px 8px;">Who (from file)</th>
+            <th style="padding:4px 8px;text-align:right;">Amount</th>
+            <th style="padding:4px 8px;"></th></tr></thead>
+        <tbody>{% for u in unmatched %}
+            <tr style="border-bottom:1px solid #fee2e2;">
+                <td style="padding:4px 8px;">{{ u.who }}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:monospace;">{{ u.amount }}</td>
+                <td style="padding:4px 8px;text-align:right;">
+                    <form method="post" style="margin:0;">{% csrf_token %}
+                        <input type="hidden" name="ack" value="{{ u.pk }}">
+                        <button type="submit" class="btn" style="background:#e5e7eb;color:#333;padding:3px 12px;font-size:12px;">Acknowledge</button>
+                    </form>
+                </td>
+            </tr>{% endfor %}</tbody>
     </table>
-    <p style="font-size:12px;color:#888;margin:8px 0 0;">Fix the name/ID in your file (or the person's profile) and re-upload, or enter them by hand below.</p>
 </div>
 {% endif %}
 
