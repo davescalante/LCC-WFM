@@ -677,11 +677,33 @@ class AgentListExportTests(TestCase):
         self.assertIsNone(row[6])   # years
         self.assertIsNone(row[7])   # phone
 
-    def test_on_screen_table_unchanged(self):
+    def test_export_button_opens_column_picker(self):
+        # The export button opens a column-picker popup listing the available
+        # fields. xviewer is a coordinator (not a super admin), so financial
+        # fields like Hourly rate are NOT offered.
         resp = self.client.get(reverse('agent_list'))
-        self.assertNotContains(resp, 'Complete years')
-        self.assertNotContains(resp, 'Five9 username')
         self.assertContains(resp, 'Export Excel')
+        self.assertContains(resp, 'choose columns')             # the picker modal
+        self.assertContains(resp, 'Complete years with us')     # an export-only field, now selectable
+        self.assertContains(resp, 'Employee ID')                # a non-financial newly-available field
+        self.assertContains(resp, 'value="full_name" checked')  # default field pre-checked
+        self.assertNotContains(resp, 'Hourly rate')             # financial — gated to super admins
+
+    def test_hourly_rate_hidden_and_blocked_for_non_super(self):
+        # A non-super admin can't see the financial column and can't force it
+        # into the export by crafting the query — the server drops it.
+        ws = self._export_ws('&fields=hourly_rate&fields=full_name')
+        self.assertNotIn('Hourly rate (MXN)', [c.value for c in ws[1]])
+
+    def test_hourly_rate_available_to_super_admin(self):
+        self.viewer.is_super_admin = True
+        self.viewer.save()
+        resp = self.client.get(reverse('agent_list'))
+        self.assertContains(resp, 'Hourly rate (MXN)')
+        ws = self._export_ws('&fields=username&fields=hourly_rate')
+        header = [c.value for c in ws[1]]
+        self.assertIn('Hourly rate (MXN)', header)
+        self.assertIn('Username', header)
 
 
 from .models import AgentSeparation
