@@ -4,6 +4,7 @@ import csv
 import io
 import json
 
+from django.db import transaction
 from django.db.models import Q, Count as DbCount
 from django.core.cache import cache
 
@@ -1455,6 +1456,44 @@ def daily_hours_week(request):
     })
 
 
+def _reconcile_stale_actual_hours(upload_date):
+    """
+    Zero actual_hours for any agent who no longer has a billable-matched
+    DailyAgentHours row for upload_date — covers deletions and replacement
+    uploads that drop a previously-matched agent from the file. Only updates
+    existing non-zero values; never creates AdherenceRecord rows.
+
+    Username comparison uses .strip().lower() on both sides (matching the
+    agent_map convention above, not the unnormalized billable_names checks
+    elsewhere in this file) because Five9Profile.five9_username is stored
+    with only .strip() applied, while DailyAgentHours.five9_username is
+    stored .strip().lower()'d. Do not remove either .lower() call — it is
+    the only thing preventing a mixed-case billable username from being
+    treated as unmatched and having its real, current hours zeroed.
+    """
+    valid_agent_ids = set()
+    billable_cache = {}
+    for dah in DailyAgentHours.objects.filter(upload__date=upload_date, agent__isnull=False):
+        agent_id = dah.agent_id
+        if agent_id not in billable_cache:
+            billable_cache[agent_id] = {
+                u.strip().lower() for u in
+                Five9Profile.objects.filter(agent_id=agent_id, billable=True)
+                .values_list('five9_username', flat=True)
+            }
+        billable_names = billable_cache[agent_id]
+        if billable_names and dah.five9_username.strip().lower() not in billable_names:
+            continue  # not the billable-matched row for this agent
+        valid_agent_ids.add(agent_id)
+
+    (AdherenceRecord.objects
+        .filter(date=upload_date)
+        .exclude(agent_id__in=valid_agent_ids)
+        .exclude(actual_hours__isnull=True)
+        .exclude(actual_hours=0)
+        .update(actual_hours=Decimal('0')))
+
+
 def _zero_missing_scheduled(upload_date, matched_agent_ids):
     """
     After a daily upload, agents who are scheduled on upload_date but absent
@@ -1545,77 +1584,79 @@ def upload_daily_file(request):
         ).select_related('agent__user', 'agent__supervisor__user')
     }
 
-    DailyUpload.objects.filter(date=upload_date).delete()
+    with transaction.atomic():
+        DailyUpload.objects.filter(date=upload_date).delete()
 
-    upload = DailyUpload.objects.create(
-        date=upload_date,
-        filename=csv_file.name,
-        row_count=len(rows),
-    )
-
-    unmatched = 0
-    dah_objects = []
-
-    for row in rows:
-        username = (row.get('AGENT') or row.get('Agent') or '').strip().lower()
-        agent_group = (row.get('AGENT GROUP') or row.get('Agent Group') or '').strip()
-        login_str = (row.get('LOGIN TIME') or row.get('Login Time') or '').strip()
-        not_ready_str = (row.get('NOT READY TIME') or row.get('Not Ready Time') or '').strip()
-
-        if not username:
-            continue
-
-        agent = agent_map.get(username)
-        if not agent:
-            unmatched += 1
-
-        dah = DailyAgentHours(
-            upload=upload,
-            agent=agent,
-            five9_username=username,
-            agent_group=agent_group,
-            login_seconds=_hhmmss_to_seconds(login_str),
-            not_ready_seconds=_hhmmss_to_seconds(not_ready_str),
-        )
-        dah_objects.append(dah)
-
-    DailyAgentHours.objects.bulk_create(dah_objects, ignore_conflicts=True)
-    upload.unmatched_count = unmatched
-    upload.save()
-
-    billable_usernames_cache = {}
-    for dah in dah_objects:
-        if not dah.agent_id:
-            continue
-        # Only update actual_hours from billable profiles
-        agent_id = dah.agent_id
-        if agent_id not in billable_usernames_cache:
-            billable_usernames_cache[agent_id] = set(
-                Five9Profile.objects.filter(agent_id=agent_id, billable=True)
-                .values_list('five9_username', flat=True)
-            )
-        billable_names = billable_usernames_cache[agent_id]
-        if billable_names and dah.five9_username not in billable_names:
-            continue  # Skip non-billable profile rows
-
-        coded_secs = sum(
-            c.total_seconds_count()
-            for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
-        )
-        total_secs = dah.login_seconds + coded_secs
-        allowance_secs = int(total_secs * _upload_nr_ratio)
-        excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-        login_final_secs = max(0, dah.login_seconds - excess_secs)
-        final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
-
-        AdherenceRecord.objects.update_or_create(
-            agent_id=dah.agent_id,
+        upload = DailyUpload.objects.create(
             date=upload_date,
-            defaults={'actual_hours': final_hours},
+            filename=csv_file.name,
+            row_count=len(rows),
         )
 
-    matched_agent_ids = {dah.agent_id for dah in dah_objects if dah.agent_id}
-    _zero_missing_scheduled(upload_date, matched_agent_ids)
+        unmatched = 0
+        dah_objects = []
+
+        for row in rows:
+            username = (row.get('AGENT') or row.get('Agent') or '').strip().lower()
+            agent_group = (row.get('AGENT GROUP') or row.get('Agent Group') or '').strip()
+            login_str = (row.get('LOGIN TIME') or row.get('Login Time') or '').strip()
+            not_ready_str = (row.get('NOT READY TIME') or row.get('Not Ready Time') or '').strip()
+
+            if not username:
+                continue
+
+            agent = agent_map.get(username)
+            if not agent:
+                unmatched += 1
+
+            dah = DailyAgentHours(
+                upload=upload,
+                agent=agent,
+                five9_username=username,
+                agent_group=agent_group,
+                login_seconds=_hhmmss_to_seconds(login_str),
+                not_ready_seconds=_hhmmss_to_seconds(not_ready_str),
+            )
+            dah_objects.append(dah)
+
+        DailyAgentHours.objects.bulk_create(dah_objects, ignore_conflicts=True)
+        upload.unmatched_count = unmatched
+        upload.save()
+
+        billable_usernames_cache = {}
+        for dah in dah_objects:
+            if not dah.agent_id:
+                continue
+            # Only update actual_hours from billable profiles
+            agent_id = dah.agent_id
+            if agent_id not in billable_usernames_cache:
+                billable_usernames_cache[agent_id] = set(
+                    Five9Profile.objects.filter(agent_id=agent_id, billable=True)
+                    .values_list('five9_username', flat=True)
+                )
+            billable_names = billable_usernames_cache[agent_id]
+            if billable_names and dah.five9_username not in billable_names:
+                continue  # Skip non-billable profile rows
+
+            coded_secs = sum(
+                c.total_seconds_count()
+                for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
+            )
+            total_secs = dah.login_seconds + coded_secs
+            allowance_secs = int(total_secs * _upload_nr_ratio)
+            excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
+            login_final_secs = max(0, dah.login_seconds - excess_secs)
+            final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
+
+            AdherenceRecord.objects.update_or_create(
+                agent_id=dah.agent_id,
+                date=upload_date,
+                defaults={'actual_hours': final_hours},
+            )
+
+        matched_agent_ids = {dah.agent_id for dah in dah_objects if dah.agent_id}
+        _reconcile_stale_actual_hours(upload_date)
+        _zero_missing_scheduled(upload_date, matched_agent_ids)
 
     log_action(request.user, 'Uploaded daily login file',
                f'{csv_file.name} for {upload_date} — {len(dah_objects)} rows matched, {unmatched} unmatched')
@@ -1654,51 +1695,53 @@ def rematch_daily_upload(request):
         ).select_related('agent')
     }
 
-    newly_matched = 0
-    billable_usernames_cache = {}
-    for dah in DailyAgentHours.objects.filter(upload=upload, agent__isnull=True):
-        agent = agent_map.get(dah.five9_username.strip().lower())
-        if not agent:
-            continue
-        dah.agent = agent
-        dah.save(update_fields=['agent'])
-        newly_matched += 1
+    with transaction.atomic():
+        newly_matched = 0
+        billable_usernames_cache = {}
+        for dah in DailyAgentHours.objects.filter(upload=upload, agent__isnull=True):
+            agent = agent_map.get(dah.five9_username.strip().lower())
+            if not agent:
+                continue
+            dah.agent = agent
+            dah.save(update_fields=['agent'])
+            newly_matched += 1
 
-        # Only update actual_hours from billable profiles
-        if agent.pk not in billable_usernames_cache:
-            billable_usernames_cache[agent.pk] = set(
-                Five9Profile.objects.filter(agent=agent, billable=True)
-                .values_list('five9_username', flat=True)
+            # Only update actual_hours from billable profiles
+            if agent.pk not in billable_usernames_cache:
+                billable_usernames_cache[agent.pk] = set(
+                    Five9Profile.objects.filter(agent=agent, billable=True)
+                    .values_list('five9_username', flat=True)
+                )
+            billable_names = billable_usernames_cache[agent.pk]
+            if billable_names and dah.five9_username not in billable_names:
+                continue  # Skip non-billable profile rows
+
+            coded_secs = sum(
+                c.total_seconds_count()
+                for c in Coding.objects.filter(agent=agent, date=upload_date)
             )
-        billable_names = billable_usernames_cache[agent.pk]
-        if billable_names and dah.five9_username not in billable_names:
-            continue  # Skip non-billable profile rows
+            total_secs = dah.login_seconds + coded_secs
+            allowance_secs = int(total_secs * _rematch_nr_ratio)
+            excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
+            login_final_secs = max(0, dah.login_seconds - excess_secs)
+            final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
 
-        coded_secs = sum(
-            c.total_seconds_count()
-            for c in Coding.objects.filter(agent=agent, date=upload_date)
+            AdherenceRecord.objects.update_or_create(
+                agent=agent,
+                date=upload_date,
+                defaults={'actual_hours': final_hours},
+            )
+
+        still_unmatched = DailyAgentHours.objects.filter(upload=upload, agent__isnull=True).count()
+        upload.unmatched_count = still_unmatched
+        upload.save(update_fields=['unmatched_count'])
+
+        matched_agent_ids = set(
+            DailyAgentHours.objects.filter(upload=upload, agent__isnull=False)
+            .values_list('agent_id', flat=True)
         )
-        total_secs = dah.login_seconds + coded_secs
-        allowance_secs = int(total_secs * _rematch_nr_ratio)
-        excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-        login_final_secs = max(0, dah.login_seconds - excess_secs)
-        final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
-
-        AdherenceRecord.objects.update_or_create(
-            agent=agent,
-            date=upload_date,
-            defaults={'actual_hours': final_hours},
-        )
-
-    still_unmatched = DailyAgentHours.objects.filter(upload=upload, agent__isnull=True).count()
-    upload.unmatched_count = still_unmatched
-    upload.save(update_fields=['unmatched_count'])
-
-    matched_agent_ids = set(
-        DailyAgentHours.objects.filter(upload=upload, agent__isnull=False)
-        .values_list('agent_id', flat=True)
-    )
-    _zero_missing_scheduled(upload_date, matched_agent_ids)
+        _reconcile_stale_actual_hours(upload_date)
+        _zero_missing_scheduled(upload_date, matched_agent_ids)
 
     return JsonResponse({'ok': True, 'newly_matched': newly_matched, 'still_unmatched': still_unmatched})
 
@@ -1709,9 +1752,12 @@ def delete_daily_upload_ajax(request):
     data = json.loads(request.body)
     date_str = data.get('date')
     try:
-        DailyUpload.objects.filter(date=date.fromisoformat(date_str)).delete()
+        upload_date = date.fromisoformat(date_str)
     except (ValueError, TypeError):
         return JsonResponse({'ok': False, 'error': 'invalid date'}, status=400)
+    with transaction.atomic():
+        DailyUpload.objects.filter(date=upload_date).delete()
+        _reconcile_stale_actual_hours(upload_date)
     log_action(request.user, 'Deleted daily upload', f'Deleted upload for {date_str}')
     return JsonResponse({'ok': True})
 
