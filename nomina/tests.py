@@ -158,6 +158,74 @@ class NominaSpiffUploadTests(TestCase):
             week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
 
 
+class NominaHolidayPayTests(TestCase):
+    """End-to-end proof of the holiday-worked premium: an agent who works a
+    designated holiday earns a 2× premium on those hours (on top of the 1×
+    already in base pay = triple). Uses injected Five9 attendance so the numbers
+    are real, and pins down the raw-login vs NR-adjusted-hours behavior."""
+
+    def _agent(self, rate='62.50'):
+        from scheduling.models import Five9Profile
+        u = User.objects.create_user('holguy', password='x', first_name='Hol', last_name='Guy')
+        a = Agent.objects.create(
+            user=u, role='agent', role_type='regular_agent', agent_name='holguy',
+            status='active', employer='Infinity', track_attendance=True,
+            hourly_rate=Decimal(rate),
+        )
+        Five9Profile.objects.create(agent=a, five9_username='holagent', billable=True, is_primary=True)
+        return a
+
+    def _log_day(self, agent, day, login_h, nr_h=0):
+        from adherence.models import DailyUpload, DailyAgentHours
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+        DailyAgentHours.objects.create(
+            upload=up, agent=agent, five9_username='holagent',
+            login_seconds=int(login_h * 3600), not_ready_seconds=int(nr_h * 3600))
+
+    def test_worked_holiday_pays_triple_with_no_nr(self):
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        import datetime
+        a = self._agent()
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]                       # a mid-week holiday, worked 8h, no NR
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        self._log_day(a, holiday, login_h=8, nr_h=0)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        # rate 62.50, 8 worked holiday hours, no NR deduction
+        self.assertEqual(r['rate'], Decimal('62.50'))
+        self.assertEqual(r['hours'], Decimal('8'))                 # final_hrs
+        self.assertEqual(r['base_pay'], Decimal('500.00'))         # 8 × 62.50 (the 1×)
+        self.assertEqual(r['holiday_pay'], Decimal('1000.00'))     # 8 × 62.50 × 2 (the +2×)
+        # Base (1×) + holiday premium (2×) = triple pay on the holiday hours.
+        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('8') * Decimal('62.50') * 3)
+
+    def test_holiday_premium_uses_raw_login_while_base_is_nr_adjusted(self):
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        import datetime
+        a = self._agent()
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        # 8h logged with 3h not-ready → weekly NR ratio check deducts 2h (3 − 8×0.125).
+        self._log_day(a, holiday, login_h=8, nr_h=3)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['hours'], Decimal('6'))                 # final_hrs = 8 − 2 NR
+        self.assertEqual(r['base_pay'], Decimal('375.00'))         # 6 × 62.50 (NR-adjusted)
+        self.assertEqual(r['holiday_pay'], Decimal('1000.00'))     # 8 × 62.50 × 2 (RAW login)
+        # NOTE: total is 1375, not the "pure triple" 1500 — the holiday PREMIUM is on
+        # raw login hours, but base pay deducts the week's NR. This is the behavior to
+        # confirm with David (premium on raw vs NR-adjusted holiday hours).
+        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('1375.00'))
+
+
 class NominaKillTeamScopeTests(TestCase):
     """Kill Team QA: role-scoped to Kill Team, no EMP column, standard $400 default."""
 
