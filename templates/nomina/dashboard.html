@@ -15,21 +15,49 @@
     </div>
 </div>
 
-<div class="card">
-    <h2>Weekly payroll</h2>
-    <p style="color:#555;font-size:14px;line-height:1.7;margin-bottom:10px;">
-        Foundation of the Nómina section. Upcoming phases add the weekly
-        <strong>Agent &amp; Admin payroll assembly</strong> (reusing the existing
-        hours and bonus engines), the <strong>paste-imports</strong> (LPO, spiffs,
-        comedor, …), the <strong>Loan</strong>, <strong>Break-Abuse</strong>,
-        <strong>Welcome-Bonus</strong>, and <strong>Vacation-Tracker</strong>
-        modules, and the <strong>Excel exports</strong>.
-    </p>
-    <p style="color:#888;font-size:13px;margin:0 0 14px;">Super-admin only.</p>
-    <div style="display:flex;gap:10px;">
-        <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#5d6d7e;color:white;">Edit Inputs (LPO, spiffs, …)</a>
-        <a href="{% url 'nomina:agent_nomina' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Open Agent Nómina &#8594;</a>
-    </div>
+<style>
+    .nom-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+    .nom-card { display:block; text-decoration:none; color:inherit; background:white; border:1px solid #e2e8f0;
+                border-radius:10px; padding:16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.06); transition:.15s; }
+    .nom-card:hover { border-color:#1a3a5c; box-shadow:0 3px 10px rgba(0,0,0,.1); transform:translateY(-1px); }
+    .nom-card.soon { opacity:.6; pointer-events:none; }
+    .nom-card h3 { margin:0 0 6px; font-size:15px; color:#1a3a5c; }
+    .nom-card p { margin:0; font-size:12px; color:#666; line-height:1.5; }
+    .nom-tag { display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:10px; margin-bottom:8px; }
+    .nom-tag.ready { background:#dcfce7; color:#166534; }
+    .nom-tag.soon  { background:#f1f5f9; color:#64748b; }
+</style>
+
+<h2 style="font-size:16px;margin:0 0 10px;">Payroll</h2>
+<div class="nom-grid" style="margin-bottom:24px;">
+    <a class="nom-card" href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <span class="nom-tag ready">READY</span>
+        <h3>Inputs</h3>
+        <p>Enter/paste LPO, spiffs, welcome, referral, Kill Team QA, comedor, transportation per agent.</p>
+    </a>
+    <a class="nom-card" href="{% url 'nomina:agent_nomina' %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <span class="nom-tag ready">READY</span>
+        <h3>Agent Nómina</h3>
+        <p>Weekly agent payroll — auto columns + your inputs → subtotal &amp; total.</p>
+    </a>
+    <a class="nom-card" href="{% url 'nomina:admin_nomina' %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <span class="nom-tag ready">READY</span>
+        <h3>Admin Nómina</h3>
+        <p>Official Admins — wage × hours + admin bonus + admin inputs.</p>
+    </a>
 </div>
+
+<h2 style="font-size:16px;margin:0 0 10px;">Modules <span style="font-size:12px;font-weight:400;color:#888;">— building next</span></h2>
+<div class="nom-grid">
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Welcome Bonus</h3><p>Editable eligibility table (username · amount · # weeks, auto-drops off).</p></div>
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Loans (Préstamo)</h3><p>Add loans (1wk ×1.25 / 2wk ×1.35), auto weekly drawdown, active-loan view.</p></div>
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Break Abuse</h3><p>Log incidents → zeroes that week's adherence bonus.</p></div>
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Vacation Tracker</h3><p>Tenure-based accrual, approvals, used/remaining balances.</p></div>
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Holidays</h3><p>Company holiday calendar + triple-pay when worked.</p></div>
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Overrides</h3><p>Make every computed cell editable &amp; saved per week.</p></div>
+    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Exports</h3><p>Yours/Mine Excel in your exact format, with auto-notes.</p></div>
+</div>
+
+<p style="margin-top:20px;font-size:12px;color:#999;">Super-admin only · Infinity employees · test build (not live)</p>
 
 {% endblock %}

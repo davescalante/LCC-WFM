@@ -37,17 +37,33 @@ def _dec(val):
         return Decimal('0')
 
 
-def _infinity_agents(week_start):
-    from scheduling.models import Agent
-    pay_window = Q(status='active') | Q(
+def _pay_window(week_start):
+    return Q(status='active') | Q(
         status='inactive', separations__status='finalized',
         separations__remove_from_adherence_date__gt=week_start,
     )
+
+
+def _infinity_agents(week_start):
+    from scheduling.models import Agent
     return list(
-        Agent.objects.filter(pay_window)
+        Agent.objects.filter(_pay_window(week_start))
         .filter(Q(track_attendance=True) | Q(five9_profiles__billable=True))
         .filter(employer='Infinity')       # INFINITY only — LCC excluded
         .exclude(is_official_admin=True)   # admins go on the Admin Nómina
+        .distinct()
+        .select_related('user', 'supervisor__user')
+        .prefetch_related('five9_profiles')
+        .order_by('user__last_name', 'user__first_name')
+    )
+
+
+def _admin_agents(week_start):
+    from scheduling.models import Agent
+    return list(
+        Agent.objects.filter(_pay_window(week_start))
+        .filter(is_official_admin=True)
+        .filter(employer='Infinity')
         .distinct()
         .select_related('user', 'supervisor__user')
         .prefetch_related('five9_profiles')
@@ -177,3 +193,58 @@ def agent_nomina(request):
                    'spiff': tot_spiff, 'subtotal': tot_sub, 'total': tot_total},
     })
     return render(request, 'nomina/agent_nomina.html', ctx)
+
+
+@login_required
+@nomina_access_required
+def admin_nomina(request):
+    """Admin Nómina — Official Admins (Infinity). Base = hours × admin wage,
+    plus the fixed admin bonus, plus admin spiffs/commissions/referral, minus
+    comedor/transport. Reuses the same paste inputs + the existing engine."""
+    from finance.views import _get_billable_weekly_data
+    from finance.models import BillingSettings
+
+    week_start, week_dates = _week(request)
+    settings = BillingSettings.get_for_week(week_start)
+    nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
+    fx = nweek.spiff_fx_rate
+
+    agents = _admin_agents(week_start)
+    data = _get_billable_weekly_data(agents, week_dates, settings)
+    inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
+        agent__in=agents, week_start=week_start)}
+
+    rows = []
+    tot_base = tot_bonus = tot_sub = tot_total = Decimal('0')
+    for a in agents:
+        d = data.get(a.pk, {})
+        wi = inputs_map.get(a.pk)
+        base = d.get('base_pay_mxn', Decimal('0'))
+        admin_bonus = d.get('admin_bonus_mxn', Decimal('0'))
+
+        commissions = wi.lpo if wi else Decimal('0')
+        spiffs = ((wi.spiff_usd if wi else Decimal('0')) * fx).quantize(Decimal('0.01'))
+        referral = wi.referral if wi else Decimal('0')
+        comedor = wi.comedor if wi else Decimal('0')
+        transport = wi.transportation if wi else Decimal('0')
+
+        subtotal = base + spiffs + commissions + referral
+        total = subtotal + admin_bonus - comedor - transport  # loans/holiday later
+
+        rows.append({
+            'agent': a, 'emp': a.employee_id or '',
+            'name': a.user.get_full_name() or a.user.username,
+            'username': a.user.username,
+            'wage': d.get('hourly_mxn', Decimal('0')), 'hours': d.get('final_hrs', Decimal('0')),
+            'base_pay': base, 'spiffs': spiffs, 'commissions': commissions,
+            'referral': referral, 'subtotal': subtotal, 'admin_bonus': admin_bonus,
+            'comedor': comedor, 'transport': transport, 'total': total,
+        })
+        tot_base += base; tot_bonus += admin_bonus; tot_sub += subtotal; tot_total += total
+
+    ctx = _nav(week_start, week_dates)
+    ctx.update({
+        'rows': rows,
+        'totals': {'base': tot_base, 'bonus': tot_bonus, 'subtotal': tot_sub, 'total': tot_total},
+    })
+    return render(request, 'nomina/admin_nomina.html', ctx)
