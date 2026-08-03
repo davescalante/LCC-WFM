@@ -10,11 +10,49 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
     <h1>Users</h1>
     <div style="display:flex;gap:8px;align-items:center;">
-        <a href="?export=1&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}&role_type={{ selected_role_type }}"
-           class="btn btn-primary" style="padding:5px 14px;font-size:12px;">Export Excel</a>
+        <button type="button" onclick="document.getElementById('exportModal').style.display='flex'"
+           class="btn btn-primary" style="padding:5px 14px;font-size:12px;">Export Excel</button>
         <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add User</a>
     </div>
 </div>
+
+<!-- Export column-picker popup -->
+<div id="exportModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:10px;max-width:560px;width:92%;max-height:86vh;overflow:auto;padding:22px 24px;box-shadow:0 10px 40px rgba(0,0,0,.25);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <h2 style="margin:0;font-size:18px;color:#1a3a5c;">Export Users — choose columns</h2>
+            <button type="button" onclick="document.getElementById('exportModal').style.display='none'"
+                    style="background:none;border:none;font-size:24px;line-height:1;cursor:pointer;color:#888;">&times;</button>
+        </div>
+        <p style="font-size:12px;color:#888;margin:0 0 12px;">Pick the fields to include — a fresh choice each time. Uses your current filters (status, role, supervisor).</p>
+        <form method="get" action="">
+            <input type="hidden" name="export" value="1">
+            <input type="hidden" name="supervisor" value="{{ selected_supervisor }}">
+            <input type="hidden" name="status_filter" value="{{ status_filter }}">
+            <input type="hidden" name="role_type" value="{{ selected_role_type }}">
+            <div style="margin-bottom:10px;display:flex;gap:8px;">
+                <button type="button" onclick="expToggle(true)" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Select all</button>
+                <button type="button" onclick="expToggle(false)" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Clear</button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px 18px;margin-bottom:18px;">
+                {% for f in export_fields %}
+                <label style="display:flex;align-items:center;justify-content:flex-start;text-align:left;gap:8px;font-size:13px;font-weight:400;cursor:pointer;">
+                    <input type="checkbox" class="exp-field" name="fields" value="{{ f.key }}" {% if f.checked %}checked{% endif %} style="flex:none;margin:0;width:15px;height:15px;">
+                    <span>{{ f.label }}</span>
+                </label>
+                {% endfor %}
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;">
+                <button type="button" onclick="document.getElementById('exportModal').style.display='none'" class="btn btn-cancel">Cancel</button>
+                <button type="submit" class="btn btn-primary">Download Excel</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+function expToggle(v){document.querySelectorAll('.exp-field').forEach(function(c){c.checked=v;});}
+document.getElementById('exportModal').addEventListener('click',function(e){if(e.target===this)this.style.display='none';});
+</script>
 {% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
 
 <!-- Filters -->
