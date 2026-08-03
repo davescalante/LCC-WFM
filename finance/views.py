@@ -1249,6 +1249,46 @@ def delete_admin_coding_ajax(request):
 
 # ─── Admin Adherence ──────────────────────────────────────────────────────────
 
+def _apply_live_login_hours(agents, week_dates, record_map):
+    """
+    Overwrite in-memory AdherenceRecord.actual_hours with LIVE raw billable
+    login hours per (agent, date), summed across ALL billable Five9 profiles —
+    the exact source Billing Report v2 uses.
+
+    Why: the admin adherence tab otherwise reads the STORED actual_hours, which
+    already had a per-day not-ready deduction baked in at upload time;
+    _build_rows then re-applies the weekly NR cap on top, so Official Admins
+    show false "missing time" even though the connected time is present (and
+    Billing v2 shows it correctly). This also fixes admins with 2+ billable
+    Five9 profiles, whose stored value held only the last profile's login
+    instead of the sum.
+
+    The record_map objects are request-scoped and are NEVER saved — this
+    changes only what this page/export displays, not the database, Billing v2,
+    the pay engine, or the regular adherence dashboard.
+    """
+    if not agents:
+        return
+    billable_map, _ = get_billable_username_map([a.pk for a in agents])
+    login_hrs = {}
+    for r in DailyAgentHours.objects.filter(
+        upload__date__in=week_dates, agent__in=agents
+    ).values('agent_id', 'upload__date', 'five9_username', 'login_seconds'):
+        aid = r['agent_id']
+        if aid is None:
+            continue
+        bnames = billable_map.get(aid)
+        if bnames is None or r['five9_username'].strip().lower() in bnames:
+            key = (aid, r['upload__date'])
+            login_hrs[key] = login_hrs.get(key, Decimal('0')) + Decimal(str(r['login_seconds'])) / Decimal('3600')
+    for (aid, d), hrs in login_hrs.items():
+        rec = record_map.get((aid, d))
+        if rec is not None:
+            rec.actual_hours = hrs
+        else:
+            record_map[(aid, d)] = AdherenceRecord(agent_id=aid, date=d, actual_hours=hrs, status='')
+
+
 @login_required
 @admin_tabs_access_required
 def admin_adherence(request):
@@ -1281,6 +1321,11 @@ def admin_adherence(request):
     coded_map = {}
     for c in Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
         coded_map[(c.agent_id, c.date)] = coded_map.get((c.agent_id, c.date), Decimal('0')) + Decimal(str(c.total_hours()))
+
+    # Reflect LIVE billable login hours (same source as Billing v2) instead of
+    # the stored, double-NR-deducted actual_hours that made Official Admins show
+    # false "missing time". Request-scoped; never saved.
+    _apply_live_login_hours(agents, week_dates, record_map)
 
     rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
                        extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
@@ -1359,6 +1404,11 @@ def admin_adherence_export(request):
     coded_map = {}
     for c in Coding.objects.filter(date__in=week_dates, agent__in=agents, is_admin_coding=True):
         coded_map[(c.agent_id, c.date)] = coded_map.get((c.agent_id, c.date), Decimal('0')) + Decimal(str(c.total_hours()))
+
+    # Reflect LIVE billable login hours (same source as Billing v2) instead of
+    # the stored, double-NR-deducted actual_hours that made Official Admins show
+    # false "missing time". Request-scoped; never saved.
+    _apply_live_login_hours(agents, week_dates, record_map)
 
     rows = _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=ot_map,
                        extra_hrs_map=extra_hrs_map, split_labels_map=split_labels_map,
