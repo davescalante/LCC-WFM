@@ -80,6 +80,12 @@ class StaffRequestTests(TestCase):
         self.assertEqual(ar.status, 'pending')
 
     def test_assigned_supervisor_approval_auto_applies(self):
+        from .models import EmploymentPeriod
+        # Give the coordinator real tenure so their 2-day request is within their
+        # accrued vacation balance (else it's an over-balance request that only a
+        # super admin could approve).
+        EmploymentPeriod.objects.create(
+            agent=self.coordinator, start_date=date.today() - timedelta(days=800))
         ar = self._submit_vacation(self.coordinator)
         self._login(self.boss)
         self.client.post(reverse('request_approve', kwargs={'pk': ar.pk}))
