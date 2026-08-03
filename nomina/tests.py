@@ -268,6 +268,27 @@ class NominaTransportationTests(TestCase):
         self.assertContains(resp, 'No one added yet this week')
 
 
+class NominaReferralManualTests(TestCase):
+    """Referral uses the same manual add-list as Transportation (no upload)."""
+
+    def setUp(self):
+        from nomina.models import WeeklyPayInput
+        self.WeeklyPayInput = WeeklyPayInput
+        _make_agent('rf_super', is_super_admin=True)
+        self.client.login(username='rf_super', password='x')
+        self.a = _make_infinity('rfone', '7001')
+        self.ws = get_week_start()
+        self.url = reverse('nomina:input_type', args=['referral'])
+
+    def test_manual_only_and_add(self):
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'Add an agent')
+        self.assertNotContains(resp, 'Upload a file')
+        self.client.post(self.url, {'add_agent': self.a.pk, 'add_amount': '500'}, follow=True)
+        wi = self.WeeklyPayInput.objects.get(agent=self.a, week_start=self.ws)
+        self.assertEqual(wi.referral, Decimal('500'))
+
+
 class NominaFxRateTests(TestCase):
     """The weekly USD→MXN rate is a scalar — a comma is a DECIMAL point (es-MX
     '18,50'), never a thousands separator. A comma must not inflate it 100x, and

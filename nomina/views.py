@@ -28,7 +28,9 @@ INPUT_TYPES = [
      'desc': 'Spiffs in USD — a person can appear on many rows and all are summed, '
              'then converted at the week rate. Columns: Agent Username / Agent ID + the $ amount.'},
     {'key': 'referral', 'field': 'referral', 'label': 'Referral', 'unit': 'MXN', 'deduction': False,
-     'aggregate': False, 'match': 'auto', 'desc': 'Referral bonus. Columns: Username + Amount.'},
+     'aggregate': False, 'match': 'auto', 'manual_add': True, 'totals': True,
+     'show_emp': False, 'name_only_agent': True,
+     'desc': 'Manual, per-week — add an agent and enter the referral amount. The list starts empty each week.'},
     {'key': 'killqa', 'field': 'kill_team_qa', 'label': 'Kill Team QA', 'unit': 'MXN', 'deduction': False,
      'aggregate': False, 'match': 'auto', 'roles': ['kill_team'],
      'default_amount': 400, 'show_emp': False, 'name_only_agent': True,
