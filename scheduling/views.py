@@ -220,10 +220,19 @@ USER_EXPORT_FIELDS = [
 # The original 8-column export — the default when nothing is picked.
 USER_EXPORT_DEFAULTS = ['full_name', 'role_type', 'supervisor', 'status',
                         'primary_five9', 'start_date', 'years', 'phone']
+# Financial columns — offered/exported only to super admins (financial info is
+# hidden from everyone else). Enforced server-side, not just in the picker.
+USER_EXPORT_FINANCIAL = {'hourly_rate'}
 
 
 @login_required
 def agent_list(request):
+    # Financial columns (e.g. hourly rate) are for super admins only.
+    is_super = request.user.is_superuser or getattr(
+        getattr(request.user, 'agent', None), 'is_super_admin', False)
+    allowed_export_fields = [f for f in USER_EXPORT_FIELDS
+                             if f[0] not in USER_EXPORT_FINANCIAL or is_super]
+    allowed_keys = {f[0] for f in allowed_export_fields}
     supervisors = Agent.objects.filter(
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
@@ -283,9 +292,11 @@ def agent_list(request):
             agents = agents.filter(status_q | pay_window_q).distinct()
 
         # Which columns the user picked in the export popup (preserve registry
-        # order; fall back to the classic set if nothing was selected).
+        # order; drop anything they're not allowed to see; fall back to the
+        # classic set — minus any restricted field — if nothing was selected).
         picked = set(request.GET.getlist('fields'))
-        selected = [k for k, _l, _w in USER_EXPORT_FIELDS if k in picked] or list(USER_EXPORT_DEFAULTS)
+        selected = [k for k, _l, _w in allowed_export_fields if k in picked] \
+            or [k for k in USER_EXPORT_DEFAULTS if k in allowed_keys]
         label_by_key = {k: l for k, l, _w in USER_EXPORT_FIELDS}
         width_by_key = {k: w for k, _l, w in USER_EXPORT_FIELDS}
 
@@ -376,7 +387,7 @@ def agent_list(request):
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'selected_role_type': role_type_filter,
         'export_fields': [{'key': k, 'label': l, 'checked': k in USER_EXPORT_DEFAULTS}
-                          for k, l, _w in USER_EXPORT_FIELDS],
+                          for k, l, _w in allowed_export_fields],
     })
 
 
