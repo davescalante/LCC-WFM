@@ -16,15 +16,27 @@ from .models import (
 )
 
 # The manual paste-in fields, in display order. (label, field, is_deduction)
-INPUT_FIELDS = [
-    ('LPO', 'lpo', False),
-    ('Spiff (USD)', 'spiff_usd', False),
-    ('Welcome', 'welcome', False),
-    ('Referral', 'referral', False),
-    ('Kill Team QA', 'kill_team_qa', False),
-    ('Comedor', 'comedor', True),
-    ('Transportation', 'transportation', True),
+# Per-type input modules. Each maps to one WeeklyPayInput field. `aggregate`
+# sums all matched rows per person (e.g. a Comedor POS export); otherwise one
+# value per person. `unit` is display only (USD spiffs convert at the week rate).
+INPUT_TYPES = [
+    {'key': 'lpo', 'field': 'lpo', 'label': 'LPO', 'unit': 'MXN', 'deduction': False,
+     'aggregate': False, 'match': 'auto',
+     'desc': 'Sales commission. Upload with columns Username + Amount.'},
+    {'key': 'spiff', 'field': 'spiff_usd', 'label': 'Spiffs', 'unit': 'USD', 'deduction': False,
+     'aggregate': False, 'match': 'auto',
+     'desc': 'Spiffs in USD (converted at the week rate). Columns: Username + Amount/Dollars.'},
+    {'key': 'referral', 'field': 'referral', 'label': 'Referral', 'unit': 'MXN', 'deduction': False,
+     'aggregate': False, 'match': 'auto', 'desc': 'Referral bonus. Columns: Username + Amount.'},
+    {'key': 'killqa', 'field': 'kill_team_qa', 'label': 'Kill Team QA', 'unit': 'MXN', 'deduction': False,
+     'aggregate': False, 'match': 'auto', 'desc': 'Kill Team / QA bonus. Columns: Username + Amount.'},
+    {'key': 'comedor', 'field': 'comedor', 'label': 'Comedor', 'unit': 'MXN', 'deduction': True,
+     'aggregate': True, 'match': 'auto',
+     'desc': 'Cafeteria POS export — sums all charges per person. Columns: Employee ID + Price.'},
+    {'key': 'transportation', 'field': 'transportation', 'label': 'Transportation', 'unit': 'MXN', 'deduction': True,
+     'aggregate': False, 'match': 'auto', 'desc': 'Transportation deduction. Columns: Username + Amount.'},
 ]
+INPUT_TYPE_BY_KEY = {t['key']: t for t in INPUT_TYPES}
 
 
 def _week(request):
@@ -117,24 +129,106 @@ def dashboard(request):
 @login_required
 @nomina_access_required
 def inputs(request):
-    """The paste/entry grid for the manual columns (LPO, spiffs, comedor, …).
-
-    One row per Infinity agent; type or paste values, hit Save. Persists to
-    WeeklyPayInput per agent/week and the week's spiff FX rate to NominaWeek.
-    """
+    """Inputs hub — one module per input type + the week's spiff FX rate."""
     week_start, week_dates = _week(request)
-    agents = _infinity_agents(week_start)
     nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
 
-    if request.method == 'POST':
+    if request.method == 'POST' and 'spiff_fx_rate' in request.POST:
         nweek.spiff_fx_rate = _dec(request.POST.get('spiff_fx_rate') or nweek.spiff_fx_rate)
         nweek.save()
-        for a in agents:
-            vals = {f: _dec(request.POST.get(f'{f}_{a.pk}')) for _, f, _ in INPUT_FIELDS}
+        messages.success(request, "Spiff rate saved.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    # Per-type filled count (agents with a non-zero value this week)
+    agents = _infinity_agents(week_start)
+    existing = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
+        agent__in=agents, week_start=week_start)}
+    cards = []
+    for t in INPUT_TYPES:
+        filled = sum(1 for a in agents if existing.get(a.pk) and getattr(existing[a.pk], t['field']))
+        cards.append({**t, 'filled': filled})
+
+    ctx = _nav(week_start, week_dates)
+    ctx.update({'cards': cards, 'spiff_fx_rate': nweek.spiff_fx_rate})
+    return render(request, 'nomina/inputs.html', ctx)
+
+
+def _read_rows(uploaded):
+    """Read an uploaded .csv or .xlsx into (headers, list-of-row-lists)."""
+    name = (uploaded.name or '').lower()
+    if name.endswith('.csv'):
+        import csv, io
+        text = uploaded.read().decode('utf-8-sig', errors='replace')
+        r = list(csv.reader(io.StringIO(text)))
+        return (r[0] if r else []), r[1:]
+    import openpyxl, io
+    wb = openpyxl.load_workbook(io.BytesIO(uploaded.read()), data_only=True, read_only=True)
+    ws = wb.active
+    rows = [[c for c in row] for row in ws.iter_rows(values_only=True)]
+    return (rows[0] if rows else []), rows[1:]
+
+
+def _find_col(headers, keywords):
+    for i, h in enumerate(headers):
+        hl = str(h or '').strip().lower()
+        if any(k in hl for k in keywords):
+            return i
+    return None
+
+
+@login_required
+@nomina_access_required
+def input_type(request, key):
+    """One input module: upload a file (mapped by headers) or edit manually."""
+    t = INPUT_TYPE_BY_KEY.get(key)
+    if not t:
+        messages.error(request, "Unknown input type.")
+        return redirect('nomina:inputs')
+    field = t['field']
+    week_start, week_dates = _week(request)
+    agents = _infinity_agents(week_start)
+    by_username = {a.user.username.strip().lower(): a for a in agents}
+    by_empid = {(a.employee_id or '').strip(): a for a in agents if a.employee_id}
+    unmatched = []
+
+    if request.method == 'POST' and request.FILES.get('file'):
+        headers, data = _read_rows(request.FILES['file'])
+        user_col = _find_col(headers, ['username', 'user', 'agent', 'login'])
+        id_col = _find_col(headers, ['employee id', 'emp id', 'empid', 'employee', 'id'])
+        amt_col = _find_col(headers, ['amount', 'total', 'dollar', 'pesos', 'price', 'value', 'monto'])
+        if amt_col is None or (user_col is None and id_col is None):
+            messages.error(request, "Couldn't find the columns. Need a Username or Employee ID column and an Amount column.")
+            return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+        totals = {}
+        for row in data:
+            if amt_col >= len(row):
+                continue
+            amt = _dec(row[amt_col])
+            agent = None
+            if user_col is not None and user_col < len(row) and row[user_col]:
+                agent = by_username.get(str(row[user_col]).strip().lower())
+            if agent is None and id_col is not None and id_col < len(row) and row[id_col] not in (None, ''):
+                agent = by_empid.get(str(row[id_col]).strip())
+            if agent is None:
+                key_shown = row[user_col] if user_col is not None and user_col < len(row) else (row[id_col] if id_col is not None and id_col < len(row) else '?')
+                if amt:
+                    unmatched.append({'who': key_shown, 'amount': amt})
+                continue
+            totals[agent.pk] = (totals.get(agent.pk, Decimal('0')) + amt) if t['aggregate'] else amt
+        for aid, val in totals.items():
             WeeklyPayInput.objects.update_or_create(
-                agent=a, week_start=week_start, defaults=vals,
-            )
-        messages.success(request, f"Nómina inputs saved for the week of {week_start:%b %d}.")
+                agent_id=aid, week_start=week_start, defaults={field: val})
+        request.session[f'nomina_unmatched_{key}'] = [
+            {'who': str(u['who']), 'amount': str(u['amount'])} for u in unmatched]
+        messages.success(request, f"Imported {len(totals)} {t['label']} value(s); {len(unmatched)} row(s) unmatched.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    if request.method == 'POST':  # manual save
+        for a in agents:
+            WeeklyPayInput.objects.update_or_create(
+                agent=a, week_start=week_start,
+                defaults={field: _dec(request.POST.get(f'v_{a.pk}'))})
+        messages.success(request, f"{t['label']} saved.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     existing = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
@@ -142,20 +236,14 @@ def inputs(request):
     rows = []
     for a in agents:
         wi = existing.get(a.pk)
-        cells = []
-        for label, f, is_ded in INPUT_FIELDS:
-            v = getattr(wi, f) if wi else Decimal('0')
-            cells.append({'field': f, 'display': '' if v == 0 else f'{v:.2f}'})
-        rows.append({
-            'agent': a,
-            'name': a.agent_name or a.user.get_full_name() or a.user.username,
-            'username': a.user.username,
-            'cells': cells,
-        })
-
+        v = getattr(wi, field) if wi else Decimal('0')
+        rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
+                     'username': a.user.username, 'emp': a.employee_id or '',
+                     'display': '' if v == 0 else f'{v:.2f}'})
+    unmatched = request.session.pop(f'nomina_unmatched_{key}', [])
     ctx = _nav(week_start, week_dates)
-    ctx.update({'rows': rows, 'fields': INPUT_FIELDS, 'spiff_fx_rate': nweek.spiff_fx_rate})
-    return render(request, 'nomina/inputs.html', ctx)
+    ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched})
+    return render(request, 'nomina/input_type.html', ctx)
 
 
 def _agent_nomina_data(week_start, week_dates):

@@ -7,6 +7,7 @@ app_name = 'nomina'
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('inputs/', views.inputs, name='inputs'),
+    path('inputs/<str:key>/', views.input_type, name='input_type'),
     path('agents/', views.agent_nomina, name='agent_nomina'),
     path('admins/', views.admin_nomina, name='admin_nomina'),
     path('break-abuse/', views.break_abuse, name='break_abuse'),

@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% block title %} - {{ t.label }} Input{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">{{ t.label }}{% if t.deduction %} <span style="color:#b91c1c;font-size:15px;">(deduction)</span>{% endif %}</h1>
+    <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Inputs</a>
+</div>
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">{{ t.desc }} Values are in <strong>{{ t.unit }}</strong>.
+    {% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
+    Upload maps by column headers (Username / Employee ID + Amount) — unmatched rows are shown so nothing is dropped.</p>
+</div>
+
+{% if unmatched %}
+<div class="card" style="background:#fef2f2;border:1px solid #fca5a5;">
+    <h3 style="margin-top:0;color:#b91c1c;">{{ unmatched|length }} unmatched row(s) — not imported</h3>
+    <table style="width:100%;font-size:13px;"><thead><tr><th style="text-align:left;">Who (from file)</th><th style="text-align:right;">Amount</th></tr></thead>
+        <tbody>{% for u in unmatched %}<tr><td>{{ u.who }}</td><td style="text-align:right;font-family:monospace;">{{ u.amount }}</td></tr>{% endfor %}</tbody>
+    </table>
+    <p style="font-size:12px;color:#888;margin:8px 0 0;">Fix the name/ID in your file (or the person's profile) and re-upload, or enter them by hand below.</p>
+</div>
+{% endif %}
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Upload a file</h2>
+        <form method="post" enctype="multipart/form-data">{% csrf_token %}
+            <p style="font-size:13px;color:#666;line-height:1.5;">CSV or Excel. Needs a <strong>Username</strong> (or <strong>Employee ID</strong>) column and an <strong>Amount</strong> column — header names are matched flexibly.</p>
+            <input type="file" name="file" accept=".csv,.xlsx" required style="margin-bottom:12px;">
+            <br><button type="submit" class="btn btn-primary">Upload &amp; import</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>Or enter manually</h2>
+        <p style="font-size:12px;color:#888;margin-top:0;">Type values per agent; blank = 0. Saving replaces this week's {{ t.label }} values.</p>
+    </div>
+</div>
+
+<form method="post">{% csrf_token %}
+    <div class="card" style="overflow-x:auto;padding:0;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f0f4f8;text-align:left;">
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Agent</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">User</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{{ t.label }} ({{ t.unit }})</th>
+        </tr></thead>
+        <tbody>
+            {% for r in rows %}
+            <tr style="border-bottom:1px solid #eee;">
+                <td style="padding:5px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
+                <td style="padding:5px 10px;color:#666;">{{ r.username }}</td>
+                <td style="padding:5px 10px;color:#999;">{{ r.emp }}</td>
+                <td style="padding:4px 8px;text-align:right;">
+                    <input type="text" name="v_{{ r.agent.pk }}" value="{{ r.display }}" inputmode="decimal" placeholder="0"
+                        style="width:110px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" style="padding:30px;text-align:center;color:#888;">No Infinity agents. (Load real data.)</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% if rows %}<button type="submit" class="btn btn-primary" style="margin-top:14px;">Save {{ t.label }}</button>{% endif %}
+</form>
+{% endblock %}
