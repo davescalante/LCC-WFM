@@ -134,9 +134,10 @@ def inputs(request):
     nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
 
     if request.method == 'POST' and 'spiff_fx_rate' in request.POST:
-        nweek.spiff_fx_rate = _dec(request.POST.get('spiff_fx_rate') or nweek.spiff_fx_rate)
+        raw = (request.POST.get('spiff_fx_rate') or '').strip()
+        nweek.spiff_fx_rate = _dec(raw) if raw else None  # blank stays empty
         nweek.save()
-        messages.success(request, "Spiff rate saved.")
+        messages.success(request, "Spiff rate saved." if raw else "Spiff rate cleared.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     # Per-type filled count (agents with a non-zero value this week)
@@ -253,7 +254,7 @@ def _agent_nomina_data(week_start, week_dates):
 
     settings = BillingSettings.get_for_week(week_start)
     nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
-    fx = nweek.spiff_fx_rate
+    fx = nweek.spiff_fx_rate or Decimal('0')  # empty rate → spiffs stay 0 until set
 
     agents = _infinity_agents(week_start)
     data = _get_billable_weekly_data(agents, week_dates, settings)
@@ -622,7 +623,7 @@ def _admin_nomina_data(week_start, week_dates):
 
     settings = BillingSettings.get_for_week(week_start)
     nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
-    fx = nweek.spiff_fx_rate
+    fx = nweek.spiff_fx_rate or Decimal('0')  # empty rate → spiffs stay 0 until set
 
     agents = _admin_agents(week_start)
     data = _get_billable_weekly_data(agents, week_dates, settings)

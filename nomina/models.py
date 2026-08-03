@@ -4,11 +4,12 @@ from django.db import models
 
 
 class NominaWeek(models.Model):
-    """Per-week Nómina settings (e.g. the spiff USD→MXN rate the user sets each week)."""
+    """Per-week Nómina settings. The spiff USD→MXN rate must be entered fresh
+    each week — it starts empty (no default/carry-over)."""
     week_start = models.DateField(unique=True)
     spiff_fx_rate = models.DecimalField(
-        max_digits=8, decimal_places=4, default=Decimal('17.41'),
-        help_text="USD→MXN rate used to convert spiffs this week",
+        max_digits=8, decimal_places=4, null=True, blank=True,
+        help_text="USD→MXN rate for spiffs — set each week (starts empty)",
     )
 
     def __str__(self):

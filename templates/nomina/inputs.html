@@ -14,12 +14,14 @@
 </div>
 
 <div class="card" style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-    <form method="post" style="display:flex;align-items:center;gap:12px;margin:0;">{% csrf_token %}
+    <form method="post" style="display:flex;align-items:center;gap:12px;margin:0;flex-wrap:wrap;">{% csrf_token %}
         <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
         <label style="margin:0;font-weight:600;">Spiff USD→MXN rate this week:</label>
-        <input type="text" name="spiff_fx_rate" value="{{ spiff_fx_rate|floatformat:4 }}"
-               style="width:110px;padding:6px 10px;border:1px solid #ddd;border-radius:4px;margin:0;">
+        <input type="text" name="spiff_fx_rate" value="{% if spiff_fx_rate is not None %}{{ spiff_fx_rate|floatformat:4 }}{% endif %}"
+               placeholder="enter rate" inputmode="decimal"
+               style="width:120px;padding:6px 10px;border:1px solid {% if spiff_fx_rate is None %}#f59e0b{% else %}#ddd{% endif %};border-radius:4px;margin:0;">
         <button type="submit" class="btn btn-primary" style="padding:6px 14px;">Save rate</button>
+        {% if spiff_fx_rate is None %}<span style="color:#b45309;font-size:12px;">⚠ Not set — spiffs stay $0 until you enter this week's rate.</span>{% endif %}
     </form>
 </div>
 
