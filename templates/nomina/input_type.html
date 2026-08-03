@@ -78,9 +78,14 @@
     </div>
     <div class="card">
         <h2>Or add / edit people</h2>
+        {% if default_amt %}
+        <p style="font-size:12px;color:#888;margin-top:0;">Everyone here starts at the standard <strong>${{ default_amt }}</strong>.
+        Change the exceptions (a blank box = $0), then <strong>Save</strong>. Uploading a file <strong>replaces</strong> everything here.</p>
+        {% else %}
         <p style="font-size:12px;color:#888;margin-top:0;">The boxes below show this week's current numbers. Edit anyone, or type a value for
         someone who wasn't in the file, then <strong>Save</strong>. Blank = 0. Note: these are your <em>final</em> tweaks —
         uploading a file again <strong>replaces</strong> everything here.</p>
+        {% endif %}
     </div>
 </div>
 
@@ -90,7 +95,7 @@
         <thead><tr style="background:#f0f4f8;text-align:left;">
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Agent</th>
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">User</th>
-            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>
+            {% if show_emp %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>{% endif %}
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{% if show_pesos %}Dollars (USD){% else %}{{ t.label }} ({{ t.unit }}){% endif %}</th>
             {% if show_pesos %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Pesos (MXN)</th>{% endif %}
         </tr></thead>
@@ -99,23 +104,23 @@
             <tr style="border-bottom:1px solid #eee;">
                 <td style="padding:5px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
                 <td style="padding:5px 10px;color:#666;">{{ r.username }}</td>
-                <td style="padding:5px 10px;color:#999;">{{ r.emp }}</td>
+                {% if show_emp %}<td style="padding:5px 10px;color:#999;">{{ r.emp }}</td>{% endif %}
                 <td style="padding:4px 8px;text-align:right;">
                     <input type="text" name="v_{{ r.agent.pk }}" value="{{ r.display }}" inputmode="decimal" placeholder="0"
-                        {% if show_pesos %}class="usd-in" data-pesos="pesos_{{ r.agent.pk }}"{% endif %}
+                        {% if show_total %}class="amt-in" data-pesos="pesos_{{ r.agent.pk }}"{% endif %}
                         style="width:110px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
                 </td>
                 {% if show_pesos %}<td id="pesos_{{ r.agent.pk }}" style="padding:5px 10px;text-align:right;font-family:monospace;color:#166534;">{{ r.pesos }}</td>{% endif %}
             </tr>
             {% empty %}
-            <tr><td colspan="{% if show_pesos %}5{% else %}4{% endif %}" style="padding:30px;text-align:center;color:#888;">No Infinity agents. (Load real data.)</td></tr>
+            <tr><td colspan="5" style="padding:30px;text-align:center;color:#888;">No matching agents for this module. (Load real data.)</td></tr>
             {% endfor %}
         </tbody>
-        {% if show_pesos and rows %}
+        {% if show_total and rows %}
         <tfoot><tr style="background:#f0f4f8;font-weight:700;">
-            <td colspan="3" style="padding:8px 10px;border-top:2px solid #94a3b8;">Total</td>
-            <td id="usdTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{{ usd_total|floatformat:2 }}</td>
-            <td id="pesosTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{% if pesos_total is not None %}{{ pesos_total|floatformat:2 }}{% endif %}</td>
+            <td colspan="{% if show_emp %}3{% else %}2{% endif %}" style="padding:8px 10px;border-top:2px solid #94a3b8;">Total</td>
+            <td id="amtTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{{ amt_total|floatformat:2 }}</td>
+            {% if show_pesos %}<td id="pesosTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{% if pesos_total is not None %}{{ pesos_total|floatformat:2 }}{% endif %}</td>{% endif %}
         </tr></tfoot>
         {% endif %}
     </table>
@@ -123,20 +128,20 @@
     {% if rows %}<button type="submit" class="btn btn-primary" style="margin-top:14px;">Save {{ t.label }}</button>{% endif %}
 </form>
 
-{% if show_pesos %}
+{% if show_total %}
 <script>
 (function () {
-    var rateEl = document.getElementById('fxRate');
+    var rateEl = document.getElementById('fxRate');           // present only on Spiffs
     var rate = rateEl ? parseFloat(rateEl.getAttribute('data-rate')) || 0 : 0;
     var fmt = function (n) { return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); };
     var parse = function (s) { return parseFloat(String(s).replace(/[$,\s]/g, '')) || 0; };
-    var inputs = document.querySelectorAll('.usd-in');
-    var usdTot = document.getElementById('usdTotal'), pesosTot = document.getElementById('pesosTotal');
+    var inputs = document.querySelectorAll('.amt-in');
+    var amtTot = document.getElementById('amtTotal'), pesosTot = document.getElementById('pesosTotal');
     function recompute() {
-        var usd = 0, pesos = 0;
+        var amt = 0, pesos = 0;
         inputs.forEach(function (inp) {
             var v = parse(inp.value);
-            usd += v;
+            amt += v;
             // Round per person (mirrors the server's per-row quantize) so the footer
             // total matches the nómina to the cent, not round-of-sum.
             var p = Math.round(v * rate * 100) / 100;
@@ -144,7 +149,7 @@
             if (cell) cell.textContent = (rate && v) ? fmt(p) : '';
             if (rate) pesos += p;
         });
-        if (usdTot) usdTot.textContent = fmt(usd);
+        if (amtTot) amtTot.textContent = fmt(amt);
         if (pesosTot) pesosTot.textContent = rate ? fmt(pesos) : '';
     }
     inputs.forEach(function (inp) { inp.addEventListener('input', recompute); });

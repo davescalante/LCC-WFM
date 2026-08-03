@@ -31,10 +31,12 @@ INPUT_TYPES = [
      'aggregate': False, 'match': 'auto', 'desc': 'Referral bonus. Columns: Username + Amount.'},
     {'key': 'killqa', 'field': 'kill_team_qa', 'label': 'Kill Team QA', 'unit': 'MXN', 'deduction': False,
      'aggregate': False, 'match': 'auto', 'roles': ['kill_team'],
-     'desc': 'Kill Team QA bonus — Kill Team agents only. Columns: Username + Amount.'},
+     'default_amount': 400, 'show_emp': False, 'name_only_agent': True,
+     'desc': 'Kill Team QA bonus — Kill Team agents only. Defaults to $400 each; change the exceptions and Save.'},
     {'key': 'comedor', 'field': 'comedor', 'label': 'Comedor', 'unit': 'MXN', 'deduction': True,
-     'aggregate': True, 'match': 'auto',
-     'desc': 'Cafeteria POS export — sums all charges per person. Columns: Employee ID + Price.'},
+     'aggregate': True, 'match': 'auto', 'totals': True, 'sort_by_value': True,
+     'desc': 'Cafeteria POS export — matched by Employee # (EMP), all charges per person summed. '
+             'Columns: EMP # + Precio.'},
     {'key': 'transportation', 'field': 'transportation', 'label': 'Transportation', 'unit': 'MXN', 'deduction': True,
      'aggregate': False, 'match': 'auto', 'desc': 'Transportation deduction. Columns: Username + Amount.'},
 ]
@@ -277,8 +279,8 @@ def input_type(request, key):
     if request.method == 'POST' and request.FILES.get('file'):
         headers, data = _read_rows(request.FILES['file'])
         user_col = _find_col(headers, ['username', 'user', 'agent', 'login'])
-        id_col = _find_col(headers, ['employee id', 'emp id', 'empid', 'employee', 'id'])
-        amt_col = _find_col(headers, ['amount', 'total', 'dollar', 'pesos', 'price', 'value', 'monto'])
+        id_col = _find_col(headers, ['employee id', 'emp id', 'empid', 'employee', 'emp', 'id'])
+        amt_col = _find_col(headers, ['amount', 'total', 'dollar', 'pesos', 'price', 'precio', 'value', 'monto'])
         if amt_col is None:   # header unlabelled (e.g. Spiffs) — find the $ column by content
             amt_col = _detect_amount_col(headers, data, skip={user_col, id_col})
         if amt_col is None or (user_col is None and id_col is None):
@@ -336,36 +338,45 @@ def input_type(request, key):
 
     existing = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
-    # Spiffs are entered in USD and shown converted to MXN at the week's rate,
-    # mirroring the "Dollars / Pesos" columns of the agent nómina Spiffs tab.
-    show_pesos = (key == 'spiff')
+    # Per-module display flags.
+    show_pesos = (key == 'spiff')                    # only Spiffs converts USD→MXN
+    show_emp = t.get('show_emp', True)
+    show_total = t.get('totals', False) or show_pesos
+    sort_by_value = t.get('sort_by_value', False) or show_pesos
+    default_amt = t.get('default_amount')            # e.g. Kill Team QA prefills $400
     fx_rate = None
     if show_pesos:
         nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
         fx_rate = nweek.spiff_fx_rate
     rows = []
-    usd_total = pesos_total = Decimal('0')
+    amt_total = pesos_total = Decimal('0')
     for a in agents:
         wi = existing.get(a.pk)
         v = getattr(wi, field) if wi else Decimal('0')
-        row = {'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
-               'username': a.user.username, 'emp': a.employee_id or '',
-               'val': v, 'display': '' if v == 0 else f'{v:.2f}'}
+        if default_amt is not None and v == 0:       # unset → show the standard default
+            display = f'{Decimal(str(default_amt)):.2f}'
+        else:
+            display = '' if v == 0 else f'{v:.2f}'
+        name = (a.agent_name or a.user.username) if t.get('name_only_agent') \
+            else (a.agent_name or a.user.get_full_name() or a.user.username)
+        row = {'agent': a, 'name': name, 'username': a.user.username,
+               'emp': a.employee_id or '', 'val': v, 'display': display}
+        amt_total += v
         if show_pesos:
             pesos = (v * fx_rate).quantize(Decimal('0.01')) if fx_rate else None
             row['pesos'] = '' if (pesos is None or v == 0) else f'{pesos:,.2f}'
-            usd_total += v
             if pesos:
                 pesos_total += pesos
         rows.append(row)
-    if show_pesos:   # people with spiffs float to the top, like the file
+    if sort_by_value:   # people with a value float to the top
         rows.sort(key=lambda r: (r['val'] == 0, -r['val'], r['name'].lower()))
     unmatched = list(UnmatchedInputRow.objects.filter(
         week_start=week_start, input_key=key, acknowledged=False))
     ctx = _nav(week_start, week_dates)
-    ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched, 'show_pesos': show_pesos,
-                'fx_rate': fx_rate,
-                'usd_total': usd_total if show_pesos else None,
+    ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched,
+                'show_pesos': show_pesos, 'show_emp': show_emp, 'show_total': show_total,
+                'default_amt': default_amt, 'fx_rate': fx_rate,
+                'amt_total': amt_total if show_total else None,
                 'pesos_total': pesos_total if (show_pesos and fx_rate) else None})
     return render(request, 'nomina/input_type.html', ctx)
 
@@ -417,7 +428,12 @@ def _agent_nomina_data(week_start, week_dates):
         welcome_default = enroll.amount if (enroll and enroll.covers_week(week_start) and bonus > 0) else (wi.welcome if wi else Decimal('0'))
         welcome = ov(a.pk, 'welcome', welcome_default)
         referral = ov(a.pk, 'referral', wi.referral if wi else Decimal('0'))
-        kill_qa = ov(a.pk, 'kill_qa', wi.kill_team_qa if wi else Decimal('0'))
+        # Kill Team QA is a standard $400 for Kill Team agents unless a non-zero
+        # value was entered (or an override set) — mirrors the module's prefill.
+        kq_raw = wi.kill_team_qa if wi else Decimal('0')
+        if kq_raw == 0 and a.role_type == 'kill_team':
+            kq_raw = Decimal(str(INPUT_TYPE_BY_KEY['killqa'].get('default_amount') or 0))
+        kill_qa = ov(a.pk, 'kill_qa', kq_raw)
         holiday_pay = ov(a.pk, 'holiday', (hol_hours.get(a.pk, Decimal('0')) * rate * 2).quantize(Decimal('0.01')))
         comedor = ov(a.pk, 'comedor', wi.comedor if wi else Decimal('0'))
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))

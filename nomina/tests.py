@@ -159,18 +159,21 @@ class NominaSpiffUploadTests(TestCase):
 
 
 class NominaKillTeamScopeTests(TestCase):
-    """The Kill Team QA module is role-scoped: only Kill Team agents appear (the
-    bonus doesn't apply to anyone else). Other modules stay full-roster."""
+    """Kill Team QA: role-scoped to Kill Team, no EMP column, standard $400 default."""
 
     def setUp(self):
+        from nomina.models import WeeklyPayInput
+        self.WeeklyPayInput = WeeklyPayInput
         _make_agent('kt_super', is_super_admin=True)
         self.client.login(username='kt_super', password='x')
         self.kt = _make_infinity('ktone', '9001')
-        self.kt.role_type = 'kill_team'; self.kt.save()
+        self.kt.role_type = 'kill_team'; self.kt.agent_name = 'K. Uno'; self.kt.save()
         self.reg = _make_infinity('regone', '9002')   # role_type='agent'
+        self.ws = get_week_start()
+        self.url = reverse('nomina:input_type', args=['killqa'])
 
     def test_killqa_shows_only_kill_team(self):
-        resp = self.client.get(reverse('nomina:input_type', args=['killqa']))
+        resp = self.client.get(self.url)
         self.assertContains(resp, 'ktone')
         self.assertNotContains(resp, 'regone')
 
@@ -178,6 +181,56 @@ class NominaKillTeamScopeTests(TestCase):
         resp = self.client.get(reverse('nomina:input_type', args=['lpo']))
         self.assertContains(resp, 'ktone')
         self.assertContains(resp, 'regone')
+
+    def test_killqa_defaults_to_400_and_hides_emp(self):
+        resp = self.client.get(self.url)
+        self.assertContains(resp, 'value="400.00"')     # box prefilled with the standard
+        self.assertNotContains(resp, '>EMP<')            # EMP column header removed
+        self.assertContains(resp, 'K. Uno')             # agent name, not legal name
+
+    def test_nomina_defaults_kill_team_qa_to_400(self):
+        from nomina.views import _agent_nomina_data
+        week_dates = [self.ws + __import__('datetime').timedelta(days=i) for i in range(7)]
+        rows, _ = _agent_nomina_data(self.ws, week_dates)
+        kt_row = next(r for r in rows if r['agent'].pk == self.kt.pk)
+        self.assertEqual(kt_row['kill_qa'], Decimal('400'))   # auto $400 without any save
+        # An entered value wins over the default
+        self.WeeklyPayInput.objects.create(agent=self.kt, week_start=self.ws, kill_team_qa=Decimal('250'))
+        rows, _ = _agent_nomina_data(self.ws, week_dates)
+        kt_row = next(r for r in rows if r['agent'].pk == self.kt.pk)
+        self.assertEqual(kt_row['kill_qa'], Decimal('250'))
+
+
+class NominaComedorUploadTests(TestCase):
+    """Comedor is matched by Employee # (EMP), like the real cafeteria export, and
+    all of a person's charges are summed. Unmatched emp#s surface for review."""
+
+    def setUp(self):
+        from nomina.models import WeeklyPayInput
+        self.WeeklyPayInput = WeeklyPayInput
+        _make_agent('cf_super', is_super_admin=True)
+        self.client.login(username='cf_super', password='x')
+        self.a = _make_infinity('comer', '4872')
+        self.ws = get_week_start()
+        self.url = reverse('nomina:input_type', args=['comedor'])
+
+    def test_matches_by_emp_and_sums(self):
+        csv_data = (
+            "EMP #, PRECIO ,,,,,,,,\n"
+            "4872,$27.00,#REF!, $27.00 ,,,,,,\n"
+            "4872,$15.00,#REF!, $15.00 ,,,,,,\n"
+            "9999,$50.00,#REF!, $50.00 ,,,,,,\n"
+            ",,#REF!, $-   ,,,,,,\n"       # trailing empty row — ignored
+        )
+        f = SimpleUploadedFile('comedor.csv', csv_data.encode('utf-8'), content_type='text/csv')
+        resp = self.client.post(self.url, {'file': f}, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        wi = self.WeeklyPayInput.objects.get(agent=self.a, week_start=self.ws)
+        self.assertEqual(wi.comedor, Decimal('42.00'))     # 27 + 15, matched by emp# 4872
+        from nomina.models import UnmatchedInputRow
+        unmatched = UnmatchedInputRow.objects.filter(week_start=self.ws, input_key='comedor')
+        self.assertEqual(unmatched.count(), 1)             # emp# 9999, not the empty row
+        self.assertEqual(unmatched.first().who.strip(), '9999')
 
 
 class NominaFxRateTests(TestCase):
