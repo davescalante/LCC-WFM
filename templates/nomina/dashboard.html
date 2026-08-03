@@ -51,11 +51,11 @@
 <div class="nom-grid">
     <a class="nom-card" href="{% url 'nomina:break_abuse' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Break Abuse</h3><p>Log incidents → zeroes that week's adherence bonus.</p></a>
     <a class="nom-card" href="{% url 'nomina:holidays' %}"><span class="nom-tag ready">READY</span><h3>Holidays</h3><p>Company holiday calendar + triple-pay when worked.</p></a>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Welcome Bonus</h3><p>Editable eligibility table (username · amount · # weeks, auto-drops off).</p></div>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Loans (Préstamo)</h3><p>Add loans (1wk ×1.25 / 2wk ×1.35), auto weekly drawdown, active-loan view.</p></div>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Vacation Tracker</h3><p>Tenure-based accrual, approvals, used/remaining balances.</p></div>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Overrides</h3><p>Make every computed cell editable &amp; saved per week.</p></div>
-    <div class="nom-card soon"><span class="nom-tag soon">SOON</span><h3>Exports</h3><p>Yours/Mine Excel in your exact format, with auto-notes.</p></div>
+    <a class="nom-card" href="{% url 'nomina:welcome' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Welcome Bonus</h3><p>Editable eligibility table (amount · # weeks, auto-drops off).</p></a>
+    <a class="nom-card" href="{% url 'nomina:loans' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Loans (Préstamo)</h3><p>Add loans (1wk ×1.25 / 2wk ×1.35), auto weekly drawdown, active-loan view.</p></a>
+    <a class="nom-card" href="{% url 'nomina:vacation' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Vacation Tracker</h3><p>Tenure-based accrual, used/remaining balances.</p></a>
+    <a class="nom-card" href="{% url 'nomina:overrides' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Overrides</h3><p>Override any computed cell (base pay, adherence, holiday) per week.</p></a>
+    <a class="nom-card" href="{% url 'nomina:exports' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Exports</h3><p>Yours/Mine Excel in your exact format, with auto-notes.</p></a>
 </div>
 
 <p style="margin-top:20px;font-size:12px;color:#999;">Super-admin only · Infinity employees · test build (not live)</p>

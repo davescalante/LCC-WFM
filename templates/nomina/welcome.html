@@ -1,0 +1,55 @@
+{% extends 'base.html' %}
+{% block title %} - Welcome Bonus{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Welcome Bonus</h1>
+    <a href="{% url 'nomina:dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Nómina</a>
+</div>
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;">Enroll a person for a welcome bonus: they're paid the amount each covered week <strong>if they earned an adherence bonus that week</strong>. Every calendar week counts toward the term; after that it lapses automatically.</p>
+</div>
+<div class="grid-2">
+    <div class="card">
+        <h2>Enroll</h2>
+        <form method="post">{% csrf_token %}
+            <label>Agent</label>
+            <select name="agent" required><option value="">— select —</option>
+                {% for a in agents %}<option value="{{ a.pk }}">{{ a }} · {{ a.user.username }}</option>{% endfor %}
+            </select>
+            <label>Amount per week (MXN)</label>
+            <input type="text" name="amount" inputmode="decimal" value="1000">
+            <label># Weeks</label>
+            <input type="number" name="num_weeks" value="4" min="1" max="52">
+            <p style="font-size:12px;color:#888;margin:-6px 0 10px;">Eligible starting the week of {{ week_start|date:'M d' }}.</p>
+            <button type="submit" class="btn btn-primary">Enroll</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>Enrolled</h2>
+        {% if enrolls %}
+        <table style="width:100%;font-size:13px;">
+            <thead><tr><th>Agent</th><th style="text-align:right;">Amount</th><th style="text-align:center;"># Wks</th><th>Since</th><th style="text-align:center;">This wk?</th><th></th></tr></thead>
+            <tbody>
+            {% for e in enrolls %}
+            <tr>
+                <td style="font-weight:600;">{{ e.agent }}</td>
+                <td style="text-align:right;font-family:monospace;">${{ e.amount|floatformat:2 }}</td>
+                <td style="text-align:center;">{{ e.num_weeks }}</td>
+                <td>{{ e.start_week|date:"M d" }}</td>
+                <td style="text-align:center;">{% if e.weeks_in %}<span style="color:#16a34a;font-weight:700;">✓</span>{% else %}<span style="color:#ccc;">—</span>{% endif %}</td>
+                <td style="text-align:right;"><form method="post" style="margin:0;" onsubmit="return confirm('Remove?');">{% csrf_token %}<input type="hidden" name="delete" value="{{ e.pk }}"><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Remove</button></form></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}<p style="color:#888;font-size:13px;">No one enrolled.</p>{% endif %}
+    </div>
+</div>
+{% endblock %}

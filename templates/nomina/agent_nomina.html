@@ -45,6 +45,7 @@
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#eef5ee;">Subtotal</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Comedor</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Transport</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Loan</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#e8f0fe;">TOTAL</th>
         </tr>
     </thead>
@@ -66,10 +67,11 @@
             <td style="padding:5px 8px;text-align:right;font-weight:700;background:#f6fbf6;">${{ r.subtotal|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.comedor|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.transport|floatformat:2 }}</td>
+            <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.loan|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;font-weight:800;background:#f2f7ff;{% if r.total < 0 %}color:#b91c1c;{% endif %}">${{ r.total|floatformat:2 }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="16" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Infinity agents with data for this week. (Load real data to see figures.)</td></tr>
+        <tr><td colspan="17" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Infinity agents with data for this week. (Load real data to see figures.)</td></tr>
         {% endfor %}
     </tbody>
     {% if rows %}
@@ -84,7 +86,7 @@
             <td colspan="3"></td>
             <td style="padding:8px;text-align:right;color:#7c3aed;">${{ totals.holiday|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;">${{ totals.subtotal|floatformat:2 }}</td>
-            <td colspan="2"></td>
+            <td colspan="3"></td>
             <td style="padding:8px;text-align:right;background:#e8f0fe;">${{ totals.total|floatformat:2 }}</td>
         </tr>
     </tfoot>
