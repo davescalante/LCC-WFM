@@ -24,8 +24,9 @@ INPUT_TYPES = [
      'aggregate': False, 'match': 'auto',
      'desc': 'Sales commission. Upload with columns Username + Amount.'},
     {'key': 'spiff', 'field': 'spiff_usd', 'label': 'Spiffs', 'unit': 'USD', 'deduction': False,
-     'aggregate': False, 'match': 'auto',
-     'desc': 'Spiffs in USD (converted at the week rate). Columns: Username + Amount/Dollars.'},
+     'aggregate': True, 'match': 'auto',
+     'desc': 'Spiffs in USD — a person can appear on many rows and all are summed, '
+             'then converted at the week rate. Columns: Agent Username / Agent ID + the $ amount.'},
     {'key': 'referral', 'field': 'referral', 'label': 'Referral', 'unit': 'MXN', 'deduction': False,
      'aggregate': False, 'match': 'auto', 'desc': 'Referral bonus. Columns: Username + Amount.'},
     {'key': 'killqa', 'field': 'kill_team_qa', 'label': 'Kill Team QA', 'unit': 'MXN', 'deduction': False,
@@ -47,10 +48,18 @@ def _week(request):
 
 
 def _dec(val):
+    """Parse a money-ish cell → Decimal. Tolerates '$', thousands commas, blank
+    cells and accounting-style negatives like '(50.00)'. Bad input → 0."""
+    s = str(val if val is not None else '').strip()
+    if not s:
+        return Decimal('0')
+    neg = s.startswith('(') and s.endswith(')')
+    s = s.replace('$', '').replace(',', '').replace('(', '').replace(')', '').strip()
     try:
-        return Decimal(str(val).strip() or '0')
+        d = Decimal(s or '0')
     except (InvalidOperation, ValueError):
         return Decimal('0')
+    return -d if neg else d
 
 
 def _pay_window(week_start):
@@ -177,6 +186,33 @@ def _find_col(headers, keywords):
     return None
 
 
+def _detect_amount_col(headers, data, skip):
+    """Fallback when the amount header is blank/unlabelled (e.g. the Spiffs file,
+    where the $ column has no header). Score each candidate column by how many of
+    its cells look like money — a leading '$' counts strongest, a plain number
+    counts too — and pick the best (rightmost wins ties)."""
+    ncols = max([len(headers)] + [len(r) for r in data]) if data else len(headers)
+    best_i, best_score = None, 0
+    for i in range(ncols):
+        if i in skip:
+            continue
+        strong = numeric = 0
+        for row in data:
+            if i >= len(row):
+                continue
+            raw = str(row[i] if row[i] is not None else '').strip()
+            if not raw:
+                continue
+            if '$' in raw:
+                strong += 1
+            if _dec(raw) != 0:
+                numeric += 1
+        score = strong * 1000 + numeric
+        if score and score >= best_score:   # >= so ties favour the rightmost column
+            best_i, best_score = i, score
+    return best_i
+
+
 @login_required
 @nomina_access_required
 def input_type(request, key):
@@ -197,6 +233,8 @@ def input_type(request, key):
         user_col = _find_col(headers, ['username', 'user', 'agent', 'login'])
         id_col = _find_col(headers, ['employee id', 'emp id', 'empid', 'employee', 'id'])
         amt_col = _find_col(headers, ['amount', 'total', 'dollar', 'pesos', 'price', 'value', 'monto'])
+        if amt_col is None:   # header unlabelled (e.g. Spiffs) — find the $ column by content
+            amt_col = _detect_amount_col(headers, data, skip={user_col, id_col})
         if amt_col is None or (user_col is None and id_col is None):
             messages.error(request, "Couldn't find the columns. Need a Username or Employee ID column and an Amount column.")
             return redirect(f"{request.path}?week_start={week_start.isoformat()}")
@@ -234,16 +272,36 @@ def input_type(request, key):
 
     existing = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
+    # Spiffs are entered in USD and shown converted to MXN at the week's rate,
+    # mirroring the "Dollars / Pesos" columns of the agent nómina Spiffs tab.
+    show_pesos = (key == 'spiff')
+    fx_rate = None
+    if show_pesos:
+        nweek, _ = NominaWeek.objects.get_or_create(week_start=week_start)
+        fx_rate = nweek.spiff_fx_rate
     rows = []
+    usd_total = pesos_total = Decimal('0')
     for a in agents:
         wi = existing.get(a.pk)
         v = getattr(wi, field) if wi else Decimal('0')
-        rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
-                     'username': a.user.username, 'emp': a.employee_id or '',
-                     'display': '' if v == 0 else f'{v:.2f}'})
+        row = {'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
+               'username': a.user.username, 'emp': a.employee_id or '',
+               'val': v, 'display': '' if v == 0 else f'{v:.2f}'}
+        if show_pesos:
+            pesos = (v * fx_rate).quantize(Decimal('0.01')) if fx_rate else None
+            row['pesos'] = '' if (pesos is None or v == 0) else f'{pesos:,.2f}'
+            usd_total += v
+            if pesos:
+                pesos_total += pesos
+        rows.append(row)
+    if show_pesos:   # people with spiffs float to the top, like the file
+        rows.sort(key=lambda r: (r['val'] == 0, -r['val'], r['name'].lower()))
     unmatched = request.session.pop(f'nomina_unmatched_{key}', [])
     ctx = _nav(week_start, week_dates)
-    ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched})
+    ctx.update({'t': t, 'rows': rows, 'unmatched': unmatched, 'show_pesos': show_pesos,
+                'fx_rate': fx_rate,
+                'usd_total': usd_total if show_pesos else None,
+                'pesos_total': pesos_total if (show_pesos and fx_rate) else None})
     return render(request, 'nomina/input_type.html', ctx)
 
 

@@ -15,8 +15,25 @@
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">{{ t.desc }} Values are in <strong>{{ t.unit }}</strong>.
     {% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
-    Upload maps by column headers (Username / Employee ID + Amount) — unmatched rows are shown so nothing is dropped.</p>
+    Upload maps by column headers (Username / Employee ID + Amount) — unmatched rows are shown so nothing is dropped.
+    Uploading updates the people in the file and leaves anyone you added by hand untouched.</p>
 </div>
+
+{% if show_pesos %}
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <strong style="font-size:14px;">USD&#8594;MXN rate this week:</strong>
+        {% if fx_rate is not None %}
+            <span id="fxRate" data-rate="{{ fx_rate }}" style="font-family:monospace;font-size:15px;color:#166534;">{{ fx_rate|floatformat:4 }}</span>
+            <span style="font-size:12px;color:#888;">Pesos = Dollars &#215; this rate.</span>
+        {% else %}
+            <span id="fxRate" data-rate="0" style="color:#b45309;font-weight:600;">not set</span>
+            <span style="font-size:12px;color:#b45309;">&#9888; Spiffs stay $0 in the nómina until you set the rate on the
+                <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">Inputs</a> page.</span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
 
 {% if unmatched %}
 <div class="card" style="background:#fef2f2;border:1px solid #fca5a5;">
@@ -38,8 +55,9 @@
         </form>
     </div>
     <div class="card">
-        <h2>Or enter manually</h2>
-        <p style="font-size:12px;color:#888;margin-top:0;">Type values per agent; blank = 0. Saving replaces this week's {{ t.label }} values.</p>
+        <h2>Or add / edit people</h2>
+        <p style="font-size:12px;color:#888;margin-top:0;">The boxes below show this week's current numbers. Edit anyone, or type a value for
+        someone who wasn't in the file, then <strong>Save</strong> — you don't need to re-upload. Blank = 0.</p>
     </div>
 </div>
 
@@ -50,7 +68,8 @@
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Agent</th>
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">User</th>
             <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>
-            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{{ t.label }} ({{ t.unit }})</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{% if show_pesos %}Dollars (USD){% else %}{{ t.label }} ({{ t.unit }}){% endif %}</th>
+            {% if show_pesos %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Pesos (MXN)</th>{% endif %}
         </tr></thead>
         <tbody>
             {% for r in rows %}
@@ -60,15 +79,50 @@
                 <td style="padding:5px 10px;color:#999;">{{ r.emp }}</td>
                 <td style="padding:4px 8px;text-align:right;">
                     <input type="text" name="v_{{ r.agent.pk }}" value="{{ r.display }}" inputmode="decimal" placeholder="0"
+                        {% if show_pesos %}class="usd-in" data-pesos="pesos_{{ r.agent.pk }}"{% endif %}
                         style="width:110px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
                 </td>
+                {% if show_pesos %}<td id="pesos_{{ r.agent.pk }}" style="padding:5px 10px;text-align:right;font-family:monospace;color:#166534;">{{ r.pesos }}</td>{% endif %}
             </tr>
             {% empty %}
-            <tr><td colspan="4" style="padding:30px;text-align:center;color:#888;">No Infinity agents. (Load real data.)</td></tr>
+            <tr><td colspan="{% if show_pesos %}5{% else %}4{% endif %}" style="padding:30px;text-align:center;color:#888;">No Infinity agents. (Load real data.)</td></tr>
             {% endfor %}
         </tbody>
+        {% if show_pesos and rows %}
+        <tfoot><tr style="background:#f0f4f8;font-weight:700;">
+            <td colspan="3" style="padding:8px 10px;border-top:2px solid #94a3b8;">Total</td>
+            <td id="usdTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{{ usd_total|floatformat:2 }}</td>
+            <td id="pesosTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{% if pesos_total is not None %}{{ pesos_total|floatformat:2 }}{% endif %}</td>
+        </tr></tfoot>
+        {% endif %}
     </table>
     </div>
     {% if rows %}<button type="submit" class="btn btn-primary" style="margin-top:14px;">Save {{ t.label }}</button>{% endif %}
 </form>
+
+{% if show_pesos %}
+<script>
+(function () {
+    var rateEl = document.getElementById('fxRate');
+    var rate = rateEl ? parseFloat(rateEl.getAttribute('data-rate')) || 0 : 0;
+    var fmt = function (n) { return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); };
+    var parse = function (s) { return parseFloat(String(s).replace(/[$,\s]/g, '')) || 0; };
+    var inputs = document.querySelectorAll('.usd-in');
+    var usdTot = document.getElementById('usdTotal'), pesosTot = document.getElementById('pesosTotal');
+    function recompute() {
+        var usd = 0, pesos = 0;
+        inputs.forEach(function (inp) {
+            var v = parse(inp.value);
+            usd += v;
+            var cell = document.getElementById(inp.getAttribute('data-pesos'));
+            if (cell) cell.textContent = (rate && v) ? fmt(v * rate) : '';
+            if (rate) pesos += v * rate;
+        });
+        if (usdTot) usdTot.textContent = fmt(usd);
+        if (pesosTot) pesosTot.textContent = rate ? fmt(pesos) : '';
+    }
+    inputs.forEach(function (inp) { inp.addEventListener('input', recompute); });
+})();
+</script>
+{% endif %}
 {% endblock %}
