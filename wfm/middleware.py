@@ -64,6 +64,7 @@ class AgentAccessMiddleware:
         request.ot_request_badge = 0
         request.has_finance_access = False
         request.can_access_admin_tabs = False
+        request.can_manage_loans = False
 
         if request.user.is_authenticated:
             try:
@@ -120,9 +121,14 @@ class AgentAccessMiddleware:
                         getattr(profile, 'is_super_admin', False)
                         or getattr(profile, 'can_access_admin_tabs', False)
                     )
+                    request.can_manage_loans = (
+                        getattr(profile, 'is_super_admin', False)
+                        or getattr(profile, 'can_manage_loans', False)
+                    )
             except Exception:
                 if request.user.is_superuser:
                     request.has_finance_access = True
                     request.can_access_admin_tabs = True
+                    request.can_manage_loans = True
 
         return self.get_response(request)

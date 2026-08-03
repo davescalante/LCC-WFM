@@ -96,6 +96,9 @@
         <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
         <a href="{% url 'nomina:dashboard' %}" style="font-weight:600;color:#0f766e;">Nómina</a>
         {% endif %}
+        {% if request.can_manage_loans and not request.has_finance_access %}
+        <a href="{% url 'nomina:loans' %}" style="font-weight:600;color:#0f766e;">Loans</a>
+        {% endif %}
         {% endif %}
         {% if request.user.is_authenticated and not request.is_agent %}
         <div style="position:relative;margin-left:auto;margin-right:8px;" id="nav-search-wrap">

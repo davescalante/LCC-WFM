@@ -9,7 +9,7 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 
 from wfm.utils import get_week_start, parse_week_param
-from .access import nomina_access_required
+from .access import loan_access_required, nomina_access_required
 from .models import (
     BreakAbuseIncident, Holiday, Loan, NominaOverride, NominaWeek,
     WeeklyPayInput, WelcomeBonusEnrollment,
@@ -360,9 +360,10 @@ def exports(request):
 
 
 @login_required
-@nomina_access_required
+@loan_access_required
 def loans(request):
-    """Add loans and view active ones. 1wk ×1.25 / 2wk ×1.35; weekly drawdown."""
+    """Add loans and view active ones. 1wk ×1.25 / 2wk ×1.35; weekly drawdown.
+    Accessible to super admins and users granted `can_manage_loans`."""
     from scheduling.models import Agent
     week_start, week_dates = _week(request)
 
