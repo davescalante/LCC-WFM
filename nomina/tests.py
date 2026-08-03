@@ -109,6 +109,20 @@ class NominaSpiffUploadTests(TestCase):
         self.assertEqual(jo.spiff_usd, Decimal('95.00'))
         self.assertEqual(vr.spiff_usd, Decimal('200.00'))
 
+    def test_reupload_wipes_dropped_people(self):
+        self._upload()   # josaranda 95, vresalido 109.67
+        # A corrected file that only lists josaranda ($50) — vresalido must go to 0.
+        corrected = (
+            "Agent Username,Agent ID,7/20/2026,Amount\n"
+            "josaranda,3745,JOSE MARIA ARANDA PARAMO,$50.00 \n"
+        )
+        f = SimpleUploadedFile('corrected.csv', corrected.encode('utf-8'), content_type='text/csv')
+        self.client.post(self.url, {'file': f}, follow=True)
+        jo = self.WeeklyPayInput.objects.get(agent=self.josaranda, week_start=self.ws)
+        vr = self.WeeklyPayInput.objects.get(agent=self.vresalido, week_start=self.ws)
+        self.assertEqual(jo.spiff_usd, Decimal('50.00'))   # replaced
+        self.assertEqual(vr.spiff_usd, Decimal('0'))       # dropped from new file → wiped
+
     def test_semicolon_delimited_upload(self):
         csv_semi = (
             "Agent Username;Agent ID;7/20/2026;Amount\n"

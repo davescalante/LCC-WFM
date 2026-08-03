@@ -297,6 +297,10 @@ def input_type(request, key):
                     unmatched.append({'who': key_shown, 'amount': amt})
                 continue
             totals[agent.pk] = (totals.get(agent.pk, Decimal('0')) + amt) if t['aggregate'] else amt
+        # Wipe-and-replace: a fresh upload is authoritative, so clear this module's
+        # values for the whole week first, then load only what's in the file. (Manual
+        # "Save" is a separate, additive path — this replacement is upload-only.)
+        WeeklyPayInput.objects.filter(week_start=week_start, agent__in=agents).update(**{field: 0})
         for aid, val in totals.items():
             WeeklyPayInput.objects.update_or_create(
                 agent_id=aid, week_start=week_start, defaults={field: val})

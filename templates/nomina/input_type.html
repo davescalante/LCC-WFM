@@ -16,7 +16,7 @@
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">{{ t.desc }} Values are in <strong>{{ t.unit }}</strong>.
     {% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
     Upload maps by column headers (Username / Employee ID + Amount) — unmatched rows are shown so nothing is dropped.
-    Uploading updates the people in the file and leaves anyone you added by hand untouched.</p>
+    <strong>Uploading replaces</strong> this module's values for the week with the file's contents (a fresh upload wins).</p>
 </div>
 
 {% if show_pesos %}
@@ -79,7 +79,8 @@
     <div class="card">
         <h2>Or add / edit people</h2>
         <p style="font-size:12px;color:#888;margin-top:0;">The boxes below show this week's current numbers. Edit anyone, or type a value for
-        someone who wasn't in the file, then <strong>Save</strong> — you don't need to re-upload. Blank = 0.</p>
+        someone who wasn't in the file, then <strong>Save</strong>. Blank = 0. Note: these are your <em>final</em> tweaks —
+        uploading a file again <strong>replaces</strong> everything here.</p>
     </div>
 </div>
 
