@@ -205,6 +205,53 @@ class NominaVacationsPageTests(TestCase):
         self.assertFalse(VacationAdjustment.objects.filter(agent=self.a1).exists())
 
 
+class NominaWelcomeBonusTests(TestCase):
+    """Welcome Bonus is a POSITIVE for the enrolled agent — paid the enrollment
+    amount in a covered week, but only when they earned that week's adherence bonus."""
+
+    def _agent(self):
+        from scheduling.models import Five9Profile
+        u = User.objects.create_user('welguy', password='x', first_name='Wel', last_name='Guy')
+        a = Agent.objects.create(user=u, role='agent', role_type='regular_agent', agent_name='welguy',
+            status='active', employer='Infinity', track_attendance=True, hourly_rate=Decimal('62.50'))
+        Five9Profile.objects.create(agent=a, five9_username='welagent', billable=True, is_primary=True)
+        return a
+
+    def _week(self):
+        import datetime
+        ws = get_week_start()
+        return ws, [ws + datetime.timedelta(days=i) for i in range(7)]
+
+    def test_welcome_paid_positive_when_enrolled_and_bonus_earned(self):
+        from nomina.models import WelcomeBonusEnrollment
+        from nomina.views import _agent_nomina_data
+        from adherence.models import DailyUpload, DailyAgentHours, AdherenceRecord
+        a = self._agent()
+        ws, week = self._week()
+        day = week[1]
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+        DailyAgentHours.objects.create(upload=up, agent=a, five9_username='welagent',
+            login_seconds=40 * 3600, not_ready_seconds=0)               # 40 hrs → full bonus
+        AdherenceRecord.objects.update_or_create(agent=a, date=day, defaults={'status': 'P'})
+        WelcomeBonusEnrollment.objects.create(agent=a, amount=Decimal('1000'), num_weeks=4, start_week=ws)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertGreater(r['adherence_bonus'], 0)      # earned the adherence bonus
+        self.assertEqual(r['welcome'], Decimal('1000'))  # welcome PAID
+        self.assertEqual(r['subtotal'], r['base_pay'] + r['adherence_bonus'] + r['welcome'])  # added in
+
+    def test_welcome_zero_without_adherence_bonus(self):
+        from nomina.models import WelcomeBonusEnrollment
+        from nomina.views import _agent_nomina_data
+        a = self._agent()                                # no hours / no adherence → no bonus
+        ws, week = self._week()
+        WelcomeBonusEnrollment.objects.create(agent=a, amount=Decimal('1000'), num_weeks=4, start_week=ws)
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['welcome'], Decimal('0'))     # not paid without the adherence bonus
+
+
 class NominaAdminLoanTests(TestCase):
     """Admin Nómina loans: the manager who handed out a loan is CREDITED this week's
     repayment (Prestamo given); an admin who took a loan has it DEDUCTED (Prestamo owed)."""
