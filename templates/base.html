@@ -94,6 +94,7 @@
         <a href="{% url 'records_attendance' %}">Records</a>
         {% if request.has_finance_access %}
         <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
+        <a href="{% url 'nomina:dashboard' %}" style="font-weight:600;color:#0f766e;">Nómina</a>
         {% endif %}
         {% endif %}
         {% if request.user.is_authenticated and not request.is_agent %}

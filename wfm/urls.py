@@ -9,6 +9,7 @@ urlpatterns = [
     path('adherence/', include('adherence.urls')),
     path('erlang/', include('erlang.urls')),
     path('finance/', include('finance.urls')),
+    path('nomina/', include('nomina.urls')),
     path('admin-codings/', finance_views.admin_codings, name='admin_codings'),
     path('admin-codings/add/', finance_views.add_admin_coding_ajax, name='add_admin_coding_ajax'),
     path('admin-codings/edit/', finance_views.edit_admin_coding_ajax, name='edit_admin_coding_ajax'),

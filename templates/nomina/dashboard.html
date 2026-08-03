@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block title %} - Nómina{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Nómina</h1>
+</div>
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Weekly payroll</h2>
+    <p style="color:#555;font-size:14px;line-height:1.7;margin-bottom:10px;">
+        Foundation of the Nómina section. Upcoming phases add the weekly
+        <strong>Agent &amp; Admin payroll assembly</strong> (reusing the existing
+        hours and bonus engines), the <strong>paste-imports</strong> (LPO, spiffs,
+        comedor, …), the <strong>Loan</strong>, <strong>Break-Abuse</strong>,
+        <strong>Welcome-Bonus</strong>, and <strong>Vacation-Tracker</strong>
+        modules, and the <strong>Excel exports</strong>.
+    </p>
+    <p style="color:#888;font-size:13px;margin:0;">Super-admin only. No payroll data is computed yet.</p>
+</div>
+
+{% endblock %}
