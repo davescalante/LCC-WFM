@@ -203,7 +203,9 @@ class NominaHolidayPayTests(TestCase):
         # Base (1×) + holiday premium (2×) = triple pay on the holiday hours.
         self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('8') * Decimal('62.50') * 3)
 
-    def test_holiday_premium_uses_raw_login_while_base_is_nr_adjusted(self):
+    def test_holiday_hours_discount_excess_not_ready(self):
+        # The rule: 8h logged, 1.5h not-ready → discount the EXCESS over the 12.5%
+        # allowance (1.0h) = 0.5h, so the premium is on 7.5 holiday hours, not 8.
         from nomina.models import Holiday
         from nomina.views import _agent_nomina_data
         import datetime
@@ -212,18 +214,32 @@ class NominaHolidayPayTests(TestCase):
         week = [ws + datetime.timedelta(days=i) for i in range(7)]
         holiday = week[2]
         Holiday.objects.create(date=holiday, name='Test Holiday')
-        # 8h logged with 3h not-ready → weekly NR ratio check deducts 2h (3 − 8×0.125).
+        self._log_day(a, holiday, login_h=8, nr_h=1.5)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['hours'], Decimal('7.5'))               # final_hrs = 8 − 0.5 NR
+        self.assertEqual(r['base_pay'], Decimal('468.75'))         # 7.5 × 62.50
+        self.assertEqual(r['holiday_pay'], Decimal('937.50'))      # 7.5 × 62.50 × 2 (NR-adjusted)
+        # Exactly triple on the productive (NR-adjusted) holiday hours.
+        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('7.5') * Decimal('62.50') * 3)
+
+    def test_holiday_hours_heavier_not_ready(self):
+        # 8h logged, 3h not-ready → excess over allowance = 3 − 1.0 = 2.0 → 6 holiday hours.
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        import datetime
+        a = self._agent()
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
         self._log_day(a, holiday, login_h=8, nr_h=3)
 
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
-        self.assertEqual(r['hours'], Decimal('6'))                 # final_hrs = 8 − 2 NR
-        self.assertEqual(r['base_pay'], Decimal('375.00'))         # 6 × 62.50 (NR-adjusted)
-        self.assertEqual(r['holiday_pay'], Decimal('1000.00'))     # 8 × 62.50 × 2 (RAW login)
-        # NOTE: total is 1375, not the "pure triple" 1500 — the holiday PREMIUM is on
-        # raw login hours, but base pay deducts the week's NR. This is the behavior to
-        # confirm with David (premium on raw vs NR-adjusted holiday hours).
-        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('1375.00'))
+        self.assertEqual(r['holiday_pay'], Decimal('750.00'))      # 6 × 62.50 × 2
+        self.assertEqual(r['base_pay'], Decimal('375.00'))         # 6 × 62.50
 
 
 class NominaKillTeamScopeTests(TestCase):

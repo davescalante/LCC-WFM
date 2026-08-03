@@ -122,23 +122,38 @@ def _admin_agents(week_start):
     )
 
 
-def _holiday_worked_hours(agents, holiday_dates):
-    """{agent_id: billable login hours worked on the given holiday dates}."""
+def _holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
+    """{agent_id: NR-adjusted billable hours worked on the holiday dates}.
+
+    Per holiday day, the not-ready time *in excess* of the allowance
+    (nr_ratio × that day's login) is discounted, so a holiday worked with heavy
+    not-ready earns its 2× premium on fewer than the raw logged hours. With no
+    (or within-allowance) not-ready, this equals the logged hours."""
     if not agents or not holiday_dates:
         return {}
     from adherence.models import DailyAgentHours
     from wfm.utils import get_billable_username_map
     bmap, _ = get_billable_username_map([a.pk for a in agents])
-    out = {}
+    per_day = {}   # (agent_id, date) -> [login_seconds, nr_seconds]
     for r in DailyAgentHours.objects.filter(
         upload__date__in=holiday_dates, agent__in=agents
-    ).values('agent_id', 'five9_username', 'login_seconds'):
+    ).values('agent_id', 'upload__date', 'five9_username', 'login_seconds', 'not_ready_seconds'):
         aid = r['agent_id']
         if aid is None:
             continue
         bn = bmap.get(aid)
         if bn is None or r['five9_username'].strip().lower() in bn:
-            out[aid] = out.get(aid, Decimal('0')) + Decimal(str(r['login_seconds'])) / Decimal('3600')
+            k = (aid, r['upload__date'])
+            acc = per_day.setdefault(k, [0, 0])
+            acc[0] += r['login_seconds']
+            acc[1] += r['not_ready_seconds']
+    out = {}
+    for (aid, _d), (lsec, nsec) in per_day.items():
+        login_h = Decimal(str(lsec)) / Decimal('3600')
+        nr_h = Decimal(str(nsec)) / Decimal('3600')
+        excess_nr = max(Decimal('0'), nr_h - login_h * nr_ratio)   # only NR over the allowance
+        worked = max(Decimal('0'), login_h - excess_nr)
+        out[aid] = out.get(aid, Decimal('0')) + worked
     return out
 
 
@@ -432,7 +447,7 @@ def _agent_nomina_data(week_start, week_dates):
     ba_agents = set(BreakAbuseIncident.objects.filter(
         agent__in=agents, date__in=week_dates).values_list('agent_id', flat=True))
     holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
-    hol_hours = _holiday_worked_hours(agents, holiday_dates)
+    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
     enrolls = {e.agent_id: e for e in WelcomeBonusEnrollment.objects.filter(agent__in=agents)}
     loan_ded = {}
     for ln in Loan.objects.filter(agent__in=agents):
@@ -766,7 +781,7 @@ def overrides(request):
     ba_agents = set(BreakAbuseIncident.objects.filter(
         agent__in=agents, date__in=week_dates).values_list('agent_id', flat=True))
     holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
-    hol_hours = _holiday_worked_hours(agents, holiday_dates)
+    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
     existing = {(o.agent_id, o.field): o.value
                 for o in NominaOverride.objects.filter(agent__in=agents, week_start=week_start)}
 
