@@ -25,7 +25,8 @@
         <strong>Welcome-Bonus</strong>, and <strong>Vacation-Tracker</strong>
         modules, and the <strong>Excel exports</strong>.
     </p>
-    <p style="color:#888;font-size:13px;margin:0;">Super-admin only. No payroll data is computed yet.</p>
+    <p style="color:#888;font-size:13px;margin:0 0 14px;">Super-admin only.</p>
+    <a href="{% url 'nomina:agent_nomina' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn btn-primary">Open Agent Nómina &#8594;</a>
 </div>
 
 {% endblock %}

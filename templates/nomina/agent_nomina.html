@@ -1,0 +1,85 @@
+{% extends 'base.html' %}
+{% block title %} - Agent Nómina{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Agent Nómina</h1>
+    <a href="{% url 'nomina:dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Nómina</a>
+</div>
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">
+        <strong>Auto-computed columns</strong> (from the existing hours/bonus engine — same source as Billing v2) are shown live.
+        The <span style="color:#888;">grey "—"</span> columns are the manual paste inputs (LPO, spiffs, etc.) and holiday/deductions — added in later phases.
+        <strong>Infinity employees only.</strong>
+    </p>
+</div>
+
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead>
+        <tr style="background:#f0f4f8;text-align:left;">
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Legal Name</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">User</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Hours</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Rate</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Base Pay</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Adherence</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;color:#888;">LPO</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;color:#888;">Spiff</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;color:#888;">Holiday</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:center;">Comm %</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;color:#888;">Cafeteria</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;color:#888;">Loan</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Auto Subtotal</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in rows %}
+        <tr style="border-bottom:1px solid #e5e7eb;">
+            <td style="padding:6px 10px;">{{ r.emp }}</td>
+            <td style="padding:6px 10px;font-weight:600;color:#1a3a5c;">{{ r.legal_name }}</td>
+            <td style="padding:6px 10px;color:#666;">{{ r.username }}</td>
+            <td style="padding:6px 10px;text-align:right;font-family:monospace;">{{ r.hours|floatformat:2 }}</td>
+            <td style="padding:6px 10px;text-align:right;font-family:monospace;">${{ r.rate|floatformat:2 }}</td>
+            <td style="padding:6px 10px;text-align:right;font-family:monospace;">${{ r.base_pay|floatformat:2 }}</td>
+            <td style="padding:6px 10px;text-align:right;font-family:monospace;">${{ r.adherence_bonus|floatformat:2 }}</td>
+            <td style="padding:6px 10px;text-align:right;color:#bbb;">—</td>
+            <td style="padding:6px 10px;text-align:right;color:#bbb;">—</td>
+            <td style="padding:6px 10px;text-align:right;color:#bbb;">—</td>
+            <td style="padding:6px 10px;text-align:center;">{% if r.commission_pct %}{{ r.commission_pct|floatformat:0 }}%{% else %}<span style="color:#ccc;">—</span>{% endif %}</td>
+            <td style="padding:6px 10px;text-align:right;color:#bbb;">—</td>
+            <td style="padding:6px 10px;text-align:right;color:#bbb;">—</td>
+            <td style="padding:6px 10px;text-align:right;font-family:monospace;font-weight:700;">${{ r.auto_total|floatformat:2 }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="14" style="padding:30px;text-align:center;color:#888;">No Infinity agents with data for this week. (Load real data to see figures.)</td></tr>
+        {% endfor %}
+    </tbody>
+    {% if rows %}
+    <tfoot>
+        <tr style="background:#f8fafc;font-weight:700;border-top:2px solid #94a3b8;">
+            <td style="padding:8px 10px;" colspan="3">TOTALS ({{ rows|length }})</td>
+            <td style="padding:8px 10px;text-align:right;font-family:monospace;">{{ totals.hours|floatformat:2 }}</td>
+            <td></td>
+            <td style="padding:8px 10px;text-align:right;font-family:monospace;">${{ totals.base_pay|floatformat:2 }}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:monospace;">${{ totals.adherence_bonus|floatformat:2 }}</td>
+            <td colspan="6"></td>
+            <td style="padding:8px 10px;text-align:right;font-family:monospace;">${{ totals.auto_total|floatformat:2 }}</td>
+        </tr>
+    </tfoot>
+    {% endif %}
+</table>
+</div>
+
+{% endblock %}
