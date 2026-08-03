@@ -896,7 +896,7 @@ def codings_export(request):
         status='inactive', separations__status='finalized',
         separations__remove_from_adherence_date__gt=week_start,
     )
-    agents = Agent.objects.filter(pay_window_q).distinct().select_related(
+    agents = Agent.objects.filter(pay_window_q).exclude(employer='LCC').distinct().select_related(
         'user', 'supervisor__user'
     )
 
@@ -1029,7 +1029,7 @@ def billing_export_v2(request):
         status='inactive', separations__status='finalized',
         separations__remove_from_adherence_date__gt=week_start,
     )
-    agents = Agent.objects.filter(pay_window_q).distinct().select_related(
+    agents = Agent.objects.filter(pay_window_q).exclude(employer='LCC').distinct().select_related(
         'user', 'supervisor__user'
     ).prefetch_related('five9_profiles', 'separations')
 
@@ -1532,7 +1532,7 @@ def adherence_export(request):
     # Official Admins, applies the pay-window rule for recent separations).
     regular_pks = _get_adherence_agent_pks(week_dates, week_start)
     regular_agents = list(
-        Agent.objects.filter(pk__in=regular_pks)
+        Agent.objects.filter(pk__in=regular_pks).exclude(employer='LCC')
         .select_related('user', 'supervisor__user')
         .prefetch_related('five9_profiles')
     )
@@ -1549,7 +1549,7 @@ def adherence_export(request):
     # this view is gated by finance_access_required (super admin only), which
     # _admin_tabs_access always resolves to full access for anyway.
     admin_agents = list(
-        Agent.objects.filter(status='active', is_official_admin=True)
+        Agent.objects.filter(status='active', is_official_admin=True).exclude(employer='LCC')
         .select_related('user', 'supervisor__user')
         .prefetch_related('five9_profiles')
     )

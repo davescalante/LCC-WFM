@@ -435,6 +435,17 @@ class CodingsExportTests(TestCase):
         idx_b = next(i for i, r in enumerate(rows) if r[3] == 'Sup Bravo')
         self.assertLess(idx_a, idx_b)
 
+    def test_lcc_employer_agent_excluded(self):
+        lcc_agent = _make_agent('lccworker1')
+        lcc_agent.employer = 'LCC'
+        lcc_agent.save()
+        infinity_agent = _make_agent('infworker1')
+
+        ws = self._export_ws()
+        with self.assertRaises(AssertionError):
+            self._row_index_for(ws, lcc_agent)
+        self._row_index_for(ws, infinity_agent)  # still present
+
 
 V2_HEADERS = [
     'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME',
@@ -664,6 +675,17 @@ class BillingV2ExportTests(TestCase):
             'Supervisor', 'Agent Type', 'Employer',
             'Worked Hrs (Final)', 'Billing Rate (USD)', 'Total Billing (USD)',
         ])
+
+    def test_lcc_employer_agent_excluded(self):
+        lcc_agent = _make_agent('lccworker2')
+        lcc_agent.employer = 'LCC'
+        lcc_agent.save()
+        infinity_agent = _make_agent('infworker2')
+
+        ws = self._export_ws()
+        with self.assertRaises(AssertionError):
+            self._row_index_for(ws, lcc_agent)
+        self._row_index_for(ws, infinity_agent)  # still present
 
 
 class AdminTabsAccessTests(TestCase):
@@ -1088,6 +1110,25 @@ class AdherenceExportTests(TestCase):
         ws = self._export_ws()
         r = self._row_for(ws, agent)
         self.assertIsNone(ws.cell(row=r, column=13).value)  # Saturday, day 6 -> column 8+5
+
+    def test_lcc_employer_excluded_regular_and_official_admin(self):
+        lcc_regular = _make_agent('adhexplccreg1')
+        lcc_regular.employer = 'LCC'
+        lcc_regular.save()
+        Shift.objects.create(agent=lcc_regular, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+
+        lcc_admin = _make_agent('adhexplccadmin1')
+        lcc_admin.employer = 'LCC'
+        lcc_admin.is_official_admin = True
+        lcc_admin.save()
+
+        infinity_regular = _make_agent('adhexpinfreg1')
+        Shift.objects.create(agent=infinity_regular, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+
+        ws = self._export_ws()
+        self.assertEqual(self._rows_for(ws, lcc_regular), [])
+        self.assertEqual(self._rows_for(ws, lcc_admin), [])
+        self._row_for(ws, infinity_regular)  # still present
 
     def test_filename_and_content_type(self):
         resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')
