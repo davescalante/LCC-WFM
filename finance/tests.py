@@ -1105,3 +1105,62 @@ class AdherenceExportTests(TestCase):
         self.client.logout()
         resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')
         self.assertEqual(resp.status_code, 302)
+
+
+class AdminAdherenceLiveLoginTests(TestCase):
+    """The admin adherence tab/export must reflect LIVE billable login hours
+    (same source as Billing v2), NOT the stale, double-NR-deducted stored
+    AdherenceRecord.actual_hours that made Official Admins show false
+    'missing time'. Also fixes summing across multiple billable Five9 profiles."""
+
+    def setUp(self):
+        cache.clear()
+        _settings()
+
+    def _official_admin(self, username):
+        a = _make_agent(username, role='admin', role_type='qa')
+        a.is_official_admin = True
+        a.save()
+        return a
+
+    def test_live_login_overwrites_stale_stored_value(self):
+        from finance.views import _apply_live_login_hours
+        admin = self._official_admin('liveadmin')
+        Five9Profile.objects.create(agent=admin, five9_username=admin.agent_name, billable=True, is_primary=True)
+        _add_hours(admin, login_seconds=8 * 3600, nr_seconds=0, week_day=0)  # 8h connected
+        # Stale stored value (undercounted — simulates the double-deduction bug)
+        rec = AdherenceRecord.objects.create(agent=admin, date=_WEEK[0], status='P', actual_hours=Decimal('3.00'))
+        record_map = {(admin.pk, _WEEK[0]): rec}
+        _apply_live_login_hours([admin], _WEEK, record_map)
+        # In-memory record now reflects the true 8h billable login…
+        self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('8'))
+        # …but the DB row is untouched (request-scoped, never saved).
+        rec.refresh_from_db()
+        self.assertEqual(rec.actual_hours, Decimal('3.00'))
+
+    def test_sums_multiple_billable_profiles(self):
+        from finance.views import _apply_live_login_hours
+        admin = self._official_admin('multiadmin')
+        Five9Profile.objects.create(agent=admin, five9_username='acct_a', billable=True, is_primary=True)
+        Five9Profile.objects.create(agent=admin, five9_username='acct_b', billable=True)
+        upload, _ = DailyUpload.objects.get_or_create(date=_WEEK[0])
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='acct_a', login_seconds=5 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='acct_b', login_seconds=3 * 3600, not_ready_seconds=0)
+        record_map = {}
+        _apply_live_login_hours([admin], _WEEK, record_map)
+        # Both billable profiles summed = 8h (the old write path stored only the last).
+        self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('8'))
+        # A record was fabricated in memory only — nothing persisted.
+        self.assertFalse(AdherenceRecord.objects.filter(agent=admin, date=_WEEK[0]).exists())
+
+    def test_excludes_non_billable_username(self):
+        from finance.views import _apply_live_login_hours
+        admin = self._official_admin('nbadmin')
+        Five9Profile.objects.create(agent=admin, five9_username='billable_u', billable=True, is_primary=True)
+        upload, _ = DailyUpload.objects.get_or_create(date=_WEEK[0])
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='billable_u', login_seconds=6 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='other_nb', login_seconds=2 * 3600, not_ready_seconds=0)
+        record_map = {}
+        _apply_live_login_hours([admin], _WEEK, record_map)
+        # Only the billable username's 6h counts — matches Billing v2's billable filter.
+        self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('6'))
