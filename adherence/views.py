@@ -84,7 +84,14 @@ STATUS_COLORS = {
     'IMSS':  '#e0f2f1',
     'LOA':   '#f3e5f5',
     'S':     '#ffccbc',
+    'Holiday': '#ede9fe',
+    'Issues':  '#ffe0b2',
 }
+
+# Statuses offered ONLY on the Official-Admin adherence tab (the agent version of
+# the log-in Issues flow is a separate, deferred structure).
+ADMIN_ONLY_STATUSES = frozenset({'Issues'})
+AGENT_STATUS_CHOICES = [c for c in AdherenceRecord.STATUS_CHOICES if c[0] not in ADMIN_ONLY_STATUSES]
 
 
 def _parse_hours_input(val):
@@ -793,27 +800,32 @@ def save_adherence_cell(request):
                     f"{agent} cannot use any more vacation days. Please reach out to "
                     f"David or Jhon — as super admins they can add it."}, status=200)
 
+    # Retry the write on a transient SQLite lock so a simultaneous save doesn't 500
+    # (dev-only; Postgres never raises it). Behaviour is identical on success.
+    from wfm.utils import retry_on_locked
     if status:
-        AdherenceRecord.objects.update_or_create(
+        retry_on_locked(lambda: AdherenceRecord.objects.update_or_create(
             agent=agent,
             date=day_date,
             defaults={'status': status},
-        )
+        ))
         display = 'A' if status == 'Absent' else status
-        log_action(request.user, 'Set adherence status',
-                   f'{agent} — {day_date}: {_prev_display} → {display}', agent=agent)
+        retry_on_locked(lambda: log_action(request.user, 'Set adherence status',
+                   f'{agent} — {day_date}: {_prev_display} → {display}', agent=agent))
     else:
         # If the record has no logged hours, delete it entirely.
         # If it has logged hours from Five9, just blank the status field so the hours remain.
-        deleted, _ = AdherenceRecord.objects.filter(
-            agent=agent, date=day_date, actual_hours__isnull=True
-        ).delete()
-        if not deleted:
-            AdherenceRecord.objects.filter(
-                agent=agent, date=day_date
-            ).update(status='')
-        log_action(request.user, 'Cleared adherence status',
-                   f'{agent} — {day_date}: {_prev_display} → blank', agent=agent)
+        def _clear_status():
+            deleted, _ = AdherenceRecord.objects.filter(
+                agent=agent, date=day_date, actual_hours__isnull=True
+            ).delete()
+            if not deleted:
+                AdherenceRecord.objects.filter(
+                    agent=agent, date=day_date
+                ).update(status='')
+        retry_on_locked(_clear_status)
+        retry_on_locked(lambda: log_action(request.user, 'Cleared adherence status',
+                   f'{agent} — {day_date}: {_prev_display} → blank', agent=agent))
 
     return JsonResponse({'ok': True})
 
@@ -1011,7 +1023,7 @@ def adherence_week(request):
         'is_current_week': week_start == current_week,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
-        'status_choices': AdherenceRecord.STATUS_CHOICES,
+        'status_choices': AGENT_STATUS_CHOICES,
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
         'supervisor_pks_json': supervisor_pks_json,
@@ -1087,7 +1099,7 @@ def adherence_rows_fragment(request):
             'rows': rows,
             'week_start': week_start,
             'today': timezone.localdate(),
-            'status_choices': AdherenceRecord.STATUS_CHOICES,
+            'status_choices': AGENT_STATUS_CHOICES,
             'selected_supervisor': str(supervisor_id) if supervisor_id else '',
             'show_cos': show_cos,
             'cos_days': cos_days,

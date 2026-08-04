@@ -91,8 +91,25 @@ else:
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
+            # Local dev only (production uses Postgres via DATABASE_URL). Wait up to
+            # 20s for a write lock instead of erroring, so concurrent AJAX requests
+            # (e.g. save-cell + a recommendation fetch) don't hit "database is locked".
+            'OPTIONS': {'timeout': 20},
         }
     }
+
+    # WAL mode lets readers and writers coexist on SQLite (a reader no longer blocks
+    # a writer), which removes the remaining lock contention under the threaded dev
+    # server. No-op on Postgres. Applied on every new SQLite connection.
+    from django.db.backends.signals import connection_created
+
+    def _enable_sqlite_wal(sender, connection, **kwargs):
+        if connection.vendor == 'sqlite':
+            with connection.cursor() as cursor:
+                cursor.execute('PRAGMA journal_mode=WAL;')
+                cursor.execute('PRAGMA synchronous=NORMAL;')
+
+    connection_created.connect(_enable_sqlite_wal)
 
 
 # Password validation

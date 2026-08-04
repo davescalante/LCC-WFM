@@ -1,5 +1,24 @@
+import time
 from datetime import date, timedelta
 from django.utils import timezone
+
+
+def retry_on_locked(fn, tries=6, delay=0.12):
+    """Run a DB write `fn`, retrying briefly on SQLite 'database is locked'. Two
+    writes landing at the same instant can deadlock on SQLite even with WAL + a busy
+    timeout (a real risk under the threaded dev server); a short retry turns that
+    transient lock into a successful save instead of a 500. On any other error, or
+    after `tries` attempts, the exception propagates unchanged. No-op effect on
+    Postgres (production), which never raises this. Returns whatever `fn` returns."""
+    from django.db import OperationalError
+    for attempt in range(tries):
+        try:
+            return fn()
+        except OperationalError as exc:
+            if 'locked' in str(exc).lower() and attempt < tries - 1:
+                time.sleep(delay)
+                continue
+            raise
 
 
 def get_week_start(d=None):
