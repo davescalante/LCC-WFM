@@ -15,11 +15,23 @@
 <div class="grid-2">
     <div class="card">
         <h2>Add a loan</h2>
-        <form method="post">{% csrf_token %}
+        <form method="post" id="loanForm">{% csrf_token %}
             <label>Agent</label>
-            <select name="agent" required><option value="">— select —</option>
-                {% for a in agents %}<option value="{{ a.pk }}">{{ a }} · {{ a.user.username }}</option>{% endfor %}
-            </select>
+            <div style="position:relative;">
+                <input type="text" id="agentSearch" autocomplete="off" placeholder="Type a name to search…"
+                       style="width:100%;box-sizing:border-box;">
+                <input type="hidden" name="agent" id="agentPk">
+                <ul id="agentList" style="display:none;position:absolute;z-index:30;left:0;right:0;
+                    max-height:240px;overflow:auto;margin:2px 0 0;padding:0;list-style:none;background:#fff;
+                    border:1px solid #ccc;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.12);">
+                    {% for a in agents %}
+                    <li data-pk="{{ a.pk }}" data-label="{{ a.agent_name }} · {{ a.user.username }}"
+                        style="padding:7px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f2f2f2;">
+                        <span style="font-weight:600;">{{ a.agent_name }}</span> <span style="color:#999;">· {{ a.user.username }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
             <label>Loan amount (principal, MXN)</label>
             <input type="text" name="principal" inputmode="decimal" required placeholder="e.g. 2000">
             <label>Term</label>
@@ -38,14 +50,96 @@
             <tr>
                 <td style="font-weight:600;">{{ ln.agent }}</td>
                 <td style="text-align:right;font-family:monospace;">${{ ln.total_owed|floatformat:2 }}</td>
-                <td style="text-align:right;font-family:monospace;">${{ ln.weekly_repayment|floatformat:2 }}</td>
+                <td style="text-align:right;font-family:monospace;{% if not ln.this_week %}color:#bbb;{% endif %}" {% if ln.this_week %}title="Deducted this week"{% else %}title="Not deducted this week"{% endif %}>${{ ln.weekly_repayment|floatformat:2 }}</td>
                 <td style="text-align:right;font-family:monospace;font-weight:700;{% if ln.bal <= 0 %}color:#16a34a;{% endif %}">${{ ln.bal|floatformat:2 }}</td>
                 <td style="text-align:right;"><form method="post" style="margin:0;" onsubmit="return confirm('Remove loan?');">{% csrf_token %}<input type="hidden" name="delete" value="{{ ln.pk }}"><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Remove</button></form></td>
             </tr>
             {% endfor %}
             </tbody>
+            <tfoot>
+            <tr style="border-top:2px solid #ddd;font-weight:700;">
+                <td style="padding-top:6px;">Total for this week</td>
+                <td></td>
+                <td style="text-align:right;font-family:monospace;padding-top:6px;">${{ week_total|floatformat:2 }}</td>
+                <td style="text-align:right;font-family:monospace;padding-top:6px;color:#555;" title="All outstanding balance">${{ total_balance|floatformat:2 }}</td>
+                <td></td>
+            </tr>
+            </tfoot>
         </table>
+        <p style="font-size:11px;color:#999;margin:8px 0 0;">“Total for this week” = installments deducted for the week of {{ week_start|date:'M d' }}. Loans not active this week show their weekly amount greyed and don’t count toward it. The last column totals all outstanding balance.</p>
         {% else %}<p style="color:#888;font-size:13px;">No loans yet.</p>{% endif %}
     </div>
 </div>
+<script>
+(function () {
+    var search = document.getElementById('agentSearch');
+    var pk = document.getElementById('agentPk');
+    var list = document.getElementById('agentList');
+    var form = document.getElementById('loanForm');
+    if (!search || !pk || !list) return;
+    var items = Array.prototype.slice.call(list.querySelectorAll('li'));
+    var active = -1;
+
+    function openList() { list.style.display = 'block'; }
+    function closeList() { list.style.display = 'none'; active = -1; }
+    function visible() { return items.filter(function (li) { return li.style.display !== 'none'; }); }
+    function highlight(vis) {
+        vis.forEach(function (li, i) { li.style.background = (i === active) ? '#eef2ff' : ''; });
+        if (active >= 0 && vis[active]) vis[active].scrollIntoView({ block: 'nearest' });
+    }
+    function filter() {
+        var q = search.value.trim().toLowerCase();
+        pk.value = '';                       // editing the text invalidates any prior pick
+        search.setCustomValidity('');
+        items.forEach(function (li) {
+            var hay = li.getAttribute('data-label').toLowerCase();
+            li.style.display = (!q || hay.indexOf(q) !== -1) ? '' : 'none';
+            li.style.background = '';
+        });
+        active = -1;
+        openList();
+    }
+    function pick(li) {
+        pk.value = li.getAttribute('data-pk');
+        search.value = li.getAttribute('data-label');
+        search.setCustomValidity('');
+        closeList();
+    }
+
+    search.addEventListener('input', filter);
+    search.addEventListener('focus', function () { if (!pk.value) filter(); });
+    items.forEach(function (li) {
+        li.addEventListener('mousedown', function (e) { e.preventDefault(); pick(li); });
+    });
+    search.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (list.style.display !== 'block') { filter(); return; }
+            var vis = visible();
+            active = e.key === 'ArrowDown' ? Math.min(active + 1, vis.length - 1) : Math.max(active - 1, 0);
+            highlight(vis);
+        } else if (e.key === 'Enter') {
+            var vis2 = visible();
+            if (list.style.display === 'block' && active >= 0 && vis2[active]) { e.preventDefault(); pick(vis2[active]); }
+        } else if (e.key === 'Escape') {
+            closeList();
+        }
+    });
+    document.addEventListener('click', function (e) {
+        if (e.target !== search && !list.contains(e.target)) closeList();
+    });
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            if (pk.value) return;                        // a valid agent is already selected
+            // Let an exact typed name resolve without an explicit click.
+            var typed = search.value.trim().toLowerCase();
+            var match = items.filter(function (li) { return li.getAttribute('data-label').toLowerCase() === typed; })[0];
+            if (match) { pk.value = match.getAttribute('data-pk'); return; }
+            e.preventDefault();
+            search.setCustomValidity('Pick an agent from the list.');
+            search.reportValidity();
+        });
+    }
+})();
+</script>
 {% endblock %}
