@@ -126,10 +126,13 @@ def _pay_window(week_start):
 
 
 def _infinity_agents(week_start):
+    """Everyone on the Agent Nómina: ALL Infinity, non-official-admin people in the pay
+    window — regardless of attendance tracking or a billable Five9 profile. Sales-type
+    agents earn LPO but take no calls (no tracking/Five9), so they must still appear.
+    Official admins go on the Admin Nómina instead."""
     from scheduling.models import Agent
     return list(
         Agent.objects.filter(_pay_window(week_start))
-        .filter(Q(track_attendance=True) | Q(five9_profiles__billable=True))
         .filter(employer='Infinity')       # INFINITY only — LCC excluded
         .exclude(is_official_admin=True)   # admins go on the Admin Nómina
         .distinct()
@@ -306,8 +309,9 @@ def inputs(request):
                 messages.success(request, f"Spiff rate saved: {rate:.4f}")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
-    # Per-type filled count (agents with a non-zero value this week)
-    agents = _infinity_agents(week_start)
+    # Per-type filled count (agents with a non-zero value this week). Covers the whole
+    # roster — agents AND admins — so the hub counts match what each module now accepts.
+    agents = _infinity_agents(week_start) + _admin_agents(week_start)
     existing = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
     cards = []
@@ -390,7 +394,10 @@ def input_type(request, key):
     if request.method == 'POST' and _finalized_run(week_start):
         messages.error(request, "This week is finalized (locked) — inputs can't be changed.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
-    agents = _infinity_agents(week_start)
+    # Inputs cover the WHOLE roster — agents AND official admins — so one uploaded file
+    # matches everyone; an admin's value flows to the Admin Nómina (which reads the same
+    # WeeklyPayInput). Role-scoped modules (Kill Team QA) still filter by role below.
+    agents = _infinity_agents(week_start) + _admin_agents(week_start)
     if t.get('roles'):   # some modules are role-scoped (e.g. Kill Team QA → Kill Team only)
         agents = [a for a in agents if a.role_type in t['roles']]
     by_username, dupe_usernames = {}, set()

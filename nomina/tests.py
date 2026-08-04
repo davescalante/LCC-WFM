@@ -157,6 +157,25 @@ class NominaSpiffUploadTests(TestCase):
         self.assertEqual(UnmatchedInputRow.objects.filter(
             week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
 
+    def test_official_admin_matches_by_username_not_unmatched(self):
+        """One file covers the whole roster: an Official Admin in an uploaded input
+        file matches by username (not flagged unmatched) and the value lands on their
+        WeeklyPayInput, so it flows to the Admin Nómina."""
+        from nomina.models import UnmatchedInputRow
+        admin = Agent.objects.create(
+            user=User.objects.create_user('petdamian', password='x', first_name='Pet'),
+            role='admin', role_type='supervisor', agent_name='petdamian',
+            status='active', employer='Infinity', is_official_admin=True, employee_id='5000')
+        csv = ("Agent Username,Agent ID,7/20/2026,Amount\n"
+               "petdamian,5000,PET DAMIAN,$300.00 \n")
+        f = SimpleUploadedFile('lpo.csv', csv.encode('utf-8'), content_type='text/csv')
+        lpo_url = reverse('nomina:input_type', args=['lpo']) + f'?week_start={self.ws.isoformat()}'
+        self.client.post(lpo_url, {'file': f}, follow=True)
+        wi = self.WeeklyPayInput.objects.get(agent=admin, week_start=self.ws)
+        self.assertEqual(wi.lpo, Decimal('300.00'))
+        self.assertFalse(UnmatchedInputRow.objects.filter(
+            week_start=self.ws, input_key='lpo').exists())
+
 
 class NominaVacationsPageTests(TestCase):
     """The top-level Vacations page: admins see everyone, agents see only their own
@@ -880,7 +899,8 @@ class NominaTuesdayEditTests(TestCase):
 
     def test_add_more_rejects_out_of_scope_agent(self):
         from nomina.models import WeeklyPayInput
-        outsider = _make_agent('outsider', role='agent', role_type='regular_agent')   # not Infinity
+        outsider = _make_agent('outsider', role='agent', role_type='regular_agent')
+        outsider.employer = 'LCC'; outsider.save()        # non-Infinity → not on the Agent Nómina
         self._add_more('spiff', outsider, '50')
         self.assertFalse(WeeklyPayInput.objects.filter(agent=outsider).exists())
 
@@ -1324,28 +1344,26 @@ class NominaRosterTests(TestCase):
     """Split keys off is_official_admin (non-official → Agent, official → Admin); no
     Infinity person is silently dropped from BOTH sheets."""
 
-    def test_split_and_unrostered_safety_net(self):
+    def test_everyone_infinity_shows_no_overlap(self):
         from nomina.views import _unrostered_infinity, _infinity_agents, _admin_agents
         from scheduling.models import Agent
         ws = get_week_start()
-        # Non-official admin, no tracking/billable → on neither → flagged.
-        stray = _make_agent('strayadmin', role='admin', role_type='supervisor')
+        # A sales-type agent: Infinity, NO attendance tracking, NO billable Five9 profile.
+        stray = _make_agent('salesagent', role='agent', role_type='regular_agent')
         stray.employer = 'Infinity'; stray.track_attendance = False; stray.save()
-        worker = _make_infinity('rworker', '7001')                 # tracked → Agent nómina
+        worker = _make_infinity('rworker', '7001')                 # tracked
         offu = User.objects.create_user('roffadmin', password='x', first_name='Off')
         off = Agent.objects.create(user=offu, role='admin', role_type='supervisor', agent_name='roffadmin',
                                    status='active', employer='Infinity', is_official_admin=True)
 
-        unros = {a.pk for a in _unrostered_infinity(ws)}
-        self.assertIn(stray.pk, unros)
-        self.assertNotIn(worker.pk, unros)
-        self.assertNotIn(off.pk, unros)
-
         agent_ids = {a.pk for a in _infinity_agents(ws)}
         admin_ids = {a.pk for a in _admin_agents(ws)}
+        self.assertIn(stray.pk, agent_ids)                 # shows even without tracking/billable
+        self.assertIn(worker.pk, agent_ids)
+        self.assertIn(off.pk, admin_ids)                   # official admin → Admin nómina
         self.assertFalse(agent_ids & admin_ids)            # no overlap
-        self.assertIn(worker.pk, agent_ids)                # non-official/tracked → Agent
-        self.assertIn(off.pk, admin_ids)                   # official → Admin
+        # Everyone Infinity is now rostered → nobody flagged as unpaid.
+        self.assertNotIn(stray.pk, {a.pk for a in _unrostered_infinity(ws)})
 
 
 class NominaAdminVacationTests(TestCase):
