@@ -28,7 +28,10 @@ class WeeklyPayInput(models.Model):
     extra_hours = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Manual hours correction — folds into Hours Worked + Pay (48)")
     welcome = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     referral = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    kill_team_qa = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    kill_team_qa = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True, default=None,
+        help_text="Kill Team QA bonus (MXN). NULL = never entered → the standard $400 "
+                  "default applies; an explicit value (including $0) is kept as-is.")
     comedor = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Cafeteria charges — deducted")
     transportation = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Transportation — deducted")
 
