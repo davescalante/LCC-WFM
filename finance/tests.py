@@ -966,11 +966,14 @@ class AdherenceExportTests(TestCase):
         self.boss.save()
         self.client.login(username='adhexportboss', password='x')
 
-    def _export_ws(self, week_start=_WEEK_START):
+    def _export_wb(self, week_start=_WEEK_START):
         resp = self.client.get(reverse('adherence_export') + f'?week={week_start.isoformat()}')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp['Content-Type'], XLSX_MIME)
-        return openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        return openpyxl.load_workbook(io.BytesIO(resp.content))
+
+    def _export_ws(self, week_start=_WEEK_START):
+        return self._export_wb(week_start).active
 
     def _display_name(self, agent):
         return agent.user.get_full_name() or agent.agent_name or agent.user.username
@@ -1129,6 +1132,77 @@ class AdherenceExportTests(TestCase):
         self.assertEqual(self._rows_for(ws, lcc_regular), [])
         self.assertEqual(self._rows_for(ws, lcc_admin), [])
         self._row_for(ws, infinity_regular)  # still present
+
+    def test_vto_status_appears_on_vto_sheet(self):
+        agent = _make_agent('adhexpvtosheet1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='VTO', actual_hours=None)
+
+        wb = self._export_wb()
+        self._row_for(wb['VTO Agents'], agent)
+
+    def test_p_vto_status_appears_on_vto_sheet(self):
+        agent = _make_agent('adhexpvtosheet2')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P+VTO', actual_hours=Decimal('4'))
+
+        wb = self._export_wb()
+        self._row_for(wb['VTO Agents'], agent)
+
+    def test_t_vto_status_appears_on_vto_sheet(self):
+        agent = _make_agent('adhexpvtosheet3')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='T+VTO', actual_hours=Decimal('6'))
+
+        wb = self._export_wb()
+        self._row_for(wb['VTO Agents'], agent)
+
+    def test_non_vto_agent_absent_from_vto_sheet(self):
+        agent = _make_agent('adhexpvtosheet4')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        wb = self._export_wb()
+        self.assertEqual(self._rows_for(wb['VTO Agents'], agent), [])
+
+    def test_official_admin_with_vto_excluded_from_vto_sheet(self):
+        admin = _make_agent('adhexpvtosheet5')
+        admin.is_official_admin = True
+        admin.save()
+        AdherenceRecord.objects.create(agent=admin, date=_WEEK_START, status='VTO', actual_hours=None)
+
+        wb = self._export_wb()
+        self._row_for(wb.active, admin)  # still present on the main "Adherence" sheet
+        self.assertEqual(self._rows_for(wb['VTO Agents'], admin), [])
+
+    def test_main_sheet_unchanged_by_vto_sheet_addition(self):
+        vto_agent = _make_agent('adhexpvtosheet6')
+        Shift.objects.create(agent=vto_agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=vto_agent, date=_WEEK_START, status='VTO', actual_hours=None)
+        plain_agent = _make_agent('adhexpvtosheet7')
+        Shift.objects.create(agent=plain_agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=plain_agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        wb = self._export_wb()
+        main_ws = wb.active
+        self.assertEqual(main_ws.title, "Adherence")
+        self._row_for(main_ws, vto_agent)
+        self._row_for(main_ws, plain_agent)
+
+    def test_empty_week_vto_sheet_shows_header_and_note(self):
+        agent = _make_agent('adhexpvtosheet8')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        wb = self._export_wb()
+        vto_ws = wb['VTO Agents']
+        self.assertEqual(
+            [vto_ws.cell(row=3, column=c).value for c in range(1, 8)],
+            ['Username', 'Employee ID', 'Legal Name', 'Agent Name', 'Supervisor',
+             'Commission Deduction %', 'Scheduled Hours'],
+        )
+        self.assertIn('No VTO was recorded for this week.', vto_ws.cell(row=4, column=1).value)
+        self.assertEqual(vto_ws.max_row, 4)
 
     def test_filename_and_content_type(self):
         resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')

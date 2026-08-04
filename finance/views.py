@@ -1512,6 +1512,106 @@ def _adherence_export_hex(color):
     return hex_str
 
 
+def _adherence_export_display_name(agent):
+    return agent.user.get_full_name() or agent.agent_name or agent.user.username
+
+
+def _adherence_export_supervisor_name(agent):
+    return str(agent.supervisor) if agent.supervisor_id else ''
+
+
+def _write_adherence_sheet(ws, rows, week_dates, week_start, week_end, commission_map,
+                            empty_note=None, title_suffix=None):
+    """Write one Adherence-style worksheet (title, headers, per-agent daily-status rows,
+    column widths) into `ws`. Shared by the combined export's main sheet and its VTO-only
+    sheet so both stay pixel-identical except for which rows they contain."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    day_headers = [d.strftime('%a') for d in week_dates]
+    headers = [
+        'Username', 'Employee ID', 'Legal Name', 'Agent Name', 'Supervisor',
+        'Commission Deduction %', 'Scheduled Hours',
+    ] + day_headers
+
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='1A3A5C')
+    center = Alignment(horizontal='center')
+    wrap_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    met_font = Font(color='166534')
+    short_font = Font(color='C0392B')
+
+    ws.append([
+        f"Adherence — Week of {week_start.strftime('%B %d, %Y')} to "
+        f"{week_end.strftime('%B %d, %Y')}{title_suffix or ''}"
+    ])
+    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
+    ws['A1'].font = Font(bold=True, size=13)
+    ws.append([])
+    ws.append(headers)
+    for col in range(1, len(headers) + 1):
+        c = ws.cell(row=3, column=col)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = center
+
+    if not rows and empty_note:
+        ws.append([empty_note])
+        ws.merge_cells(f'A4:{get_column_letter(len(headers))}4')
+        ws['A4'].font = Font(italic=True)
+        ws['A4'].alignment = center
+    else:
+        for row in rows:
+            agent = row['agent']
+            commission_pct = commission_map.get(agent.pk, Decimal('0'))
+
+            ws.append([
+                row.get('billable_five9_username', ''),
+                agent.employee_id or '',
+                _adherence_export_display_name(agent),
+                agent.agent_name or '',
+                _adherence_export_supervisor_name(agent),
+                float(commission_pct),
+                timedelta(hours=float(row['sched_hours'] or 0)),
+            ] + [None] * 7)
+            r = ws.max_row
+            ws.cell(row=r, column=6).number_format = '0.0"%"'
+            ws.cell(row=r, column=7).number_format = '[h]:mm:ss'
+
+            for i, cell in enumerate(row['cells']):
+                col = 8 + i
+                status = cell['status']
+                if cell['missing_hrs'] is not None:
+                    hrs_line = f"-{_adherence_export_hhmmss(cell['missing_hrs'])}"
+                    font = short_font
+                elif cell['display_hrs'] is not None:
+                    hrs_line = _adherence_export_hhmmss(cell['display_hrs'])
+                    font = met_font
+                else:
+                    hrs_line = None
+                    font = Font()
+
+                if status and hrs_line:
+                    text = f"{status}\n{hrs_line}"
+                elif status:
+                    text = status
+                    font = Font()
+                else:
+                    text = None
+
+                xl_cell = ws.cell(row=r, column=col, value=text)
+                xl_cell.fill = PatternFill('solid', fgColor=_adherence_export_hex(cell['color']))
+                xl_cell.font = font
+                xl_cell.alignment = wrap_center
+
+    col_widths = [17, 14, 30, 22, 20, 12, 14] + [11] * 7
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.row_dimensions[3].height = 30
+    for r in range(4, ws.max_row + 1):
+        ws.row_dimensions[r].height = 30
+
+
 @login_required
 @finance_access_required
 def adherence_export(request):
@@ -1520,8 +1620,6 @@ def adherence_export(request):
     Sources every value from adherence._build_maps/_build_rows exactly as both
     on-screen tabs already do — no new adherence/bonus/scheduling math."""
     import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
-    from openpyxl.utils import get_column_letter
     from adherence.views import _build_maps, _build_rows, _get_adherence_agent_pks
 
     week_start = _get_week_start(request)
@@ -1567,13 +1665,9 @@ def adherence_export(request):
             tmpl_by_agent_dow=a_tmpl_by_agent_dow,
         )
 
-    def _display_name(agent):
-        return agent.user.get_full_name() or agent.agent_name or agent.user.username
-
-    def _supervisor_name(agent):
-        return str(agent.supervisor) if agent.supervisor_id else ''
-
-    rows.sort(key=lambda r: (_supervisor_name(r['agent']), _display_name(r['agent'])))
+    rows.sort(key=lambda r: (
+        _adherence_export_supervisor_name(r['agent']), _adherence_export_display_name(r['agent'])
+    ))
 
     commission_map = {
         pa.agent_id: pa.commission_deduction
@@ -1582,83 +1676,26 @@ def adherence_export(request):
         )
     }
 
+    # VTO-only subset: regular roster (Official Admins excluded), any day this week
+    # in VTO_TYPE_STATUSES. Filtered from the already-computed `rows` — no second
+    # _build_rows call, no new query.
+    vto_rows = [
+        row for row in rows
+        if not row['agent'].is_official_admin
+        and any(cell['status'] in VTO_TYPE_STATUSES for cell in row['cells'])
+    ]
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Adherence"
+    _write_adherence_sheet(ws, rows, week_dates, week_start, week_end, commission_map)
 
-    day_headers = [d.strftime('%a') for d in week_dates]
-    headers = [
-        'Username', 'Employee ID', 'Legal Name', 'Agent Name', 'Supervisor',
-        'Commission Deduction %', 'Scheduled Hours',
-    ] + day_headers
-
-    header_font = Font(bold=True, color='FFFFFF')
-    header_fill = PatternFill('solid', fgColor='1A3A5C')
-    center = Alignment(horizontal='center')
-    wrap_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    met_font = Font(color='166534')
-    short_font = Font(color='C0392B')
-
-    ws.append([f"Adherence — Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}"])
-    ws.merge_cells(f'A1:{get_column_letter(len(headers))}1')
-    ws['A1'].font = Font(bold=True, size=13)
-    ws.append([])
-    ws.append(headers)
-    for col in range(1, len(headers) + 1):
-        c = ws.cell(row=3, column=col)
-        c.font = header_font
-        c.fill = header_fill
-        c.alignment = center
-
-    for row in rows:
-        agent = row['agent']
-        commission_pct = commission_map.get(agent.pk, Decimal('0'))
-
-        ws.append([
-            row.get('billable_five9_username', ''),
-            agent.employee_id or '',
-            _display_name(agent),
-            agent.agent_name or '',
-            _supervisor_name(agent),
-            float(commission_pct),
-            timedelta(hours=float(row['sched_hours'] or 0)),
-        ] + [None] * 7)
-        r = ws.max_row
-        ws.cell(row=r, column=6).number_format = '0.0"%"'
-        ws.cell(row=r, column=7).number_format = '[h]:mm:ss'
-
-        for i, cell in enumerate(row['cells']):
-            col = 8 + i
-            status = cell['status']
-            if cell['missing_hrs'] is not None:
-                hrs_line = f"-{_adherence_export_hhmmss(cell['missing_hrs'])}"
-                font = short_font
-            elif cell['display_hrs'] is not None:
-                hrs_line = _adherence_export_hhmmss(cell['display_hrs'])
-                font = met_font
-            else:
-                hrs_line = None
-                font = Font()
-
-            if status and hrs_line:
-                text = f"{status}\n{hrs_line}"
-            elif status:
-                text = status
-                font = Font()
-            else:
-                text = None
-
-            xl_cell = ws.cell(row=r, column=col, value=text)
-            xl_cell.fill = PatternFill('solid', fgColor=_adherence_export_hex(cell['color']))
-            xl_cell.font = font
-            xl_cell.alignment = wrap_center
-
-    col_widths = [17, 14, 30, 22, 20, 12, 14] + [11] * 7
-    for i, w in enumerate(col_widths, 1):
-        ws.column_dimensions[get_column_letter(i)].width = w
-    ws.row_dimensions[3].height = 30
-    for r in range(4, ws.max_row + 1):
-        ws.row_dimensions[r].height = 30
+    ws_vto = wb.create_sheet(title="VTO Agents")
+    _write_adherence_sheet(
+        ws_vto, vto_rows, week_dates, week_start, week_end, commission_map,
+        empty_note=None if vto_rows else "No VTO was recorded for this week.",
+        title_suffix=" — VTO Only",
+    )
 
     response = HttpResponse(
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
