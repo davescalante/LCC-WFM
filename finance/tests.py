@@ -448,7 +448,7 @@ class CodingsExportTests(TestCase):
 
 
 V2_HEADERS = [
-    'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME',
+    'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME', 'Shift Hours',
     'LOGIN TIME', 'NOT READY TIME', 'Coded time', 'Total connected time',
     'Allowed Not Ready', 'Time that should be deducted for going over NR Allowed',
     'Total work time after deduction of Not Ready in Decimal',
@@ -507,9 +507,9 @@ class BillingV2ExportTests(TestCase):
     def test_header_row(self):
         ws = self._export_ws()
         self.assertEqual(self._rows(ws)[0], V2_HEADERS)
-        # A not bold, B-K bold
+        # A not bold, B-L bold
         self.assertFalse(ws.cell(row=1, column=1).font.bold)
-        for col in range(2, 12):
+        for col in range(2, 13):
             self.assertTrue(ws.cell(row=1, column=col).font.bold)
 
     def test_filename_and_content_type(self):
@@ -523,12 +523,12 @@ class BillingV2ExportTests(TestCase):
         _add_hours(agent, 44 * 3600, 7 * 3600)
         Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(12, 0))
         row = self._row_for(self._export_ws(), agent)
-        d = _as_timedelta(row[3])
-        f = _as_timedelta(row[5])
-        g = _as_timedelta(row[6])
-        i = _as_timedelta(row[8])
-        k = _as_timedelta(row[10])
-        j = row[9]
+        d = _as_timedelta(row[4])
+        f = _as_timedelta(row[6])
+        g = _as_timedelta(row[7])
+        i = _as_timedelta(row[9])
+        k = _as_timedelta(row[11])
+        j = row[10]
         self.assertEqual(g, d + f)
         self.assertEqual(k, g - i)
         self.assertAlmostEqual(j, k.total_seconds() / 3600, places=2)
@@ -543,45 +543,45 @@ class BillingV2ExportTests(TestCase):
         ws = self._export_ws()
         row_r = self._row_for(ws, regular)
         row_k = self._row_for(ws, kill)
-        self.assertEqual(_as_timedelta(row_r[7]), timedelta(hours=6))   # Allowed NR
-        self.assertEqual(_as_timedelta(row_k[7]), timedelta(hours=7))   # kill team +1h
-        self.assertEqual(_as_timedelta(row_r[8]), timedelta(hours=4))   # deduction 10-6
-        self.assertEqual(_as_timedelta(row_k[8]), timedelta(hours=3))   # deduction 10-7
-        self.assertEqual(_as_timedelta(row_r[10]), timedelta(hours=46))
-        self.assertEqual(_as_timedelta(row_k[10]), timedelta(hours=47))
+        self.assertEqual(_as_timedelta(row_r[8]), timedelta(hours=6))   # Allowed NR
+        self.assertEqual(_as_timedelta(row_k[8]), timedelta(hours=7))   # kill team +1h
+        self.assertEqual(_as_timedelta(row_r[9]), timedelta(hours=4))   # deduction 10-6
+        self.assertEqual(_as_timedelta(row_k[9]), timedelta(hours=3))   # deduction 10-7
+        self.assertEqual(_as_timedelta(row_r[11]), timedelta(hours=46))
+        self.assertEqual(_as_timedelta(row_k[11]), timedelta(hours=47))
 
     def test_nr_under_allowance_zero_deduction(self):
         agent = _make_agent('underallow1')
         _add_hours(agent, 40 * 3600, 2 * 3600)  # allowance = min(6, 40*.125=5) = 5h > 2h NR
         row = self._row_for(self._export_ws(), agent)
-        self.assertEqual(_as_timedelta(row[8]), timedelta(0))
-        self.assertEqual(_as_timedelta(row[10]), _as_timedelta(row[6]))  # K == G
+        self.assertEqual(_as_timedelta(row[9]), timedelta(0))
+        self.assertEqual(_as_timedelta(row[11]), _as_timedelta(row[7]))  # K == G
 
     def test_nr_over_allowance_deduction_reduces_final(self):
         agent = _make_agent('overallow1')
         _add_hours(agent, 20 * 3600, 8 * 3600)  # allowance = min(6, 2.5) = 2.5h; NR=8h
         row = self._row_for(self._export_ws(), agent)
-        allowed = _as_timedelta(row[7])
-        ded = _as_timedelta(row[8])
-        nr = _as_timedelta(row[4])
+        allowed = _as_timedelta(row[8])
+        ded = _as_timedelta(row[9])
+        nr = _as_timedelta(row[5])
         self.assertEqual(allowed, timedelta(hours=2, minutes=30))
         self.assertEqual(ded, nr - allowed)
-        self.assertEqual(_as_timedelta(row[10]), timedelta(hours=14, minutes=30))
+        self.assertEqual(_as_timedelta(row[11]), timedelta(hours=14, minutes=30))
 
     def test_zero_fill_for_agent_with_no_hours(self):
         agent = _make_agent('zerofillv2')
         row = self._row_for(self._export_ws(), agent)
-        for col in (3, 4, 5, 6, 8, 9):
+        for col in (3, 4, 5, 6, 7, 9, 10):
             self.assertEqual(_as_timedelta(row[col]), timedelta(0))
-        self.assertEqual(row[9], 0.0)
+        self.assertEqual(row[10], 0.0)
 
     def test_admin_with_no_login_shows_coded_as_connected_time(self):
         agent = _make_agent('adminnologin', role='admin', role_type='supervisor')
         Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(14, 0))
         row = self._row_for(self._export_ws(), agent)
-        self.assertEqual(_as_timedelta(row[3]), timedelta(0))            # login 0
-        self.assertEqual(_as_timedelta(row[5]), timedelta(hours=5))     # coded 5h
-        self.assertEqual(_as_timedelta(row[6]), timedelta(hours=5))     # connected == coded
+        self.assertEqual(_as_timedelta(row[4]), timedelta(0))            # login 0
+        self.assertEqual(_as_timedelta(row[6]), timedelta(hours=5))     # coded 5h
+        self.assertEqual(_as_timedelta(row[7]), timedelta(hours=5))     # connected == coded
 
     def test_durations_are_real_values_not_text_and_j_is_number(self):
         agent = _make_agent('durfmtv2')
@@ -589,16 +589,17 @@ class BillingV2ExportTests(TestCase):
         ws = self._export_ws()
         r = self._row_index_for(ws, agent)
         self.assertEqual(ws.cell(row=r, column=4).number_format, '[h]:mm:ss')
-        self.assertEqual(ws.cell(row=r, column=5).number_format, 'h:mm:ss')
-        self.assertEqual(ws.cell(row=r, column=6).number_format, '[h]:mm:ss;@')
+        self.assertEqual(ws.cell(row=r, column=5).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=6).number_format, 'h:mm:ss')
         self.assertEqual(ws.cell(row=r, column=7).number_format, '[h]:mm:ss;@')
-        self.assertEqual(ws.cell(row=r, column=8).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=8).number_format, '[h]:mm:ss;@')
         self.assertEqual(ws.cell(row=r, column=9).number_format, '[h]:mm:ss')
-        self.assertEqual(ws.cell(row=r, column=10).number_format, '0.00')
-        self.assertEqual(ws.cell(row=r, column=11).number_format, '[h]:mm:ss')
-        for col in (4, 5, 6, 7, 8, 9, 11):
+        self.assertEqual(ws.cell(row=r, column=10).number_format, '[h]:mm:ss')
+        self.assertEqual(ws.cell(row=r, column=11).number_format, '0.00')
+        self.assertEqual(ws.cell(row=r, column=12).number_format, '[h]:mm:ss')
+        for col in (4, 5, 6, 7, 8, 9, 10, 12):
             self.assertNotIsInstance(ws.cell(row=r, column=col).value, str)
-        j_value = ws.cell(row=r, column=10).value
+        j_value = ws.cell(row=r, column=11).value
         self.assertIsInstance(j_value, (int, float))
         self.assertNotIsInstance(j_value, bool)
 
@@ -629,7 +630,7 @@ class BillingV2ExportTests(TestCase):
         )
         _add_hours(agent, 5 * 3600, 0)
         row = self._row_for(self._export_ws(), agent)
-        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=5))
+        self.assertEqual(_as_timedelta(row[4]), timedelta(hours=5))
 
     def test_pay_window_exclusion(self):
         agent = _make_agent('v2payout1')
@@ -686,6 +687,77 @@ class BillingV2ExportTests(TestCase):
         with self.assertRaises(AssertionError):
             self._row_index_for(ws, lcc_agent)
         self._row_index_for(ws, infinity_agent)  # still present
+
+    def test_shift_hours_reflects_regular_schedule(self):
+        agent = _make_agent('v2shifthrs1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=16))
+
+    def test_shift_hours_ignores_vto_zeroing(self):
+        agent = _make_agent('v2shifthrs2')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), status='VTO', actual_hours=None)
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=16))  # VTO day still counts in full
+
+    def test_shift_hours_excludes_overtime(self):
+        agent = _make_agent('v2shifthrs3')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        OvertimeShift.objects.create(
+            agent=agent, date=_WEEK_START + timedelta(days=2), start_time=time(18, 0), end_time=time(22, 0),
+        )
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=8))  # the OT shift contributes nothing
+
+    def test_shift_hours_does_not_affect_billing_totals(self):
+        agent = _make_agent('v2shifthrs4')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        _add_hours(agent, 10 * 3600, 1 * 3600)
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=8))    # Shift Hours: schedule only
+        self.assertEqual(_as_timedelta(row[4]), timedelta(hours=10))  # Login Time: unaffected, from Five9 hours
+
+    def test_shift_hours_matches_adherence_export_exactly(self):
+        """Anti-drift guard: the same agent-week must produce the IDENTICAL Shift Hours
+        value on both the combined Adherence export and Billing v2 — they call the same
+        adherence._compute_shift_hours through the same adherence._build_maps, so they
+        are mathematically incapable of disagreeing. The fixture mixes a VTO day (must
+        still count) and an OT shift (must not count) so a naive, independently-written
+        calculation on either side would likely land on a different number.
+        """
+        cache.clear()  # _get_adherence_agent_pks caches its roster per week_start
+        agent = _make_agent('v2shiftdrift1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), status='VTO', actual_hours=None)
+        OvertimeShift.objects.create(
+            agent=agent, date=_WEEK_START + timedelta(days=2), start_time=time(18, 0), end_time=time(22, 0),
+        )
+
+        # (a) Billing v2 row must exist — _row_for raises if not exactly one row.
+        v2_row = self._row_for(self._export_ws(), agent)
+        v2_shift_hours = _as_timedelta(v2_row[3])
+
+        # (b) Adherence export row must exist.
+        adh_resp = self.client.get(reverse('adherence_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(adh_resp.status_code, 200)
+        adh_ws = openpyxl.load_workbook(io.BytesIO(adh_resp.content)).active
+        display_name = agent.user.get_full_name() or agent.agent_name or agent.user.username
+        adh_rows = [r for r in range(4, adh_ws.max_row + 1) if adh_ws.cell(row=r, column=3).value == display_name]
+        self.assertEqual(len(adh_rows), 1, f"Expected exactly one Adherence-export row for {agent}")
+        adh_shift_hours = _as_timedelta(adh_ws.cell(row=adh_rows[0], column=8).value)
+
+        # (c) Non-zero on both — 0 == 0 would silently pass and prove nothing.
+        self.assertNotEqual(v2_shift_hours, timedelta(0))
+        self.assertNotEqual(adh_shift_hours, timedelta(0))
+
+        # (d) Only now assert the two exports actually agree.
+        self.assertEqual(v2_shift_hours, adh_shift_hours)
+        self.assertEqual(v2_shift_hours, timedelta(hours=16))  # VTO counted, OT excluded
 
 
 class AdminTabsAccessTests(TestCase):

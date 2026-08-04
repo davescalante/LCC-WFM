@@ -396,6 +396,66 @@ def _build_maps(agents, week_dates):
     return shift_map, record_map, coded_map, ot_map, extra_hrs_map, split_labels_map, tmpl_by_agent_dow
 
 
+def _effective_template(tmpl_by_agent_dow, agent_id, d):
+    dow = d.weekday()
+    best = None
+    for t in (tmpl_by_agent_dow or {}).get((agent_id, dow), []):
+        if t.effective_from is not None and t.effective_from > d:
+            continue
+        if t.effective_until is not None and t.effective_until < d:
+            continue
+        if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
+            best = t
+    return best
+
+
+def _compute_shift_hours(agent_pk, week_dates, shift_map, ot_map, extra_hrs_map, tmpl_by_agent_dow):
+    """
+    Single source of truth for "Shift Hours": raw weekly hours from the agent's regular
+    schedule only, excluding all overtime, never zeroed by SCHED_HOURS_ZEROING_STATUSES.
+    Extracted from _build_rows's per-day loop so other reports (Billing v2) can reuse the
+    identical calculation without depending on _build_rows' bonus/NR-cap/variance math.
+    is_scheduled_day is computed from the same inputs _build_rows uses, including OT
+    spillover from the previous day, so a day gates identically in both places even
+    though OT hours themselves never enter the sum.
+    """
+    week_dates_set = set(week_dates)
+    shift_hours_total = Decimal('0')
+
+    for day_date in week_dates:
+        shift = shift_map.get((agent_pk, day_date))
+        is_off = shift.is_off if shift else False
+        has_shift = shift is not None
+
+        extra_block_hrs = (extra_hrs_map or {}).get((agent_pk, day_date), Decimal('0'))
+        sched_hrs = _hours_evening(shift) + extra_block_hrs
+        ot_shifts = (ot_map or {}).get((agent_pk, day_date)) or []
+
+        prev_date = day_date - timedelta(days=1)
+        if prev_date in week_dates_set:
+            prev_shift = shift_map.get((agent_pk, prev_date))
+            prev_ot_shifts = (ot_map or {}).get((agent_pk, prev_date)) or []
+        else:
+            prev_shift = _effective_template(tmpl_by_agent_dow, agent_pk, prev_date)
+            prev_ot_shifts = []
+        prev_not_off = prev_shift is not None and not getattr(prev_shift, 'is_off', False)
+        spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
+        spill_hrs += sum(_hours_morning(s) for s in prev_ot_shifts)
+        has_spillover = spill_hrs > 0
+
+        # A day is scheduled if there's a non-off shift, OT shift, or overnight spillover
+        is_scheduled_day = (has_shift and not is_off) or bool(ot_shifts) or has_spillover
+
+        # Shift Hours: raw regular-schedule hours only (excludes OT), never zeroed by
+        # status. Same gate and same regular-schedule pieces as sched_total in
+        # _build_rows, just skipping ot_hrs/prev_ot_shifts and the status-zeroing step.
+        if is_scheduled_day:
+            regular_spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
+            shift_hours_total += sched_hrs + regular_spill_hrs
+
+    return shift_hours_total
+
+
 def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None, billing_settings=None):
     """
     Build the per-agent display rows for the adherence dashboard week view.
@@ -441,18 +501,6 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
     _billing_settings = billing_settings if billing_settings is not None else _BS.get()
 
-    def _effective_template(agent_id, d):
-        dow = d.weekday()
-        best = None
-        for t in (tmpl_by_agent_dow or {}).get((agent_id, dow), []):
-            if t.effective_from is not None and t.effective_from > d:
-                continue
-            if t.effective_until is not None and t.effective_until < d:
-                continue
-            if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
-                best = t
-        return best
-
     for agent in agents:
         cells = []
         total_present = 0
@@ -460,7 +508,6 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         total_tardy = 0
         total_incomplete = 0
         sched_total = Decimal('0')
-        shift_hours_total = Decimal('0')
         actual_total = Decimal('0')
         bonus = True          # True = eligible, False = disqualified, None = incomplete
         bonus_determined = False
@@ -485,7 +532,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 prev_shift = shift_map.get((agent.pk, prev_date))
                 prev_ot_shifts = (ot_map or {}).get((agent.pk, prev_date)) or []
             else:
-                prev_shift = _effective_template(agent.pk, prev_date)
+                prev_shift = _effective_template(tmpl_by_agent_dow, agent.pk, prev_date)
                 prev_ot_shifts = []
             prev_not_off = prev_shift is not None and not getattr(prev_shift, 'is_off', False)
             spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
@@ -507,13 +554,6 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             # A day is scheduled if there's a non-off shift, OT shift, or overnight spillover
             is_scheduled_day = (has_shift and not is_off) or bool(ot_shifts) or has_spillover
-
-            # Shift Hours: raw regular-schedule hours only (excludes OT), never zeroed by
-            # status. Same gate and same regular-schedule pieces as sched_total below, just
-            # skipping ot_hrs/prev_ot_shifts and the status-zeroing step.
-            if is_scheduled_day:
-                regular_spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
-                shift_hours_total += sched_hrs + regular_spill_hrs
 
             effective_sched = Decimal('0')
 
@@ -621,6 +661,10 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 'key': f'status_{agent.pk}_{day_date.isoformat()}',
                 'hours_key': f'hours_{agent.pk}_{day_date.isoformat()}',
             })
+
+        shift_hours_total = _compute_shift_hours(
+            agent.pk, week_dates, shift_map, ot_map, extra_hrs_map, tmpl_by_agent_dow
+        )
 
         coded = sum(coded_map.get((agent.pk, d), Decimal('0')) for d in week_dates)
         adjusted = actual_total + coded

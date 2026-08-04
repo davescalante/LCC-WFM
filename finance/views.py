@@ -1015,6 +1015,7 @@ def billing_export_v2(request):
     import openpyxl
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
+    from adherence.views import _build_maps, _compute_shift_hours
 
     week_start = _get_week_start(request)
     settings = BillingSettings.get_for_week(week_start)
@@ -1035,6 +1036,11 @@ def billing_export_v2(request):
 
     data = _get_billable_weekly_data(list(agents), week_dates, settings)
 
+    # Shift Hours: schedule-only data via _build_maps (pure data gathering, no bonus/
+    # NR-cap/variance math) + the shared _compute_shift_hours calculation — the same
+    # single source of truth the combined Adherence export's Shift Hours column uses.
+    shift_map, _, _, ot_map, extra_hrs_map, _, tmpl_by_agent_dow = _build_maps(list(agents), week_dates)
+
     primary_map = {}
     for p in Five9Profile.objects.filter(
         agent__in=agents, is_primary=True
@@ -1050,20 +1056,21 @@ def billing_export_v2(request):
     header_font = Font(bold=True)
 
     headers = [
-        'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME',
+        'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME', 'Shift Hours',
         'LOGIN TIME', 'NOT READY TIME', 'Coded time', 'Total connected time',
         'Allowed Not Ready', 'Time that should be deducted for going over NR Allowed',
         'Total work time after deduction of Not Ready in Decimal',
         'Total work time after deduction of Not Ready',
     ]
     ws.append(headers)
-    for col in range(2, 12):  # B-K bold, A left default
+    for col in range(2, 13):  # B-L bold, A left default
         ws.cell(row=1, column=col).font = header_font
 
     for agent in agents_sorted:
         d = data.get(agent.pk, {})
         first, last = _split_agent_display_name(agent.agent_name)
 
+        shift_hrs = _compute_shift_hours(agent.pk, week_dates, shift_map, ot_map, extra_hrs_map, tmpl_by_agent_dow)
         login_hrs = d.get('actual_hrs', Decimal('0'))
         nr_hrs = d.get('total_nr_hrs', Decimal('0'))
         coded_hrs = d.get('coded_hrs', Decimal('0'))
@@ -1079,6 +1086,7 @@ def billing_export_v2(request):
             primary_map.get(agent.pk, '') or '',
             first,
             last,
+            _secs(shift_hrs),
             _secs(login_hrs),
             _secs(nr_hrs),
             _secs(coded_hrs),
@@ -1091,15 +1099,16 @@ def billing_export_v2(request):
         ws.append(row)
         r = ws.max_row
         ws.cell(row=r, column=4).number_format = '[h]:mm:ss'
-        ws.cell(row=r, column=5).number_format = 'h:mm:ss'
-        ws.cell(row=r, column=6).number_format = '[h]:mm:ss;@'
+        ws.cell(row=r, column=5).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=6).number_format = 'h:mm:ss'
         ws.cell(row=r, column=7).number_format = '[h]:mm:ss;@'
-        ws.cell(row=r, column=8).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=8).number_format = '[h]:mm:ss;@'
         ws.cell(row=r, column=9).number_format = '[h]:mm:ss'
-        ws.cell(row=r, column=10).number_format = '0.00'
-        ws.cell(row=r, column=11).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=10).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=11).number_format = '0.00'
+        ws.cell(row=r, column=12).number_format = '[h]:mm:ss'
 
-    col_widths = {1: 22, 2: 20, 3: 19, 4: 12, 5: 17, 6: 12, 7: 21, 8: 19, 9: 55, 10: 56, 11: 44}
+    col_widths = {1: 22, 2: 20, 3: 19, 4: 14, 5: 12, 6: 17, 7: 12, 8: 21, 9: 19, 10: 55, 11: 56, 12: 44}
     for col, w in col_widths.items():
         ws.column_dimensions[get_column_letter(col)].width = w
 
