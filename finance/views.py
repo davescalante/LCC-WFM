@@ -1,7 +1,7 @@
 import json
 from datetime import date, timedelta, time as time_cls
 from django.utils import timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.shortcuts import render, redirect
@@ -1371,16 +1371,73 @@ def admin_adherence(request):
         for cell in row['cells']:
             cell['note_count'] = note_count_map.get((row['agent'].pk, cell['date']), 0)
 
+    from nomina.models import Holiday, AdminBonusDeduction
+    holiday_dates = set(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
+    # Coder-entered weekly bonus deduction % per admin (guide-recommended, manual).
+    ded_map = {x.agent_id: x.deduction_pct for x in AdminBonusDeduction.objects.filter(
+        agent__in=agents, week_start=week_start)}
+    for row in rows:
+        row['bonus_ded_pct'] = ded_map.get(row['agent'].pk, Decimal('0'))
     return render(request, 'finance/admin_adherence.html', {
         'rows': rows,
         'week_dates': week_dates,
         'week_start': week_start,
         'week_end': week_end,
         'today': timezone.localdate(),
+        'holiday_dates': holiday_dates,
         'prev_week': (week_start - timedelta(days=7)).isoformat(),
         'next_week': (week_start + timedelta(days=7)).isoformat(),
         'status_choices': AdherenceRecord.STATUS_CHOICES,
+        # 0,5,10,…,100 for the deduction dropdown.
+        'ded_options': list(range(0, 105, 5)),
     })
+
+
+@login_required
+@admin_tabs_access_required
+def admin_penalty_reco(request):
+    """GET agent + week → JSON recommended admin-bonus deduction (guide for the alert)."""
+    from nomina.views import admin_bonus_penalty
+    try:
+        agent = Agent.objects.get(pk=request.GET.get('agent'))
+    except (Agent.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'agent not found'}, status=404)
+    ws = parse_week_param(request.GET.get('week')) or get_week_start()
+    override = None
+    raw_date = request.GET.get('date')
+    if raw_date:
+        try:                       # reflect the just-set cell even if its save hasn't landed yet
+            override = (date.fromisoformat(raw_date), request.GET.get('status') or '')
+        except ValueError:
+            override = None
+    reco = admin_bonus_penalty(agent, ws, override=override)
+    return JsonResponse({'ok': True, 'pct': str(reco['pct']),
+                         'reasons': reco['reasons'], 'hours_note': reco['hours_note']})
+
+
+@login_required
+@admin_tabs_access_required
+@require_POST
+def save_admin_deduction(request):
+    """Save the coder-entered weekly admin-bonus deduction % for one admin/week."""
+    from nomina.models import AdminBonusDeduction
+    data = json.loads(request.body)
+    try:
+        agent = Agent.objects.get(pk=data.get('agent_id'))
+    except (Agent.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({'ok': False, 'error': 'agent not found'}, status=404)
+    ws = parse_week_param(data.get('week')) or get_week_start()
+    try:
+        pct = Decimal(str(data.get('pct') or '0'))
+    except (InvalidOperation, ValueError):
+        return JsonResponse({'ok': False, 'error': 'bad pct'}, status=400)
+    pct = max(Decimal('0'), min(Decimal('100'), pct))
+    from wfm.utils import retry_on_locked
+    retry_on_locked(lambda: AdminBonusDeduction.objects.update_or_create(
+        agent=agent, week_start=ws,
+        defaults={'deduction_pct': pct, 'note': (data.get('note') or '').strip()[:255],
+                  'updated_by': getattr(request.user, 'agent', None)}))
+    return JsonResponse({'ok': True, 'pct': str(pct)})
 
 
 @login_required

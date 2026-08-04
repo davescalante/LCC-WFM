@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block title %} - Nómina Inputs{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Inputs</h1>
+    <a href="{% url 'nomina:dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Nómina</a>
+</div>
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+
+<div class="card" style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+    <form method="post" style="display:flex;align-items:center;gap:12px;margin:0;flex-wrap:wrap;">{% csrf_token %}
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        <label style="margin:0;font-weight:600;">Spiff USD→MXN rate this week:</label>
+        <input type="text" name="spiff_fx_rate" value="{% if spiff_fx_rate is not None %}{{ spiff_fx_rate|floatformat:4 }}{% endif %}"
+               placeholder="enter rate" inputmode="decimal"
+               style="width:120px;padding:6px 10px;border:1px solid {% if spiff_fx_rate is None %}#f59e0b{% else %}#ddd{% endif %};border-radius:4px;margin:0;">
+        <button type="submit" class="btn btn-primary" style="padding:6px 14px;">Save rate</button>
+        {% if spiff_fx_rate is None %}<span style="color:#b45309;font-size:12px;">⚠ Not set — spiffs stay $0 until you enter this week's rate.</span>{% endif %}
+    </form>
+</div>
+
+<style>
+    .in-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; }
+    .in-card { display:block; text-decoration:none; color:inherit; background:white; border:1px solid #e2e8f0;
+               border-radius:10px; padding:16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.06); transition:.15s; }
+    .in-card:hover { border-color:#1a3a5c; box-shadow:0 3px 10px rgba(0,0,0,.1); transform:translateY(-1px); }
+    .in-card h3 { margin:0 0 6px; font-size:15px; color:#1a3a5c; }
+    .in-card p { margin:0 0 8px; font-size:12px; color:#666; line-height:1.5; }
+    .in-tag { display:inline-block; font-size:10px; font-weight:700; padding:1px 8px; border-radius:10px; }
+    .in-tag.some { background:#dcfce7; color:#166534; } .in-tag.none { background:#f1f5f9; color:#94a3b8; }
+    .in-ded { color:#b91c1c; font-weight:600; }
+</style>
+
+<div class="in-grid">
+    {% for c in cards %}
+    <a class="in-card" href="{% url 'nomina:input_type' c.key %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <h3>{{ c.label }}{% if c.deduction %} <span class="in-ded" style="font-size:11px;">(deduction)</span>{% endif %}</h3>
+        <p>{{ c.desc }}</p>
+        {% if c.filled %}<span class="in-tag some">{{ c.filled }} filled</span>{% else %}<span class="in-tag none">empty</span>{% endif %}
+        <span style="font-size:11px;color:#999;margin-left:6px;">{{ c.unit }}</span>
+    </a>
+    {% endfor %}
+</div>
+
+<p style="margin-top:18px;font-size:12px;color:#999;">Each module accepts a file upload (mapped by column headers) or manual entry. Welcome Bonus and Loans have their own modules on the Nómina hub.</p>
+{% endblock %}

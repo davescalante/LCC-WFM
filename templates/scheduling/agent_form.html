@@ -68,6 +68,11 @@
                 <label for="{{ agent_form.can_access_admin_tabs.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Admin Codings &amp; Adherence Access</label>
                 <span style="font-size:11px;color:#888;">Supervisor can view &amp; code their own team of Official Admins; super admins see everyone</span>
             </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                {{ agent_form.can_manage_loans }}
+                <label for="{{ agent_form.can_manage_loans.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Manage Loans</label>
+                <span style="font-size:11px;color:#888;">Can open the Nómina Loans module to add loans &amp; mark repayments</span>
+            </div>
             {% endif %}
             {% endif %}
         </div>
@@ -91,7 +96,8 @@
             {{ agent_form.teams_password }}
         </div>
 
-        <!-- Finance -->
+        {% if request.has_finance_access %}
+        <!-- Finance (super-admin only) -->
         <div class="card">
             <h2>Finance</h2>
             <label>Hourly Rate (MXN)</label>
@@ -106,6 +112,7 @@
             </div>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 
     <div class="card" id="five9-accounts-card">

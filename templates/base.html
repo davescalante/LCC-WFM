@@ -77,6 +77,7 @@
         <a href="{% url 'agent_available_ot' %}" style="position:relative;">Available OT{% if request.agent_ot_claim_badge %}<span class="nav-badge">{{ request.agent_ot_claim_badge }}</span>{% endif %}</a>
         <a href="{% url 'agent_my_adherence' %}">My Adherence</a>
         <a href="{% url 'agent_my_requests' %}" style="position:relative;">My Requests{% if request.agent_request_badge %}<span class="nav-badge">{{ request.agent_request_badge }}</span>{% endif %}</a>
+        <a href="{% url 'vacations' %}">My Vacation</a>
         {% else %}
         <a href="{% url 'dashboard' %}">Dashboard</a>
         <a href="{% url 'agent_list' %}">Users</a>
@@ -91,9 +92,14 @@
         <a href="{% url 'daily_hours' %}">Daily Hours</a>
         <a href="{% url 'erlang_calculator' %}">Staffing</a>
         <a href="{% url 'requests_list' %}" style="position:relative;">Requests{% if request.supervisor_request_badge or request.staff_own_request_badge %}<span class="nav-badge">{{ request.supervisor_request_badge|add:request.staff_own_request_badge }}</span>{% endif %}</a>
+        <a href="{% url 'vacations' %}">Vacations</a>
         <a href="{% url 'records_attendance' %}">Records</a>
         {% if request.has_finance_access %}
         <a href="{% url 'finance_dashboard' %}" style="font-weight:600;color:#0f766e;">Finance</a>
+        <a href="{% url 'nomina:dashboard' %}" style="font-weight:600;color:#0f766e;">Nómina</a>
+        {% endif %}
+        {% if request.can_manage_loans and not request.has_finance_access %}
+        <a href="{% url 'nomina:loans' %}" style="font-weight:600;color:#0f766e;">Loans</a>
         {% endif %}
         {% endif %}
         {% if request.user.is_authenticated and not request.is_agent %}

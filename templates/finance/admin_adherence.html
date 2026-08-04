@@ -63,6 +63,8 @@
 .day-name      { font-size: 12px; font-weight: 700; }
 .day-date      { font-size: 10px; font-weight: 400; color: #888; margin-top: 1px; }
 .day-today-label { font-size: 8px; font-weight: 800; letter-spacing: .8px; color: #2563eb; margin-bottom: 1px; }
+.day-holiday   { font-size: 8px; font-weight: 800; letter-spacing: .5px; color: #b45309; margin-top: 2px; text-transform: uppercase; }
+thead th.col-holiday { background: #fef3c7; border-bottom-color: #f59e0b !important; }
 
 tbody tr.row-a         { background: #fff; }
 tbody tr.row-b         { background: #f9fafb; }
@@ -163,6 +165,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
         <col style="width:62px;">
         <col style="width:62px;">
         <col style="width:90px;">
+        <col style="width:70px;">
     </colgroup>
     <thead>
         <tr>
@@ -170,10 +173,11 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="fc fc-2 th-left">Five9 User</th>
             <th class="fc fc-3" style="text-align:center;">ID</th>
             {% for d in week_dates %}
-            <th class="th-day {% if d == today %}col-today{% endif %}">
+            <th class="th-day {% if d == today %}col-today{% endif %}{% if d in holiday_dates %} col-holiday{% endif %}">
                 {% if d == today %}<div class="day-today-label">TODAY</div>{% endif %}
                 <div class="day-name">{{ d|date:"D" }}</div>
                 <div class="day-date">{{ d|date:"M j" }}</div>
+                {% if d in holiday_dates %}<div class="day-holiday">Holiday</div>{% endif %}
             </th>
             {% endfor %}
             <th class="th-sum border-l" style="font-size:11px;width:46px;color:#27ae60;">P</th>
@@ -186,6 +190,7 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <th class="th-sum" style="font-size:11px;min-width:62px;text-align:right;white-space:nowrap;">NR Cap</th>
             <th class="th-sum" style="font-size:10px;color:#666;line-height:1.3;">Tot<br>Hrs</th>
             <th class="th-sum" style="font-size:10px;color:#666;line-height:1.3;">Admin<br>Bonus</th>
+            <th class="th-sum" style="font-size:10px;color:#666;line-height:1.3;">Bonus<br>Ded %</th>
         </tr>
     </thead>
     <tbody>
@@ -253,9 +258,15 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             <td class="sum-cell">
                 <span style="font-size:11px;color:#1d4ed8;font-weight:600;">${{ row.admin_bonus_mxn|floatformat:2 }}</span>
             </td>
+            <td class="sum-cell">
+                <select class="ded-select" data-agent="{{ row.agent.pk }}" onchange="onDeductionChange(this)"
+                        style="font-size:11px;padding:1px 2px;border:1px solid #ddd;border-radius:3px;{% if row.bonus_ded_pct %}color:#b91c1c;font-weight:700;{% endif %}">
+                    {% for p in ded_options %}<option value="{{ p }}" {% if row.bonus_ded_pct == p %}selected{% endif %}>{{ p }}%</option>{% endfor %}
+                </select>
+            </td>
         </tr>
         {% empty %}
-        <tr><td colspan="20" style="padding:30px;color:#888;text-align:center;">No Official Admins found.</td></tr>
+        <tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">No Official Admins found.</td></tr>
         {% endfor %}
     </tbody>
 </table>
@@ -272,6 +283,29 @@ tbody td.col-today           { box-shadow: inset 2px 0 0 0 #60a5fa, inset -2px 0
             {% endif %}&nbsp;{{ label }}
         </span>
         {% endfor %}
+    </div>
+</div>
+
+<!-- Admin-bonus penalty Acknowledge alert -->
+<div id="penalty-overlay" style="display:none;position:fixed;inset:0;z-index:11000;background:rgba(0,0,0,.45);align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;max-width:460px;width:calc(100vw - 40px);box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;">
+        <div style="background:#fef2f2;padding:16px 20px;border-bottom:1px solid #fecaca;">
+            <div style="font-size:16px;font-weight:800;color:#991b1b;">&#9888;&#65039; Bonus penalty may apply</div>
+            <div id="pa-status" style="font-size:12px;color:#7f1d1d;margin-top:2px;"></div>
+        </div>
+        <div style="padding:16px 20px;">
+            <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">The rule</div>
+            <div id="pa-rule" style="font-size:13px;color:#333;line-height:1.5;"></div>
+            <hr style="border:none;border-top:2px solid #eee;margin:14px 0;">
+            <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">For this admin</div>
+            <div id="pa-reco" style="font-size:14px;color:#111;line-height:1.5;"></div>
+            <div id="pa-hours" style="font-size:13px;color:#b45309;margin-top:6px;font-weight:600;"></div>
+            <div style="font-size:11px;color:#999;margin-top:10px;">This is a guide — enter the final % in the <strong>Bonus Ded %</strong> column.</div>
+        </div>
+        <div style="padding:12px 20px;border-top:1px solid #eee;display:flex;justify-content:flex-end;background:#fafafa;">
+            <button id="pa-ack" onclick="document.getElementById('penalty-overlay').style.display='none';"
+                    style="padding:8px 22px;background:#991b1b;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Acknowledge</button>
+        </div>
     </div>
 </div>
 
@@ -302,6 +336,19 @@ const STATUS_COLORS = {
     'P':'#e8f5e9','OT':'#c8e6c9','MUT':'#dcedc8','VTO':'#f1f8e9','P+VTO':'#e8f5e9',
     'T':'#fff3e0','T+VTO':'#fff8e1','Absent':'#ffebee','NCNS':'#ffcdd2','S':'#ffccbc',
     'I':'#fce4ec','T+I':'#fde8d8','Quit':'#eeeeee','Baja':'#eeeeee','V':'#e3f2fd','IMSS':'#e0f2f1',
+    'Holiday':'#ede9fe','Issues':'#ffe0b2',
+};
+const WEEK_START = '{{ week_start|date:"Y-m-d" }}';
+const PENALTY_TRIGGERS = new Set(['T','I','T+I','T+VTO','Absent','NCNS','S','Issues']);
+const PENALTY_RULES = {
+    'T': 'Tardies are their OWN track: 1st→10%, 2nd→30%, 3rd→60%, 4th→100% in a week; recurring weeks escalate (2 wks 1→30%, 3 wks 1→60%, 4 wks 1→100%). Stacks on top of any Incomplete penalty.',
+    'I': 'Incomplete shifts are their OWN track: 1st→10%, 2nd→30%, 3rd→60%, 4th→100% in a week; recurring weeks escalate (2 wks 1→30%, 3 wks 1→60%, 4 wks 1→100%). Stacks on top of any Tardy penalty.',
+    'T+I': 'Counts as BOTH a tardy AND an incomplete — each track adds its own penalty (first of each = 10% + 10% = 20%).',
+    'T+VTO': 'The tardy portion counts on the Tardy track (1st→10%, 2nd→30%, …; recurrence escalates), stacking with any Incomplete penalty.',
+    'Absent': 'An unexcused Absence removes the whole admin bonus for the week: −100%.',
+    'NCNS': 'No-Call-No-Show removes the whole admin bonus: −100%.',
+    'S': 'A Suspension removes the whole admin bonus: −100%.',
+    'Issues': 'Clock-in/out issues are their OWN track: 1→−25%, 2→−50%, 3→−100% in a week; recurrence escalates (2 wks 1→50%, 3 wks 1→100%). Also docks the day’s hours (8 / 4 / 0).',
 };
 
 function csrfToken() {
@@ -341,10 +388,65 @@ async function saveCell(agentId, dateStr, status) {
     }
 }
 
-function onStatusChange(sel) {
+async function onStatusChange(sel) {
     const td = sel.closest('td');
     td.style.background = STATUS_COLORS[sel.value] || '#f5f5f5';
+    // Fire the alert immediately (it passes the just-set cell, so the recommendation
+    // is correct regardless of whether the save has landed) and save in parallel.
+    if (PENALTY_TRIGGERS.has(sel.value)) {
+        const tr = td.closest('tr');
+        const name = tr && tr.cells.length ? tr.cells[0].innerText.trim() : '';
+        showPenaltyAlert(td.dataset.agent, name, sel.value, td.dataset.date);
+    }
     saveCell(td.dataset.agent, td.dataset.date, sel.value);
+}
+
+// ── Admin-bonus penalty: blocking Acknowledge alert (a GUIDE; coder applies the %) ──
+async function showPenaltyAlert(agentId, agentName, status, dateStr) {
+    const ov = document.getElementById('penalty-overlay');
+    document.getElementById('pa-status').textContent =
+        agentName + ' — status set to “' + (status === 'Absent' ? 'A' : status) + '”';
+    document.getElementById('pa-rule').textContent = PENALTY_RULES[status] || '';
+    document.getElementById('pa-reco').textContent = 'Calculating…';
+    document.getElementById('pa-hours').textContent = '';
+    ov.style.display = 'flex';
+    try {
+        const url = `/admin-adherence/penalty-reco/?agent=${agentId}&week=${WEEK_START}`
+            + `&date=${encodeURIComponent(dateStr || '')}&status=${encodeURIComponent(status)}`;
+        const resp = await fetch(url);
+        const d = await resp.json();
+        if (d.ok) {
+            const reasons = (d.reasons && d.reasons.length) ? d.reasons.join('; ') : 'no incidents counted';
+            document.getElementById('pa-reco').innerHTML =
+                'Recommended bonus deduction: <strong>' + d.pct + '%</strong>' +
+                '<br><span style="font-size:12px;color:#555;">(' + reasons + ')</span>';
+            document.getElementById('pa-hours').textContent = d.hours_note || '';
+        } else {
+            document.getElementById('pa-reco').textContent = 'Could not compute a recommendation.';
+        }
+    } catch (e) {
+        document.getElementById('pa-reco').textContent = 'Could not compute a recommendation.';
+    }
+}
+
+async function onDeductionChange(sel) {
+    const on = sel.value !== '0';
+    sel.style.color = on ? '#b91c1c' : '';
+    sel.style.fontWeight = on ? '700' : '';
+    showStatus('Saving…', '#b45309', '#fef3c7');
+    try {
+        const resp = await fetch('/admin-adherence/save-deduction/', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
+            body: JSON.stringify({agent_id: sel.dataset.agent, week: WEEK_START, pct: sel.value}),
+        });
+        const d = await resp.json();
+        if (!d.ok) throw new Error();
+        showStatus('✓ Saved', '#166534', '#dcfce7');
+        setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 2000);
+    } catch (e) {
+        showStatus('⚠ Deduction save failed', '#991b1b', '#fee2e2');
+    }
 }
 
 // ── Note popover ──────────────────────────────────────────────────────────────

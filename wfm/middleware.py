@@ -7,7 +7,7 @@ INACTIVITY_TIMEOUT = 4 * 3600   # 4 hours
 ABSOLUTE_TIMEOUT = 16 * 3600    # 16 hours
 
 # URL path prefixes agents are allowed to access
-_AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/accounts/', '/static/', '/favicon')
+_AGENT_ALLOWED = ('/agent/', '/adherence/my/', '/vacations/', '/accounts/', '/static/', '/favicon')
 _INACTIVE_ALLOWED = ('/agent/inactive/', '/accounts/', '/static/', '/favicon')
 
 
@@ -64,6 +64,7 @@ class AgentAccessMiddleware:
         request.ot_request_badge = 0
         request.has_finance_access = False
         request.can_access_admin_tabs = False
+        request.can_manage_loans = False
 
         if request.user.is_authenticated:
             try:
@@ -120,9 +121,14 @@ class AgentAccessMiddleware:
                         getattr(profile, 'is_super_admin', False)
                         or getattr(profile, 'can_access_admin_tabs', False)
                     )
+                    request.can_manage_loans = (
+                        getattr(profile, 'is_super_admin', False)
+                        or getattr(profile, 'can_manage_loans', False)
+                    )
             except Exception:
                 if request.user.is_superuser:
                     request.has_finance_access = True
                     request.can_access_admin_tabs = True
+                    request.can_manage_loans = True
 
         return self.get_response(request)

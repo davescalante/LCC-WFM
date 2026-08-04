@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% block title %} - Nómina{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Nómina</h1>
+</div>
+
+<!-- Week navigation -->
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+
+<style>
+    .nom-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+    .nom-card { display:block; text-decoration:none; color:inherit; background:white; border:1px solid #e2e8f0;
+                border-radius:10px; padding:16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.06); transition:.15s; }
+    .nom-card:hover { border-color:#1a3a5c; box-shadow:0 3px 10px rgba(0,0,0,.1); transform:translateY(-1px); }
+    .nom-card.soon { opacity:.6; pointer-events:none; }
+    .nom-card h3 { margin:0 0 6px; font-size:15px; color:#1a3a5c; }
+    .nom-card p { margin:0; font-size:12px; color:#666; line-height:1.5; }
+    .nom-tag { display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:10px; margin-bottom:8px; }
+    .nom-tag.ready { background:#dcfce7; color:#166534; }
+    .nom-tag.soon  { background:#f1f5f9; color:#64748b; }
+</style>
+
+<h2 style="font-size:16px;margin:0 0 10px;">Payroll</h2>
+<div class="nom-grid" style="margin-bottom:24px;">
+    <a class="nom-card" href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <span class="nom-tag ready">READY</span>
+        <h3>Inputs</h3>
+        <p>Enter/paste LPO, spiffs, welcome, referral, Kill Team QA, comedor, transportation per agent.</p>
+    </a>
+    <a class="nom-card" href="{% url 'nomina:agent_nomina' %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <span class="nom-tag ready">READY</span>
+        <h3>Agent Nómina</h3>
+        <p>Weekly agent payroll — auto columns + your inputs → subtotal &amp; total.</p>
+    </a>
+    <a class="nom-card" href="{% url 'nomina:admin_nomina' %}?week_start={{ week_start|date:'Y-m-d' }}">
+        <span class="nom-tag ready">READY</span>
+        <h3>Admin Nómina</h3>
+        <p>Official Admins — wage × hours + admin bonus + admin inputs.</p>
+    </a>
+</div>
+
+<h2 style="font-size:16px;margin:0 0 10px;">Modules <span style="font-size:12px;font-weight:400;color:#888;">— building next</span></h2>
+<div class="nom-grid">
+    <a class="nom-card" href="{% url 'nomina:break_abuse' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Break Abuse</h3><p>Log incidents → zeroes that week's adherence bonus.</p></a>
+    <a class="nom-card" href="{% url 'nomina:holidays' %}"><span class="nom-tag ready">READY</span><h3>Holidays</h3><p>Company holiday calendar + triple-pay when worked.</p></a>
+    <a class="nom-card" href="{% url 'nomina:welcome' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Welcome Bonus</h3><p>Editable eligibility table (amount · # weeks, auto-drops off).</p></a>
+    <a class="nom-card" href="{% url 'nomina:loans' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Loans (Préstamo)</h3><p>Add loans (1wk ×1.25 / 2wk ×1.35), auto weekly drawdown, active-loan view.</p></a>
+    <a class="nom-card" href="{% url 'nomina:overrides' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Overrides</h3><p>Override any computed cell (base pay, adherence, holiday) per week.</p></a>
+    <a class="nom-card" href="{% url 'nomina:exports' %}?week_start={{ week_start|date:'Y-m-d' }}"><span class="nom-tag ready">READY</span><h3>Exports</h3><p>Yours/Mine Excel in your exact format, with auto-notes.</p></a>
+</div>
+
+<p style="margin-top:20px;font-size:12px;color:#999;">Super-admin only · Infinity employees · test build (not live)</p>
+
+{% endblock %}

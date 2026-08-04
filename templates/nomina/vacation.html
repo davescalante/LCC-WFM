@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %} - Vacation Tracker{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Vacation Tracker</h1>
+    <a href="{% url 'nomina:dashboard' %}" class="btn" style="background:#888;color:white;">&#8592; Nómina</a>
+</div>
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;">Accrued days follow the Mexican LFT "Vacaciones Dignas" schedule by completed years of service (12 → 14 → 16 → 18 → 20, then 22 for 6–10 yrs, +2 every 5 yrs). Used = "V" days taken this year. Approvals + manual adjustments come next.</p>
+</div>
+<div class="card" style="overflow-x:auto;padding:0;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead><tr style="background:#f0f4f8;text-align:left;">
+        <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Agent</th>
+        <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Start</th>
+        <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:center;">Years</th>
+        <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:center;">Accrued</th>
+        <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:center;">Used</th>
+        <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:center;">Remaining</th>
+    </tr></thead>
+    <tbody>
+        {% for r in rows %}
+        <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:6px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
+            <td style="padding:6px 10px;color:#666;">{{ r.start|date:"M d, Y"|default:"—" }}</td>
+            <td style="padding:6px 10px;text-align:center;">{{ r.years }}</td>
+            <td style="padding:6px 10px;text-align:center;font-weight:700;">{{ r.accrued }}</td>
+            <td style="padding:6px 10px;text-align:center;">{{ r.used }}</td>
+            <td style="padding:6px 10px;text-align:center;font-weight:700;{% if r.remaining < 0 %}color:#b91c1c;{% endif %}">{{ r.remaining }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" style="padding:30px;text-align:center;color:#888;">No agents. (Load real data.)</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

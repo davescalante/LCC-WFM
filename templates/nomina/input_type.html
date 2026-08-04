@@ -1,0 +1,213 @@
+{% extends 'base.html' %}
+{% block title %} - {{ t.label }} Input{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">{{ t.label }}{% if t.deduction %} <span style="color:#b91c1c;font-size:15px;">(deduction)</span>{% endif %}</h1>
+    <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}" class="btn" style="background:#888;color:white;">&#8592; Inputs</a>
+</div>
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <a href="?week_start={{ prev_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">&#8592; Prev</a>
+        <strong style="font-size:16px;">{{ week_start|date:"F d" }} – {{ week_end|date:"F d, Y" }}</strong>
+        <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
+    </div>
+</div>
+{% if finalized %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#ecfdf5;border-left:4px solid #059669;">
+    <p style="margin:0;font-size:13px;color:#065f46;">&#128274; <strong>This week is finalized (locked)</strong> — a permanent record of what was paid. Inputs can't be changed.</p>
+</div>
+{% endif %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">{{ t.desc }} Values are in <strong>{{ t.unit }}</strong>.
+    {% if not t.manual_add %}{% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
+    Upload maps by column headers (Username / Employee ID + Amount) — unmatched rows are shown so nothing is dropped.
+    <strong>Uploading replaces</strong> this module's values for the week with the file's contents (a fresh upload wins).{% endif %}</p>
+</div>
+
+{% if show_pesos %}
+<div class="card" style="margin-bottom:16px;padding:12px 20px;">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <strong style="font-size:14px;">USD&#8594;MXN rate this week:</strong>
+        {% if fx_rate is not None %}
+            <span id="fxRate" data-rate="{{ fx_rate }}" style="font-family:monospace;font-size:15px;color:#166534;">{{ fx_rate|floatformat:4 }}</span>
+            <span style="font-size:12px;color:#888;">Pesos = Dollars &#215; this rate.</span>
+        {% else %}
+            <span id="fxRate" data-rate="0" style="color:#b45309;font-weight:600;">not set</span>
+            <span style="font-size:12px;color:#b45309;">&#9888; Spiffs stay $0 in the nómina until you set the rate on the
+                <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">Inputs</a> page.</span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+{% if unmatched %}
+<div class="card" style="background:#fef2f2;border:1px solid #fca5a5;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <h3 style="margin:0;color:#b91c1c;">&#9888; {{ unmatched|length }} unmatched row(s) — need review</h3>
+        <form method="post" style="margin:0;">{% csrf_token %}
+            <input type="hidden" name="ack" value="all">
+            <button type="submit" class="btn" style="background:#b91c1c;color:#fff;padding:6px 12px;">Acknowledge all</button>
+        </form>
+    </div>
+    <p style="font-size:12px;color:#7f1d1d;margin:6px 0 10px;">These people are <strong>not</strong> being paid this amount. Fix the name/ID in the file
+    (or their profile) and re-upload, enter them by hand below, or <strong>Acknowledge</strong> to confirm you're intentionally skipping them.
+    This notice stays until every row is acknowledged.</p>
+    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+        <thead><tr style="text-align:left;border-bottom:1px solid #fca5a5;">
+            <th style="padding:4px 8px;">Who (from file)</th>
+            <th style="padding:4px 8px;text-align:right;">Amount</th>
+            <th style="padding:4px 8px;"></th></tr></thead>
+        <tbody>{% for u in unmatched %}
+            <tr style="border-bottom:1px solid #fee2e2;">
+                <td style="padding:4px 8px;">{{ u.who }}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:monospace;">{{ u.amount }}</td>
+                <td style="padding:4px 8px;text-align:right;">
+                    <form method="post" style="margin:0;">{% csrf_token %}
+                        <input type="hidden" name="ack" value="{{ u.pk }}">
+                        <button type="submit" class="btn" style="background:#e5e7eb;color:#333;padding:3px 12px;font-size:12px;">Acknowledge</button>
+                    </form>
+                </td>
+            </tr>{% endfor %}</tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if add_more %}
+<div class="card" style="background:#f0fdf4;border:1px solid #bbf7d0;">
+    <h2 style="margin-top:0;">Add {% if t.is_hours %}hours{% else %}a spiff{% endif %} to a person</h2>
+    <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:0;">{% csrf_token %}
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Agent</label>
+            <select name="add_more_agent" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;min-width:240px;">
+                <option value="">— pick an agent —</option>
+                {% for a in all_options %}<option value="{{ a.pk }}">{{ a.name }} ({{ a.username }})</option>{% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Add ({{ t.unit }})</label>
+            <input type="text" name="add_more_amount" inputmode="decimal" placeholder="0" required
+                   style="width:120px;text-align:right;padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-family:monospace;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:7px 16px;background:#16a34a;">Add</button>
+    </form>
+    <p style="font-size:12px;color:#3f6212;margin:10px 0 0;">This <strong>adds to</strong> what the person already has this week — e.g. 5 + 20 = 25. Perfect for a Tuesday touch-up without re-uploading.</p>
+</div>
+{% endif %}
+
+{% if t.manual_add %}{% if not add_more %}
+<div class="card">
+    <h2>Add an agent</h2>
+    <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:0;">{% csrf_token %}
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Agent</label>
+            <select name="add_agent" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;min-width:240px;">
+                <option value="">— pick an agent —</option>
+                {% for a in addable %}<option value="{{ a.pk }}">{{ a.name }} ({{ a.username }})</option>{% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Amount ({{ t.unit }})</label>
+            <input type="text" name="add_amount" inputmode="decimal" placeholder="0.00" required
+                   style="width:120px;text-align:right;padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-family:monospace;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:7px 16px;">Add</button>
+    </form>
+    <p style="font-size:12px;color:#888;margin:10px 0 0;">Per week — this list starts empty every week. Add each person, then edit amounts below and <strong>Save</strong>.</p>
+</div>
+{% endif %}{% else %}
+<div class="grid-2">
+    <div class="card">
+        <h2>Upload a file</h2>
+        <form method="post" enctype="multipart/form-data">{% csrf_token %}
+            <p style="font-size:13px;color:#666;line-height:1.5;">CSV or Excel. Needs a <strong>Username</strong> (or <strong>Employee ID</strong>) column and an <strong>Amount</strong> column — header names are matched flexibly.</p>
+            <input type="file" name="file" accept=".csv,.xlsx" required style="margin-bottom:12px;">
+            <br><button type="submit" class="btn btn-primary">Upload &amp; import</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>Or add / edit people</h2>
+        {% if default_amt %}
+        <p style="font-size:12px;color:#888;margin-top:0;">Everyone here starts at the standard <strong>${{ default_amt }}</strong>.
+        Change the exceptions (a blank box = $0), then <strong>Save</strong>. Uploading a file <strong>replaces</strong> everything here.</p>
+        {% else %}
+        <p style="font-size:12px;color:#888;margin-top:0;">The boxes below show this week's current numbers. Edit anyone, or type a value for
+        someone who wasn't in the file, then <strong>Save</strong>. Blank = 0. Note: these are your <em>final</em> tweaks —
+        uploading a file again <strong>replaces</strong> everything here.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<form method="post">{% csrf_token %}
+    <div class="card" style="overflow-x:auto;padding:0;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f0f4f8;text-align:left;">
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Agent</th>
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">User</th>
+            {% if show_emp %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">EMP</th>{% endif %}
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{% if show_pesos %}Dollars (USD){% else %}{{ t.label }} ({{ t.unit }}){% endif %}</th>
+            {% if show_pesos %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">Pesos (MXN)</th>{% endif %}
+            {% if t.manual_add %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;"></th>{% endif %}
+        </tr></thead>
+        <tbody>
+            {% for r in rows %}
+            <tr style="border-bottom:1px solid #eee;">
+                <td style="padding:5px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
+                <td style="padding:5px 10px;color:#666;">{{ r.username }}</td>
+                {% if show_emp %}<td style="padding:5px 10px;color:#999;">{{ r.emp }}</td>{% endif %}
+                <td style="padding:4px 8px;text-align:right;">
+                    <input type="text" name="v_{{ r.agent.pk }}" value="{{ r.display }}" inputmode="decimal" placeholder="0"
+                        {% if show_total %}class="amt-in" data-pesos="pesos_{{ r.agent.pk }}"{% endif %}
+                        style="width:110px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
+                </td>
+                {% if show_pesos %}<td id="pesos_{{ r.agent.pk }}" style="padding:5px 10px;text-align:right;font-family:monospace;color:#166534;">{{ r.pesos }}</td>{% endif %}
+                {% if t.manual_add %}<td style="padding:4px 8px;text-align:center;">
+                    <button type="submit" name="remove" value="{{ r.agent.pk }}" title="Remove"
+                        style="background:none;border:none;color:#b91c1c;font-size:16px;cursor:pointer;line-height:1;">&times;</button>
+                </td>{% endif %}
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" style="padding:30px;text-align:center;color:#888;">{% if add_more and t.manual_add %}No one added yet this week — use the green “Add {% if t.is_hours %}hours{% else %}a spiff{% endif %} to a person” box above.{% elif t.manual_add %}No one added yet this week — use “Add an agent” above.{% else %}No matching agents for this module. (Load real data.){% endif %}</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if show_total and rows %}
+        <tfoot><tr style="background:#f0f4f8;font-weight:700;">
+            <td colspan="{% if show_emp %}3{% else %}2{% endif %}" style="padding:8px 10px;border-top:2px solid #94a3b8;">Total</td>
+            <td id="amtTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{{ amt_total|floatformat:2 }}</td>
+            {% if show_pesos %}<td id="pesosTotal" style="padding:8px 10px;border-top:2px solid #94a3b8;text-align:right;font-family:monospace;">{% if pesos_total is not None %}{{ pesos_total|floatformat:2 }}{% endif %}</td>{% endif %}
+        </tr></tfoot>
+        {% endif %}
+    </table>
+    </div>
+    {% if rows %}<button type="submit" class="btn btn-primary" style="margin-top:14px;">Save {{ t.label }}</button>{% endif %}
+</form>
+
+{% if show_total %}
+<script>
+(function () {
+    var rateEl = document.getElementById('fxRate');           // present only on Spiffs
+    var rate = rateEl ? parseFloat(rateEl.getAttribute('data-rate')) || 0 : 0;
+    var fmt = function (n) { return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); };
+    var parse = function (s) { return parseFloat(String(s).replace(/[$,\s]/g, '')) || 0; };
+    var inputs = document.querySelectorAll('.amt-in');
+    var amtTot = document.getElementById('amtTotal'), pesosTot = document.getElementById('pesosTotal');
+    function recompute() {
+        var amt = 0, pesos = 0;
+        inputs.forEach(function (inp) {
+            var v = parse(inp.value);
+            amt += v;
+            // Round per person (mirrors the server's per-row quantize) so the footer
+            // total matches the nómina to the cent, not round-of-sum.
+            var p = Math.round(v * rate * 100) / 100;
+            var cell = document.getElementById(inp.getAttribute('data-pesos'));
+            if (cell) cell.textContent = (rate && v) ? fmt(p) : '';
+            if (rate) pesos += p;
+        });
+        if (amtTot) amtTot.textContent = fmt(amt);
+        if (pesosTot) pesosTot.textContent = rate ? fmt(pesos) : '';
+    }
+    inputs.forEach(function (inp) { inp.addEventListener('input', recompute); });
+})();
+</script>
+{% endif %}
+{% endblock %}

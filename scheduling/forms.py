@@ -44,6 +44,14 @@ class AgentForm(forms.ModelForm):
         ).select_related('user').order_by('user__last_name', 'user__first_name')
         if not can_grant_admin_tabs:
             self.fields.pop('can_access_admin_tabs', None)
+            self.fields.pop('can_manage_loans', None)
+            # The Finance section (pay/billing rates, admin bonus) and the Super Admin
+            # flag are super-admin-only. Strip them server-side so a non-super-admin can
+            # neither see nor set them — not merely hidden (matches USER_EXPORT_FINANCIAL).
+            self.fields.pop('hourly_rate', None)
+            self.fields.pop('billing_rate_usd', None)
+            self.fields.pop('admin_bonus_mxn', None)
+            self.fields.pop('is_super_admin', None)
 
     class Meta:
         model = Agent
@@ -53,7 +61,7 @@ class AgentForm(forms.ModelForm):
             'phone_country_code', 'phone_number',
             'teams_password', 'hourly_rate', 'billing_rate_usd',
             'is_official_admin', 'admin_bonus_mxn', 'is_super_admin',
-            'can_access_admin_tabs', 'notes',
+            'can_access_admin_tabs', 'can_manage_loans', 'notes',
         ]
         widgets = {
             'teams_password': forms.PasswordInput(render_value=True),
