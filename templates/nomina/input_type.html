@@ -12,6 +12,11 @@
         <a href="?week_start={{ next_week }}" class="btn" style="background:#eee;color:#333;padding:6px 14px;">Next &#8594;</a>
     </div>
 </div>
+{% if finalized %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#ecfdf5;border-left:4px solid #059669;">
+    <p style="margin:0;font-size:13px;color:#065f46;">&#128274; <strong>This week is finalized (locked)</strong> — a permanent record of what was paid. Inputs can't be changed.</p>
+</div>
+{% endif %}
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
     <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">{{ t.desc }} Values are in <strong>{{ t.unit }}</strong>.
     {% if not t.manual_add %}{% if t.aggregate %}All rows per person are <strong>summed</strong>.{% endif %}
@@ -67,7 +72,29 @@
 </div>
 {% endif %}
 
-{% if t.manual_add %}
+{% if add_more %}
+<div class="card" style="background:#f0fdf4;border:1px solid #bbf7d0;">
+    <h2 style="margin-top:0;">Add {% if t.is_hours %}hours{% else %}a spiff{% endif %} to a person</h2>
+    <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:0;">{% csrf_token %}
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Agent</label>
+            <select name="add_more_agent" required style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;min-width:240px;">
+                <option value="">— pick an agent —</option>
+                {% for a in all_options %}<option value="{{ a.pk }}">{{ a.name }} ({{ a.username }})</option>{% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="display:block;font-size:12px;color:#555;margin-bottom:3px;">Add ({{ t.unit }})</label>
+            <input type="text" name="add_more_amount" inputmode="decimal" placeholder="0" required
+                   style="width:120px;text-align:right;padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-family:monospace;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="padding:7px 16px;background:#16a34a;">Add</button>
+    </form>
+    <p style="font-size:12px;color:#3f6212;margin:10px 0 0;">This <strong>adds to</strong> what the person already has this week — e.g. 5 + 20 = 25. Perfect for a Tuesday touch-up without re-uploading.</p>
+</div>
+{% endif %}
+
+{% if t.manual_add %}{% if not add_more %}
 <div class="card">
     <h2>Add an agent</h2>
     <form method="post" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:0;">{% csrf_token %}
@@ -87,7 +114,7 @@
     </form>
     <p style="font-size:12px;color:#888;margin:10px 0 0;">Per week — this list starts empty every week. Add each person, then edit amounts below and <strong>Save</strong>.</p>
 </div>
-{% else %}
+{% endif %}{% else %}
 <div class="grid-2">
     <div class="card">
         <h2>Upload a file</h2>
@@ -140,7 +167,7 @@
                 </td>{% endif %}
             </tr>
             {% empty %}
-            <tr><td colspan="6" style="padding:30px;text-align:center;color:#888;">{% if t.manual_add %}No one added yet this week — use “Add an agent” above.{% else %}No matching agents for this module. (Load real data.){% endif %}</td></tr>
+            <tr><td colspan="6" style="padding:30px;text-align:center;color:#888;">{% if add_more and t.manual_add %}No one added yet this week — use the green “Add {% if t.is_hours %}hours{% else %}a spiff{% endif %} to a person” box above.{% elif t.manual_add %}No one added yet this week — use “Add an agent” above.{% else %}No matching agents for this module. (Load real data.){% endif %}</td></tr>
             {% endfor %}
         </tbody>
         {% if show_total and rows %}

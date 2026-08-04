@@ -18,10 +18,41 @@
     </div>
 </div>
 
+{% if finalized %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#ecfdf5;border-left:4px solid #059669;">
+    <p style="margin:0;font-size:13px;color:#065f46;">&#128274; <strong>Finalized</strong> — a permanent record of what was paid, locked on {{ finalized.finalized_at|date:"M d, Y H:i" }}{% if finalized.finalized_by %} by {{ finalized.finalized_by }}{% endif %}. These numbers will not change.</p>
+</div>
+{% else %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fffbeb;border-left:4px solid #f59e0b;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+    <p style="margin:0;font-size:13px;color:#92400e;">When this week is done, <strong>Finalize</strong> to lock it as a permanent record of what was paid. <strong>This cannot be undone.</strong></p>
+    <form method="post" action="{% url 'nomina:finalize' %}?week_start={{ week_start|date:'Y-m-d' }}" style="margin:0;"
+          onsubmit="return confirm('Finalize the week of {{ week_start|date:'M d, Y' }}?\n\nThis permanently locks it as what was paid — it cannot be undone.');">{% csrf_token %}
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        <button type="submit" class="btn" style="background:#059669;color:#fff;padding:7px 16px;white-space:nowrap;">&#128274; Finalize week</button>
+    </form>
+</div>
+{% endif %}
+
 {% if totals.on_vacation %}
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#ecfeff;border-left:4px solid #06b6d4;">
     <p style="margin:0;font-size:13px;color:#0e7490;">&#127958; <strong>{{ totals.on_vacation }}</strong> {% if totals.on_vacation == 1 %}person{% else %}people{% endif %} on vacation this week
     — <strong>{{ totals.vac_hrs|floatformat:0 }}</strong> paid vacation hours folded into their pay.</p>
+</div>
+{% endif %}
+
+{% if totals.spiff_needs_rate %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fef2f2;border-left:4px solid #dc2626;">
+    <p style="margin:0;font-size:13px;color:#991b1b;">&#9888;&#65039; <strong>Spiff rate not set for this week.</strong>
+    {{ totals.spiff_unpaid_count }} {% if totals.spiff_unpaid_count == 1 %}person has{% else %}people have{% endif %} spiffs that show as <strong>$0</strong> until you set the USD→MXN rate on the
+    <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">Inputs</a> page.</p>
+</div>
+{% endif %}
+
+{% if unrostered %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fffbeb;border-left:4px solid #f59e0b;">
+    <p style="margin:0 0 4px;font-size:13px;color:#92400e;">&#9888;&#65039; <strong>{{ unrostered|length }} Infinity {% if unrostered|length == 1 %}person is{% else %}people are{% endif %} on no nómina.</strong>
+    Not an official admin (so not on the Admin sheet) and no attendance tracking / billable profile (so off this Agent sheet) — they'd be <strong>unpaid</strong>. Fix their profile (enable tracking or mark official admin) if they should be paid:</p>
+    <p style="margin:0;font-size:12px;color:#b45309;">{% for a in unrostered %}{{ a.agent_name|default:a.user.username }} ({{ a.user.username }}){% if not forloop.last %} · {% endif %}{% endfor %}</p>
 </div>
 {% endif %}
 

@@ -44,6 +44,34 @@
         </tbody>
     </table>
     </div>
-    {% if rows %}<button type="submit" class="btn btn-primary" style="margin-top:14px;">Save overrides</button>{% endif %}
+
+    {% if admin_rows %}
+    <h2 style="margin:22px 0 10px;font-size:16px;color:#1a3a5c;">Official Admins</h2>
+    <div class="card" style="overflow-x:auto;padding:0;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f0f4f8;text-align:left;">
+            <th style="padding:8px 10px;border-bottom:2px solid #94a3b8;">Admin</th>
+            {% for field, label in admin_fields %}<th style="padding:8px 10px;border-bottom:2px solid #94a3b8;text-align:right;">{{ label }}</th>{% endfor %}
+        </tr></thead>
+        <tbody>
+            {% for r in admin_rows %}
+            <tr style="border-bottom:1px solid #eee;">
+                <td style="padding:5px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
+                {% for cell in r.cells %}
+                <td style="padding:4px 8px;text-align:right;">
+                    <div style="font-size:10px;color:#bbb;">computed ${{ cell.computed|floatformat:2 }}</div>
+                    <input type="text" name="{{ cell.field }}_{{ r.agent.pk }}" value="{{ cell.override }}"
+                        inputmode="decimal" placeholder="—"
+                        style="width:95px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
+                </td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+
+    {% if rows or admin_rows %}<button type="submit" class="btn btn-primary" style="margin-top:14px;">Save overrides</button>{% endif %}
 </form>
 {% endblock %}

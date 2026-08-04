@@ -18,4 +18,5 @@ urlpatterns = [
     path('exports/', views.exports, name='exports'),
     path('exports/agent/', views.agent_export, name='agent_export'),
     path('exports/admin/', views.admin_export, name='admin_export'),
+    path('finalize/', views.finalize, name='finalize'),
 ]

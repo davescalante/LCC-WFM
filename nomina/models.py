@@ -25,6 +25,7 @@ class WeeklyPayInput(models.Model):
 
     lpo = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Sales commission (MXN)")
     spiff_usd = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Spiffs in USD (converted at the week's rate)")
+    extra_hours = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Manual hours correction — folds into Hours Worked + Pay (48)")
     welcome = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     referral = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     kill_team_qa = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -169,6 +170,42 @@ class UnmatchedInputRow(models.Model):
 
     def __str__(self):
         return f"{self.input_key} {self.week_start} — {self.who} (${self.amount})"
+
+
+class PayrollRun(models.Model):
+    """A FINALIZED (frozen) nómina week. Once finalized it is a PERMANENT record —
+    the stored snapshot is exactly what was paid and never recomputes, even if rates,
+    hours, or inputs change afterward. No un-lock (user decision)."""
+    week_start = models.DateField(unique=True)
+    finalized_at = models.DateTimeField(auto_now_add=True)
+    finalized_by = models.ForeignKey('scheduling.Agent', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    agent_rows = models.JSONField(default=list)        # "Mine" (corrected) agent rows
+    agent_yours_rows = models.JSONField(default=list)  # "Yours" (raw) agent rows, note baked in
+    agent_totals = models.JSONField(default=dict)
+    admin_rows = models.JSONField(default=list)        # admin rows, note baked in
+    admin_totals = models.JSONField(default=dict)
+
+    def __str__(self):
+        return f"Finalized nómina {self.week_start}"
+
+
+class AdminBonusDeduction(models.Model):
+    """The coder-entered weekly admin-bonus deduction % (0–100) for one admin/week.
+    GUIDE-driven manual entry: the app recommends a % from the penalty matrix (T/I
+    escalation, Absent/NCNS/S, log-in Issues), the coder reviews the Acknowledge
+    alert and applies the final % here. Net admin bonus = base × (1 − pct/100), ≥ 0."""
+    agent = models.ForeignKey('scheduling.Agent', on_delete=models.CASCADE, related_name='admin_bonus_deductions')
+    week_start = models.DateField()
+    deduction_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="0–100")
+    note = models.CharField(max_length=255, blank=True)
+    updated_by = models.ForeignKey('scheduling.Agent', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('agent', 'week_start')
+
+    def __str__(self):
+        return f"{self.agent} — {self.week_start}: −{self.deduction_pct}%"
 
 
 class BreakAbuseIncident(models.Model):

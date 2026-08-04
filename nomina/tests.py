@@ -561,6 +561,34 @@ class NominaHolidayPayTests(TestCase):
         self.assertEqual(r['holiday_pay'], Decimal('750.00'))      # 6 × 62.50 × 2
         self.assertEqual(r['base_pay'], Decimal('375.00'))         # 6 × 62.50
 
+    def test_not_worked_holiday_pays_scheduled_1x(self):
+        # Decision 5b: scheduled but NOT worked (status 'Holiday') → 0 worked hours,
+        # Holiday Pay = scheduled hours × rate (1×), nothing added to Hours Worked.
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord
+        from scheduling.models import Shift
+        import datetime
+        a = self._agent()
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Shift.objects.create(agent=a, date=holiday, is_off=False,
+                             start_time=datetime.time(9, 0), end_time=datetime.time(17, 0))   # 8h scheduled
+        AdherenceRecord.objects.update_or_create(agent=a, date=holiday, defaults={'status': 'Holiday'})
+        # No Five9 login logged that day → not worked.
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_pay'], Decimal('500.00'))      # 8 × 62.50 × 1
+        self.assertEqual(r['holiday_hrs'], Decimal('0'))           # 0 worked holiday hours
+        self.assertEqual(r['worked_hrs'], Decimal('0'))            # nothing added to hours worked
+
+    def test_holiday_status_is_bonus_qualifying(self):
+        from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
+        self.assertIn('Holiday', BONUS_QUALIFYING)        # a not-worked holiday must NOT kill the bonus
+        self.assertNotIn('Holiday', BONUS_DISQUALIFYING)
+
 
 class NominaKillTeamScopeTests(TestCase):
     """Kill Team QA: role-scoped to Kill Team, no EMP column, standard $400 default."""
@@ -727,3 +755,701 @@ class NominaFxRateTests(TestCase):
         self._post_rate('18.50')
         self._post_rate('')
         self.assertIsNone(self.NominaWeek.objects.get(week_start=self.ws).spiff_fx_rate)
+
+
+class NominaCorrectnessFixTests(TestCase):
+    """Batch 1 correctness fixes: spiff FX guard, anniversary-year adjustment keying,
+    and split-shift vacation hours."""
+
+    def test_spiff_needs_rate_flag_and_zero_conversion(self):
+        import datetime
+        from nomina.views import _agent_nomina_data
+        from nomina.models import WeeklyPayInput, NominaWeek
+        a = _make_infinity('spfguard', '9204')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        WeeklyPayInput.objects.create(agent=a, week_start=ws, spiff_usd=Decimal('20'))
+        # No rate set → flagged (not silently paid $0 with no warning).
+        rows, totals = _agent_nomina_data(ws, week)
+        self.assertTrue(totals['spiff_needs_rate'])
+        self.assertEqual(totals['spiff_unpaid_count'], 1)
+        self.assertEqual(next(r for r in rows if r['agent'].pk == a.pk)['spiff_mxn'], Decimal('0'))
+        # Rate set → flag clears and the spiff converts.
+        nw, _ = NominaWeek.objects.get_or_create(week_start=ws)
+        nw.spiff_fx_rate = Decimal('18'); nw.save()
+        rows, totals = _agent_nomina_data(ws, week)
+        self.assertFalse(totals['spiff_needs_rate'])
+        self.assertEqual(next(r for r in rows if r['agent'].pk == a.pk)['spiff_mxn'], Decimal('360.00'))
+
+    def test_vacation_year_uses_anniversary_not_calendar(self):
+        import datetime
+        from scheduling.models import EmploymentPeriod
+        from nomina.views import _vacation_year
+        a = _make_agent('annyr', role='agent', role_type='regular_agent')
+        EmploymentPeriod.objects.create(agent=a, start_date=datetime.date(2020, 6, 15))
+        # Jan 2027 is BEFORE the June anniversary → still the vac-year that began 2026.
+        self.assertEqual(_vacation_year(a, datetime.date(2027, 1, 10)), 2026)
+        # Aug 2027 is after → 2027.
+        self.assertEqual(_vacation_year(a, datetime.date(2027, 8, 10)), 2027)
+
+    def test_vacation_adjustment_survives_calendar_boundary(self):
+        import datetime
+        from scheduling.models import EmploymentPeriod
+        from nomina.models import VacationAdjustment
+        from nomina.views import vacation_balance
+        a = _make_agent('annbnd', role='agent', role_type='regular_agent')
+        EmploymentPeriod.objects.create(agent=a, start_date=datetime.date(2020, 6, 15))
+        VacationAdjustment.objects.create(agent=a, year=2026, days=Decimal('3'))
+        as_of = datetime.date(2027, 1, 10)   # new calendar year, SAME vac-year (June anniversary)
+        acc, used, rem = vacation_balance(a, as_of)
+        self.assertEqual(rem, Decimal(acc) - used + Decimal('3'))   # adjustment not lost across Jan 1
+
+    def test_split_shift_vacation_counts_extra_block(self):
+        import datetime
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord
+        from scheduling.models import Shift, ShiftBlock
+        a = _make_infinity('vacsplit', '9203')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        day = week[2]
+        sh = Shift.objects.create(agent=a, date=day, is_off=False,
+                                  start_time=datetime.time(9, 0), end_time=datetime.time(13, 0))   # 4h main
+        ShiftBlock.objects.create(shift=sh, block_number=2,
+                                  start_time=datetime.time(14, 0), end_time=datetime.time(17, 0))  # +3h
+        AdherenceRecord.objects.update_or_create(agent=a, date=day, defaults={'status': 'V'})
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['vac_hrs'], Decimal('7'))   # 4h main + 3h split block (was 4 before the fix)
+
+    def test_no_vacation_carryover_across_anniversary(self):
+        # On the work anniversary everyone resets to full LFT days; leftover unused
+        # days are LOST (no carryover) — the anniversary-based balance already does this.
+        import datetime
+        from scheduling.models import EmploymentPeriod
+        from adherence.models import AdherenceRecord
+        from nomina.views import vacation_balance
+        a = _make_agent('carry', role='agent', role_type='regular_agent')
+        EmploymentPeriod.objects.create(agent=a, start_date=datetime.date(2022, 6, 15))
+        AdherenceRecord.objects.create(agent=a, date=datetime.date(2025, 3, 1), status='V')
+        AdherenceRecord.objects.create(agent=a, date=datetime.date(2025, 3, 2), status='V')
+        _acc, used_before, _rem = vacation_balance(a, datetime.date(2025, 6, 10))
+        self.assertEqual(used_before, 2)                       # counted pre-anniversary
+        acc_after, used_after, rem_after = vacation_balance(a, datetime.date(2025, 6, 20))
+        self.assertEqual(used_after, 0)                        # reset on the new anniversary
+        self.assertEqual(rem_after, Decimal(acc_after))        # full days — leftover NOT carried
+
+
+class NominaTuesdayEditTests(TestCase):
+    """Batch 2 — mid-week touch-up tools: additive spiff add, manual extra hours,
+    and Hours Worked now INCLUDING holiday hours."""
+
+    def setUp(self):
+        from nomina.models import NominaWeek
+        _make_agent('tue_super', is_super_admin=True)
+        self.client.login(username='tue_super', password='x')
+        self.a = _make_infinity('tueagent', '4100')          # hourly_rate defaults to 62.50
+        self.ws = get_week_start()
+        NominaWeek.objects.create(week_start=self.ws, spiff_fx_rate=Decimal('18'))
+
+    def _add_more(self, key, agent, amount):
+        url = reverse('nomina:input_type', args=[key]) + f'?week_start={self.ws.isoformat()}'
+        return self.client.post(url, {'add_more_agent': agent.pk, 'add_more_amount': amount}, follow=True)
+
+    def test_spiff_add_more_accumulates(self):
+        from nomina.models import WeeklyPayInput
+        self._add_more('spiff', self.a, '5')
+        self._add_more('spiff', self.a, '20')
+        wi = WeeklyPayInput.objects.get(agent=self.a, week_start=self.ws)
+        self.assertEqual(wi.spiff_usd, Decimal('25.00'))     # 5 + 20, accumulated not replaced
+
+    def test_extra_hours_add_more_accumulates_and_pays(self):
+        import datetime
+        from nomina.models import WeeklyPayInput
+        from nomina.views import _agent_nomina_data
+        self._add_more('hours', self.a, '2')
+        self._add_more('hours', self.a, '3')
+        wi = WeeklyPayInput.objects.get(agent=self.a, week_start=self.ws)
+        self.assertEqual(wi.extra_hours, Decimal('5.00'))
+        week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        rows, _ = _agent_nomina_data(self.ws, week)
+        r = next(x for x in rows if x['agent'].pk == self.a.pk)
+        self.assertEqual(r['worked_hrs'], Decimal('5'))      # 0 login + 5 manual
+        self.assertEqual(r['total_hrs'], Decimal('5'))
+        self.assertEqual(r['base_pay'], Decimal('312.50'))   # 5 × 62.50 folded into Pay (48)
+
+    def test_add_more_rejects_out_of_scope_agent(self):
+        from nomina.models import WeeklyPayInput
+        outsider = _make_agent('outsider', role='agent', role_type='regular_agent')   # not Infinity
+        self._add_more('spiff', outsider, '50')
+        self.assertFalse(WeeklyPayInput.objects.filter(agent=outsider).exists())
+
+    def test_hours_worked_includes_holiday(self):
+        import datetime
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import DailyUpload, DailyAgentHours
+        from scheduling.models import Five9Profile
+        Five9Profile.objects.create(agent=self.a, five9_username='tuef9', billable=True, is_primary=True)
+        week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='H')
+        up, _ = DailyUpload.objects.get_or_create(date=holiday)
+        DailyAgentHours.objects.create(upload=up, agent=self.a, five9_username='tuef9',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        rows, _ = _agent_nomina_data(self.ws, week)
+        r = next(x for x in rows if x['agent'].pk == self.a.pk)
+        self.assertEqual(r['worked_hrs'], Decimal('8'))      # holiday hours stay INSIDE hours worked
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))     # and shown in the Holiday column
+
+
+class NominaAdminPenaltyTests(TestCase):
+    """Batch 3 — admin bonus penalty engine (design #4) + the deduction applied on
+    the Admin Nómina. GUIDE: the engine recommends, the coder enters the final %."""
+
+    def _admin(self, username, bonus='1000'):
+        u = User.objects.create_user(username, password='x', first_name=username.title())
+        return Agent.objects.create(
+            user=u, role='admin', role_type='supervisor', agent_name=username,
+            status='active', employer='Infinity', is_official_admin=True,
+            admin_bonus_mxn=Decimal(bonus), hourly_rate=Decimal('80'))
+
+    def _rec(self, agent, day, status):
+        from adherence.models import AdherenceRecord
+        AdherenceRecord.objects.update_or_create(agent=agent, date=day, defaults={'status': status})
+
+    def test_single_tardy_same_week_is_10(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen1'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self.assertEqual(admin_bonus_penalty(a, ws)['pct'], Decimal('10'))
+
+    def _pct(self, agent, ws):
+        from nomina.views import admin_bonus_penalty
+        return admin_bonus_penalty(agent, ws)['pct']
+
+    def test_tardy_and_incomplete_stack_to_20(self):
+        # THE reported bug: separate tardy + incomplete tracks each add 10% = 20%.
+        import datetime
+        a = self._admin('pen2'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self._rec(a, ws + datetime.timedelta(days=2), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('20'))
+
+    def test_single_t_plus_i_day_is_20(self):
+        # One T+I day counts on BOTH tracks → 10% + 10% = 20%.
+        import datetime
+        a = self._admin('pen2b'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T+I')
+        self.assertEqual(self._pct(a, ws), Decimal('20'))
+
+    def test_single_incomplete_is_10(self):
+        import datetime
+        a = self._admin('pen2c'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('10'))
+
+    def test_two_tardies_same_week_is_30(self):
+        import datetime
+        a = self._admin('pen2d'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self._rec(a, ws + datetime.timedelta(days=2), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('30'))
+
+    def test_two_tardies_one_incomplete_is_40(self):
+        # Tardy track (2 → 30%) + Incomplete track (1 → 10%) = 40%.
+        import datetime
+        a = self._admin('pen2e'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self._rec(a, ws + datetime.timedelta(days=2), 'T')
+        self._rec(a, ws + datetime.timedelta(days=3), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('40'))
+
+    def test_tardy_two_weeks_running_is_30(self):
+        import datetime
+        a = self._admin('pen2f'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self._rec(a, ws - datetime.timedelta(days=6), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('30'))
+
+    def test_tardy_three_weeks_running_is_60(self):
+        import datetime
+        a = self._admin('pen2g'); ws = get_week_start()
+        for wk in (0, 1, 2):
+            self._rec(a, ws + datetime.timedelta(days=1) - datetime.timedelta(days=7 * wk), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('60'))
+
+    def test_tardy_four_weeks_running_is_100(self):
+        import datetime
+        a = self._admin('pen2h'); ws = get_week_start()
+        for wk in (0, 1, 2, 3):
+            self._rec(a, ws + datetime.timedelta(days=1) - datetime.timedelta(days=7 * wk), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('100'))
+
+    def test_tracks_recur_independently(self):
+        # Tardy only this week (10%) + incomplete two weeks running (30%) = 40%.
+        import datetime
+        a = self._admin('pen2i'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self._rec(a, ws + datetime.timedelta(days=2), 'I')
+        self._rec(a, ws - datetime.timedelta(days=6), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('40'))
+
+    def test_recurrence_breaks_on_gap(self):
+        # Tardy this week, none last week, tardy 2 weeks ago → run resets to 1 → 10%.
+        import datetime
+        a = self._admin('pen2j'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')
+        self._rec(a, ws - datetime.timedelta(days=13), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('10'))
+
+    def test_five_tardies_clamps_to_100(self):
+        import datetime
+        a = self._admin('pen2k'); ws = get_week_start()
+        for i in range(1, 6):
+            self._rec(a, ws + datetime.timedelta(days=i), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('100'))
+
+    def test_ncns_and_suspension_are_100(self):
+        import datetime
+        for uname, st in (('pen2l', 'NCNS'), ('pen2m', 'S')):
+            a = self._admin(uname); ws = get_week_start()
+            self._rec(a, ws + datetime.timedelta(days=1), st)
+            self.assertEqual(self._pct(a, ws), Decimal('100'))
+
+    def test_two_issues_same_week_is_50(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen2n'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Issues')
+        self._rec(a, ws + datetime.timedelta(days=2), 'Issues')
+        reco = admin_bonus_penalty(a, ws)
+        self.assertEqual(reco['pct'], Decimal('50'))
+        self.assertIn('4', reco['hours_note'])           # pay 8 first day, 4 second
+
+    def test_issues_two_weeks_running_is_50(self):
+        import datetime
+        a = self._admin('pen2o'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Issues')
+        self._rec(a, ws - datetime.timedelta(days=6), 'Issues')
+        self.assertEqual(self._pct(a, ws), Decimal('50'))
+
+    def test_issues_plus_tardy_stacks_to_35(self):
+        import datetime
+        a = self._admin('pen2p'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Issues')   # 25
+        self._rec(a, ws + datetime.timedelta(days=2), 'T')        # 10
+        self.assertEqual(self._pct(a, ws), Decimal('35'))
+
+    def test_t_plus_vto_counts_as_tardy(self):
+        import datetime
+        a = self._admin('pen2q'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T+VTO')
+        self.assertEqual(self._pct(a, ws), Decimal('10'))
+
+    def test_everything_stacks_and_caps_at_100(self):
+        import datetime
+        a = self._admin('pen2r'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')        # 10
+        self._rec(a, ws + datetime.timedelta(days=2), 'I')        # 10
+        self._rec(a, ws + datetime.timedelta(days=3), 'Issues')   # 25
+        self._rec(a, ws + datetime.timedelta(days=4), 'Absent')   # 100 → cap
+        self.assertEqual(self._pct(a, ws), Decimal('100'))
+
+    def test_clean_week_is_zero(self):
+        import datetime
+        a = self._admin('pen2s'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'P')
+        self.assertEqual(self._pct(a, ws), Decimal('0'))
+
+    # ── Scenarios surfaced by the adversarial audit (all correct; locked in) ──────
+    def test_two_t_plus_i_days_is_60(self):
+        # Each T+I hits BOTH tracks: 2 tardies (30%) + 2 incompletes (30%) = 60%.
+        import datetime
+        a = self._admin('pen3a'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T+I')
+        self._rec(a, ws + datetime.timedelta(days=2), 'T+I')
+        self.assertEqual(self._pct(a, ws), Decimal('60'))
+
+    def test_two_incompletes_same_week_is_30(self):
+        import datetime
+        a = self._admin('pen3b'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'I')
+        self._rec(a, ws + datetime.timedelta(days=2), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('30'))
+
+    def test_incomplete_two_weeks_running_is_30(self):
+        import datetime
+        a = self._admin('pen3c'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'I')
+        self._rec(a, ws - datetime.timedelta(days=6), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('30'))
+
+    def test_recurring_t_plus_i_drives_both_runs_to_60(self):
+        # T+I this week + T+I last week → tardy run2 (30%) + incomplete run2 (30%).
+        import datetime
+        a = self._admin('pen3d'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T+I')
+        self._rec(a, ws - datetime.timedelta(days=6), 'T+I')
+        self.assertEqual(self._pct(a, ws), Decimal('60'))
+
+    def test_per_track_selective_gap(self):
+        # wk-2 = I, wk-1 = T, wk-0 = T+I → tardy run2 (30, wk-1 had T) + incomplete
+        # run1 (10, wk-1 had NO incomplete so its run reset) = 40%.
+        import datetime
+        a = self._admin('pen3e'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T+I')
+        self._rec(a, ws - datetime.timedelta(days=6), 'T')
+        self._rec(a, ws - datetime.timedelta(days=13), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('40'))
+
+    def test_override_participates_in_run(self):
+        # A saved T last week + an unsaved (override) T this week → run2 count1 = 30%.
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen3f'); ws = get_week_start()
+        self._rec(a, ws - datetime.timedelta(days=6), 'T')
+        reco = admin_bonus_penalty(a, ws, override=(ws + datetime.timedelta(days=1), 'T'))
+        self.assertEqual(reco['pct'], Decimal('30'))
+
+    def test_issues_three_same_week_is_100_with_hours(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen3g'); ws = get_week_start()
+        for i in (1, 2, 3):
+            self._rec(a, ws + datetime.timedelta(days=i), 'Issues')
+        reco = admin_bonus_penalty(a, ws)
+        self.assertEqual(reco['pct'], Decimal('100'))
+        self.assertIn('0 hrs day 3', reco['hours_note'])
+
+    def test_issues_recurrence_breaks_on_gap(self):
+        # Issue this week + issue 2 weeks ago, clean last week → run resets to 1 → 25%.
+        import datetime
+        a = self._admin('pen3h'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Issues')
+        self._rec(a, ws - datetime.timedelta(days=13), 'Issues')
+        self.assertEqual(self._pct(a, ws), Decimal('25'))
+
+    def test_pure_track_stacking_caps_at_100(self):
+        # 3 tardies (60%) + 3 incompletes (60%) = 120 → capped 100, no full-penalty.
+        import datetime
+        a = self._admin('pen3i'); ws = get_week_start()
+        for i in (1, 2, 3):
+            self._rec(a, ws + datetime.timedelta(days=i), 'T')
+        for i in (4, 5, 6):
+            self._rec(a, ws + datetime.timedelta(days=i), 'I')
+        self.assertEqual(self._pct(a, ws), Decimal('100'))
+
+    def test_multiple_full_penalty_statuses_list_both(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen3j'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Absent')
+        self._rec(a, ws + datetime.timedelta(days=2), 'NCNS')
+        reco = admin_bonus_penalty(a, ws)
+        self.assertEqual(reco['pct'], Decimal('100'))
+        joined = ' '.join(reco['reasons'])
+        self.assertIn('Absent', joined)
+        self.assertIn('NCNS', joined)
+
+    def test_prior_week_penalty_does_not_leak(self):
+        # An Absent (and a tardy) only in a PRIOR week must not penalize a clean week.
+        import datetime
+        a = self._admin('pen3k'); ws = get_week_start()
+        self._rec(a, ws - datetime.timedelta(days=6), 'Absent')
+        self._rec(a, ws - datetime.timedelta(days=5), 'T')
+        self.assertEqual(self._pct(a, ws), Decimal('0'))
+
+    def test_non_penalty_statuses_are_zero(self):
+        # VTO (a substring of T+VTO/P+VTO) and other benign statuses contribute 0.
+        import datetime
+        a = self._admin('pen3l'); ws = get_week_start()
+        for i, st in enumerate(['VTO', 'OT', 'MUT', 'P+VTO', 'V', 'Holiday'], start=1):
+            self._rec(a, ws + datetime.timedelta(days=i), st)
+        self.assertEqual(self._pct(a, ws), Decimal('0'))
+
+    def test_save_deduction_clamps_out_of_range(self):
+        import datetime, json
+        from nomina.models import AdminBonusDeduction
+        _make_agent('penclampsuper', is_super_admin=True)
+        self.client.login(username='penclampsuper', password='x')
+        a = self._admin('pen3m'); ws = get_week_start()
+        for raw, expect in (('150', Decimal('100')), ('-5', Decimal('0'))):
+            self.client.post(reverse('save_admin_deduction'),
+                             data=json.dumps({'agent_id': a.pk, 'week': ws.isoformat(), 'pct': raw}),
+                             content_type='application/json')
+            self.assertEqual(AdminBonusDeduction.objects.get(agent=a, week_start=ws).deduction_pct, expect)
+
+    def test_recurrence_escalates(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen3'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'T')     # this week: 1 incident
+        self._rec(a, ws - datetime.timedelta(days=6), 'T')     # last week: 1 incident
+        self.assertEqual(admin_bonus_penalty(a, ws)['pct'], Decimal('30'))   # run 2, count 1 → 30
+
+    def test_absent_is_100(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen4'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Absent')
+        self.assertEqual(admin_bonus_penalty(a, ws)['pct'], Decimal('100'))
+
+    def test_issues_gives_pct_and_hours_note(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen5'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Issues')
+        reco = admin_bonus_penalty(a, ws)
+        self.assertEqual(reco['pct'], Decimal('25'))
+        self.assertIn('8', reco['hours_note'])                 # pay 8 hrs for a first issue
+
+    def test_penalty_stacks_and_caps_at_100(self):
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen6'); ws = get_week_start()
+        self._rec(a, ws + datetime.timedelta(days=1), 'Absent')  # 100
+        self._rec(a, ws + datetime.timedelta(days=2), 'T')       # +10 → capped at 100
+        self.assertEqual(admin_bonus_penalty(a, ws)['pct'], Decimal('100'))
+
+    def test_admin_nomina_penalty_is_noted_not_applied(self):
+        # New model: the sheet shows the FULL bonus; the penalty (and vacation) land in
+        # the corrected value + Note, nothing modified in place.
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import AdminBonusDeduction
+        a = self._admin('pen7'); ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        gross = next(r for r in _admin_nomina_data(ws, week)[0] if r['agent'].pk == a.pk)['admin_bonus']
+        self.assertGreater(gross, 0)
+        AdminBonusDeduction.objects.create(agent=a, week_start=ws, deduction_pct=Decimal('50'))
+        r2 = next(r for r in _admin_nomina_data(ws, week)[0] if r['agent'].pk == a.pk)
+        self.assertEqual(r2['admin_bonus'], gross)                                     # sheet still full
+        self.assertEqual(r2['bonus_ded_pct'], Decimal('50'))
+        self.assertEqual(r2['admin_bonus_corrected'], (gross * Decimal('0.5')).quantize(Decimal('0.01')))
+        self.assertIn('Bonus should be', r2['note'])
+
+    def test_reco_override_reflects_unsaved_status(self):
+        # Race-proof: the recommendation reflects the just-set cell even before its
+        # save lands (the bug: reco read stale data → 0% for a real NCNS).
+        import datetime
+        from nomina.views import admin_bonus_penalty
+        a = self._admin('pen8'); ws = get_week_start()
+        day = ws + datetime.timedelta(days=1)
+        self.assertEqual(admin_bonus_penalty(a, ws)['pct'], Decimal('0'))                     # nothing saved
+        self.assertEqual(admin_bonus_penalty(a, ws, override=(day, 'NCNS'))['pct'], Decimal('100'))
+        # An override that clears the status is reflected too.
+        self._rec(a, day, 'NCNS')
+        self.assertEqual(admin_bonus_penalty(a, ws)['pct'], Decimal('100'))
+        self.assertEqual(admin_bonus_penalty(a, ws, override=(day, ''))['pct'], Decimal('0'))
+
+    def test_reco_endpoint_and_save_deduction(self):
+        import datetime, json
+        from nomina.models import AdminBonusDeduction
+        _make_agent('pensuper', is_super_admin=True)
+        self.client.login(username='pensuper', password='x')
+        a = self._admin('pen9'); ws = get_week_start()
+        day = (ws + datetime.timedelta(days=1)).isoformat()
+        resp = self.client.get(reverse('admin_penalty_reco'),
+                               {'agent': a.pk, 'week': ws.isoformat(), 'date': day, 'status': 'NCNS'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['pct'], '100')                    # override reflected over HTTP
+        resp = self.client.post(reverse('save_admin_deduction'),
+                                data=json.dumps({'agent_id': a.pk, 'week': ws.isoformat(), 'pct': '40'}),
+                                content_type='application/json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(AdminBonusDeduction.objects.get(agent=a, week_start=ws).deduction_pct, Decimal('40'))
+
+
+class NominaYoursMineTests(TestCase):
+    """Batch 4 — the Agent export splits into a raw 'Yours' sheet (before edits) and a
+    corrected 'Mine' sheet (overrides, net LPO, vacation + manual hours folded in)."""
+
+    def test_yours_is_raw_mine_is_corrected(self):
+        import datetime
+        from nomina.views import _agent_nomina_data
+        from nomina.models import WeeklyPayInput, NominaOverride
+        from adherence.models import AdherenceRecord
+        a = _make_infinity('ymagent', '5000')                 # rate 62.50
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        WeeklyPayInput.objects.create(agent=a, week_start=ws, lpo=Decimal('1000'), extra_hours=Decimal('5'))
+        AdherenceRecord.objects.update_or_create(agent=a, date=week[1], defaults={'status': 'V'})   # flat 8h
+        NominaOverride.objects.create(agent=a, week_start=ws, field='base_pay', value=Decimal('999'))
+        NominaOverride.objects.create(agent=a, week_start=ws, field='net_lpo', value=Decimal('800'))
+
+        yours = next(r for r in _agent_nomina_data(ws, week, corrected=False)[0] if r['agent'].pk == a.pk)
+        mine = next(r for r in _agent_nomina_data(ws, week, corrected=True)[0] if r['agent'].pk == a.pk)
+
+        self.assertEqual(yours['net_lpo'], Decimal('1000'))   # gross
+        self.assertEqual(mine['net_lpo'], Decimal('800'))     # override
+        self.assertEqual(yours['total_hrs'], Decimal('0'))    # no vacation / extra folded in
+        self.assertEqual(mine['total_hrs'], Decimal('13'))    # 5 extra + 8 vacation
+        self.assertEqual(yours['base_pay'], Decimal('0'))     # computed base, no override
+        self.assertEqual(mine['base_pay'], Decimal('1811.50'))  # 999 + 5×62.50 + 8×62.50
+
+    def test_note_reports_lpo_and_vacation(self):
+        import datetime
+        from nomina.views import _agent_nomina_data, _agent_note
+        from nomina.models import WeeklyPayInput, NominaOverride
+        from adherence.models import AdherenceRecord
+        a = _make_infinity('ymnote', '5001')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        WeeklyPayInput.objects.create(agent=a, week_start=ws, lpo=Decimal('1000'))
+        NominaOverride.objects.create(agent=a, week_start=ws, field='net_lpo', value=Decimal('800'))
+        AdherenceRecord.objects.update_or_create(agent=a, date=week[2], defaults={'status': 'V'})
+        yours = next(r for r in _agent_nomina_data(ws, week, corrected=False)[0] if r['agent'].pk == a.pk)
+        mine = next(r for r in _agent_nomina_data(ws, week, corrected=True)[0] if r['agent'].pk == a.pk)
+        note = _agent_note(yours, mine)
+        self.assertIn('LPO should be $800.00', note)
+        self.assertIn('1 day of vacation', note)
+        self.assertIn('total hours worked should be 8', note)
+
+    def test_no_corrections_no_note(self):
+        import datetime
+        from nomina.views import _agent_nomina_data, _agent_note
+        from nomina.models import WeeklyPayInput
+        a = _make_infinity('ymclean', '5002')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        WeeklyPayInput.objects.create(agent=a, week_start=ws, lpo=Decimal('500'))   # no commission, no vac
+        yours = next(r for r in _agent_nomina_data(ws, week, corrected=False)[0] if r['agent'].pk == a.pk)
+        mine = next(r for r in _agent_nomina_data(ws, week, corrected=True)[0] if r['agent'].pk == a.pk)
+        self.assertEqual(_agent_note(yours, mine), '')
+
+
+class NominaRosterTests(TestCase):
+    """Split keys off is_official_admin (non-official → Agent, official → Admin); no
+    Infinity person is silently dropped from BOTH sheets."""
+
+    def test_split_and_unrostered_safety_net(self):
+        from nomina.views import _unrostered_infinity, _infinity_agents, _admin_agents
+        from scheduling.models import Agent
+        ws = get_week_start()
+        # Non-official admin, no tracking/billable → on neither → flagged.
+        stray = _make_agent('strayadmin', role='admin', role_type='supervisor')
+        stray.employer = 'Infinity'; stray.track_attendance = False; stray.save()
+        worker = _make_infinity('rworker', '7001')                 # tracked → Agent nómina
+        offu = User.objects.create_user('roffadmin', password='x', first_name='Off')
+        off = Agent.objects.create(user=offu, role='admin', role_type='supervisor', agent_name='roffadmin',
+                                   status='active', employer='Infinity', is_official_admin=True)
+
+        unros = {a.pk for a in _unrostered_infinity(ws)}
+        self.assertIn(stray.pk, unros)
+        self.assertNotIn(worker.pk, unros)
+        self.assertNotIn(off.pk, unros)
+
+        agent_ids = {a.pk for a in _infinity_agents(ws)}
+        admin_ids = {a.pk for a in _admin_agents(ws)}
+        self.assertFalse(agent_ids & admin_ids)            # no overlap
+        self.assertIn(worker.pk, agent_ids)                # non-official/tracked → Agent
+        self.assertIn(off.pk, admin_ids)                   # official → Admin
+
+
+class NominaAdminVacationTests(TestCase):
+    """Batch 4b — admin bonus prorated by worked ÷ scheduled days, penalty × proration
+    multiply, vacation stated in Notes, and admin overrides applied."""
+
+    def _admin(self, username, bonus='500'):
+        u = User.objects.create_user(username, password='x', first_name=username.title())
+        return Agent.objects.create(
+            user=u, role='admin', role_type='supervisor', agent_name=username,
+            status='active', employer='Infinity', is_official_admin=True,
+            admin_bonus_mxn=Decimal(bonus), hourly_rate=Decimal('80'))
+
+    def _schedule(self, agent, week, days):
+        import datetime
+        from scheduling.models import Shift
+        for i in days:
+            Shift.objects.create(agent=agent, date=week[i], is_off=False,
+                                 start_time=datetime.time(9, 0), end_time=datetime.time(17, 0))
+
+    def test_bonus_prorated_by_worked_days(self):
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from adherence.models import AdherenceRecord
+        a = self._admin('av1', bonus='500'); ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        self._schedule(a, week, [0, 1, 2, 3, 4])                # scheduled 5 days
+        AdherenceRecord.objects.update_or_create(agent=a, date=week[0], defaults={'status': 'V'})  # 1 vacation
+        r = next(r for r in _admin_nomina_data(ws, week)[0] if r['agent'].pk == a.pk)
+        self.assertEqual(r['admin_bonus'], Decimal('500'))                     # sheet shows FULL
+        self.assertEqual(r['admin_bonus_corrected'], Decimal('400.00'))        # 500 × 4/5
+        self.assertIn('Bonus should be $400.00', r['note'])
+        self.assertIn('1 day of vacation', r['note'])
+
+    def test_proration_and_penalty_multiply(self):
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import AdminBonusDeduction
+        from adherence.models import AdherenceRecord
+        a = self._admin('av2', bonus='500'); ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        self._schedule(a, week, [0, 1, 2, 3, 4])
+        AdherenceRecord.objects.update_or_create(agent=a, date=week[0], defaults={'status': 'V'})
+        AdminBonusDeduction.objects.create(agent=a, week_start=ws, deduction_pct=Decimal('50'))
+        r = next(r for r in _admin_nomina_data(ws, week)[0] if r['agent'].pk == a.pk)
+        self.assertEqual(r['admin_bonus_corrected'], Decimal('200.00'))        # 500 × 4/5 × (1−50%)
+        self.assertIn('−50% penalty', r['note'])
+        self.assertIn('1 vacation day', r['note'])
+
+    def test_admin_override_applied_in_place(self):
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import NominaOverride
+        a = self._admin('av3', bonus='500'); ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        NominaOverride.objects.create(agent=a, week_start=ws, field='admin_bonus', value=Decimal('777'))
+        NominaOverride.objects.create(agent=a, week_start=ws, field='base_pay', value=Decimal('1234'))
+        r = next(r for r in _admin_nomina_data(ws, week)[0] if r['agent'].pk == a.pk)
+        self.assertEqual(r['admin_bonus'], Decimal('777'))     # override replaces the gross bonus
+        self.assertEqual(r['base_pay'], Decimal('1234'))
+
+
+class NominaFinalizeTests(TestCase):
+    """Batch 5 — finalizing a week snapshots what was paid; numbers then never recompute
+    and the week's inputs are locked (permanent, no un-lock)."""
+
+    def setUp(self):
+        from nomina.models import NominaWeek
+        _make_agent('fin_super', is_super_admin=True)
+        self.client.login(username='fin_super', password='x')
+        self.a = _make_infinity('finagent', '8000')
+        self.ws = get_week_start()
+        NominaWeek.objects.create(week_start=self.ws, spiff_fx_rate=Decimal('18'))
+
+    def _finalize(self):
+        return self.client.post(reverse('nomina:finalize') + f'?week_start={self.ws.isoformat()}',
+                                {'week_start': self.ws.isoformat()}, follow=True)
+
+    def test_finalize_freezes_numbers(self):
+        from nomina.models import WeeklyPayInput, PayrollRun
+        WeeklyPayInput.objects.create(agent=self.a, week_start=self.ws, lpo=Decimal('1000'))
+        self.assertEqual(self._finalize().status_code, 200)
+        run = PayrollRun.objects.get(week_start=self.ws)
+        frozen = next(r for r in run.agent_rows if r['agent_pk'] == self.a.pk)
+        self.assertEqual(frozen['net_lpo'], 1000.0)                 # snapshot captured it
+        # Change the underlying input — the frozen snapshot must NOT move.
+        WeeklyPayInput.objects.filter(agent=self.a, week_start=self.ws).update(lpo=Decimal('5000'))
+        run.refresh_from_db()
+        frozen2 = next(r for r in run.agent_rows if r['agent_pk'] == self.a.pk)
+        self.assertEqual(frozen2['net_lpo'], 1000.0)               # still what was paid
+        resp = self.client.get(reverse('nomina:agent_nomina') + f'?week_start={self.ws.isoformat()}')
+        self.assertContains(resp, 'Finalized')
+
+    def test_inputs_locked_after_finalize(self):
+        from nomina.models import PayrollRun, WeeklyPayInput
+        PayrollRun.objects.create(week_start=self.ws)              # mark finalized
+        url = reverse('nomina:input_type', args=['spiff']) + f'?week_start={self.ws.isoformat()}'
+        resp = self.client.post(url, {'add_more_agent': self.a.pk, 'add_more_amount': '50'}, follow=True)
+        self.assertFalse(WeeklyPayInput.objects.filter(
+            agent=self.a, week_start=self.ws, spiff_usd__gt=0).exists())   # edit blocked
+        self.assertContains(resp, 'finalized (locked)')                    # lock banner shown
+
+    def test_finalize_is_permanent_no_double(self):
+        from nomina.models import PayrollRun
+        self._finalize()
+        self._finalize()                                          # second is a no-op
+        self.assertEqual(PayrollRun.objects.filter(week_start=self.ws).count(), 1)

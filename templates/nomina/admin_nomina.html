@@ -23,8 +23,17 @@
         Official Admins. Base = Hours × Admin Wage (in Subtotal); plus Holiday pay, Spiffs, LPO, Referral, and
         <strong>Prestamo</strong> (loans they handed out as a manager → credited this week's repayments); then the fixed
         <strong>Admin Bonus</strong>; minus Cafeteria, their own <strong>Prestamo</strong> repayment, and Transportation. <strong>Infinity only.</strong>
+        Figures are shown <strong>unmodified</strong> — any bonus penalty %, vacation proration, or vacation hours are stated in <strong>Notes</strong> (bonus is prorated by days worked and × (1 − penalty%)).
     </p>
 </div>
+
+{% if totals.spiff_needs_rate %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fef2f2;border-left:4px solid #dc2626;">
+    <p style="margin:0;font-size:13px;color:#991b1b;">&#9888;&#65039; <strong>Spiff rate not set for this week.</strong>
+    {{ totals.spiff_unpaid_count }} {% if totals.spiff_unpaid_count == 1 %}person has{% else %}people have{% endif %} spiffs that show as <strong>$0</strong> until you set the USD→MXN rate on the
+    <a href="{% url 'nomina:inputs' %}?week_start={{ week_start|date:'Y-m-d' }}">Inputs</a> page.</p>
+</div>
+{% endif %}
 
 <div class="card" style="overflow-x:auto;padding:0;">
 <table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;">
@@ -47,6 +56,7 @@
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Prestamo</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;color:#b91c1c;">Transportation</th>
             <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:right;background:#e8f0fe;">Total</th>
+            <th style="padding:7px 8px;border-bottom:2px solid #94a3b8;text-align:left;min-width:220px;">Notes</th>
         </tr>
     </thead>
     <tbody style="font-family:monospace;">
@@ -69,9 +79,10 @@
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.prestamo_repay|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;color:#b91c1c;">${{ r.transport|floatformat:2 }}</td>
             <td style="padding:5px 8px;text-align:right;font-weight:800;background:#f2f7ff;{% if r.total < 0 %}color:#b91c1c;{% endif %}">${{ r.total|floatformat:2 }}</td>
+            <td style="padding:5px 8px;font-family:Arial;font-size:11px;color:#b45309;">{{ r.note }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="17" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Official Admins for this week. (Load real data to see figures.)</td></tr>
+        <tr><td colspan="18" style="padding:30px;text-align:center;color:#888;font-family:Arial;">No Official Admins for this week. (Load real data to see figures.)</td></tr>
         {% endfor %}
     </tbody>
     {% if rows %}
@@ -92,6 +103,7 @@
             <td style="padding:8px;text-align:right;color:#b91c1c;">${{ totals.repay|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;color:#b91c1c;">${{ totals.transport|floatformat:2 }}</td>
             <td style="padding:8px;text-align:right;background:#e8f0fe;">${{ totals.total|floatformat:2 }}</td>
+            <td></td>
         </tr>
     </tfoot>
     {% endif %}
