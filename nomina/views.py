@@ -772,22 +772,31 @@ def _service_start(agent):
     return min(starts) if starts else agent.start_date
 
 
-def vacation_balance(agent, year=None):
-    """(accrued, used, remaining) LFT vacation days for `agent` in `year`.
-    Accrued = LFT schedule by completed years of service; Used = 'V' adherence
-    days that calendar year; plus any super-admin manual adjustment. Shared by the
-    Vacations page and the request flow."""
+def vacation_balance(agent, as_of=None):
+    """(accrued, used, remaining) LFT vacation for `agent`'s CURRENT work-anniversary
+    year. Accrued = LFT days by completed years of service; Used = 'V' adherence days
+    since their most recent hire anniversary; plus any super-admin manual adjustment.
+    Everyone resets to their full days on their anniversary. Shared by the Vacations
+    page, the request flow, and the adherence 'V' safety net."""
     from adherence.models import AdherenceRecord
     from .models import VacationAdjustment
-    today = timezone.localdate()
-    year = year or today.year
+    today = as_of or timezone.localdate()
     start = _service_start(agent)
-    years = 0
     if start:
-        years = max(0, today.year - start.year - ((today.month, today.day) < (start.month, start.day)))
-    accrued = _lft_vacation_days(years)
-    used = AdherenceRecord.objects.filter(agent=agent, status='V', date__year=year).count()
-    adj = VacationAdjustment.objects.filter(agent=agent, year=year).first()
+        before_anniv = (today.month, today.day) < (start.month, start.day)
+        years = max(0, today.year - start.year - (1 if before_anniv else 0))
+        accrued = _lft_vacation_days(years)
+        # Most recent hire anniversary on or before `today` — the start of this vac year.
+        anniv_year = today.year - (1 if before_anniv else 0)
+        try:
+            anniversary = date_cls(anniv_year, start.month, start.day)
+        except ValueError:                   # Feb 29 hire → treat as Feb 28
+            anniversary = date_cls(anniv_year, start.month, 28)
+        used = AdherenceRecord.objects.filter(
+            agent=agent, status='V', date__gte=anniversary, date__lte=today).count()
+    else:
+        accrued, used = 0, 0                  # no hire date → nothing accrued/used yet
+    adj = VacationAdjustment.objects.filter(agent=agent, year=today.year).first()
     adjustment = adj.days if adj else Decimal('0')
     remaining = Decimal(accrued) - used + adjustment
     return accrued, used, remaining
@@ -799,7 +808,7 @@ def vacation_request_check(agent, start_date, end_date):
     'V'; `overdraw` = approving would push the balance negative."""
     from adherence.models import AdherenceRecord
     today = timezone.localdate()
-    accrued, used, remaining = vacation_balance(agent, today.year)
+    accrued, used, remaining = vacation_balance(agent, today)
     existing = set(AdherenceRecord.objects.filter(
         agent=agent, status='V', date__range=(start_date, end_date)
     ).values_list('date', flat=True))
@@ -834,7 +843,7 @@ def vacations(request):
         except (Agent.DoesNotExist, ValueError, TypeError):
             messages.error(request, "Agent not found.")
             return redirect('vacations')
-        accrued, used, _rem = vacation_balance(target, year)
+        accrued, used, _rem = vacation_balance(target)
         new_available = _dec(request.POST.get('available'))
         adjustment = (new_available - (Decimal(accrued) - used)).quantize(Decimal('0.1'))
         VacationAdjustment.objects.update_or_create(
@@ -867,7 +876,7 @@ def vacations(request):
 
     rows = []
     for a in agents:
-        accrued, used, remaining = vacation_balance(a, year)
+        accrued, used, remaining = vacation_balance(a)
         rows.append({
             'agent': a,
             'agent_name': a.agent_name or a.user.username,

@@ -5,7 +5,7 @@
     <h1 style="margin:0;">Vacations</h1>
 </div>
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
-    <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">Available days = Mexican LFT accrual (by completed years of service) − vacation (&ldquo;V&rdquo;) days used this year{% if is_super %} ± manual adjustment{% endif %}.
+    <p style="margin:0;font-size:13px;color:#334;line-height:1.6;">Available days = Mexican LFT accrual (by completed years of service) − vacation (&ldquo;V&rdquo;) days used since their work anniversary{% if is_super %} ± manual adjustment{% endif %}. Everyone resets to their full days on their hire anniversary.
     {% if not is_admin %}You&rsquo;re viewing your own balance.{% elif is_super %} You can adjust a person&rsquo;s available days below.{% endif %}</p>
 </div>
 

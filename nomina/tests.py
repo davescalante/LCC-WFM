@@ -205,6 +205,28 @@ class NominaVacationsPageTests(TestCase):
         self.assertFalse(VacationAdjustment.objects.filter(agent=self.a1).exists())
 
 
+class NominaVacationBalanceTests(TestCase):
+    """Balance is per WORK ANNIVERSARY: everyone resets to their full LFT days on
+    their hire anniversary; only 'V' days since that anniversary count as used."""
+
+    def test_used_counts_only_since_anniversary(self):
+        import datetime
+        from scheduling.models import EmploymentPeriod
+        from adherence.models import AdherenceRecord
+        from nomina.views import vacation_balance
+        today = datetime.date.today()
+        a = _make_agent('annguy', role='agent', role_type='regular_agent')
+        # Hire anniversary ~30 days ago, 2 completed years → 14 accrued days.
+        anniv = today - datetime.timedelta(days=30)
+        EmploymentPeriod.objects.create(agent=a, start_date=anniv.replace(year=anniv.year - 2))
+        AdherenceRecord.objects.create(agent=a, date=today - datetime.timedelta(days=60), status='V')  # before anniv
+        AdherenceRecord.objects.create(agent=a, date=today - datetime.timedelta(days=10), status='V')  # after anniv
+        acc, used, rem = vacation_balance(a)
+        self.assertEqual(acc, 14)
+        self.assertEqual(used, 1)          # only the post-anniversary V counts
+        self.assertEqual(rem, Decimal('13'))
+
+
 class NominaVacationPayTests(TestCase):
     """Vacation piece A: a 'V' day is paid — min(scheduled, 8) hours, or 8 if a day
     off — folded into Pay (48) and Total Hours; plus the 'on vacation' indicator."""

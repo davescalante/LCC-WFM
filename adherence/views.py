@@ -787,7 +787,7 @@ def save_adherence_cell(request):
             getattr(request.user, 'agent', None), 'is_super_admin', False)
         if not is_super:
             from nomina.views import vacation_balance
-            _acc, _used, remaining = vacation_balance(agent, day_date.year)
+            _acc, _used, remaining = vacation_balance(agent, day_date)
             if remaining < 1:
                 return JsonResponse({'ok': False, 'rejected': True, 'error':
                     f"{agent} cannot use any more vacation days. Please reach out to "
