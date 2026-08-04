@@ -525,10 +525,11 @@ def input_type(request, key):
     amt_total = pesos_total = Decimal('0')
     for a in agents:
         wi = existing.get(a.pk)
-        v = getattr(wi, field) if wi else Decimal('0')
-        if default_amt is not None and v == 0:       # unset → show the standard default
+        raw = getattr(wi, field) if wi else None     # None = never entered (nullable field or no row)
+        v = raw if raw is not None else Decimal('0')  # numeric value for totals
+        if default_amt is not None and raw is None:  # never entered → show the standard default
             display = f'{Decimal(str(default_amt)):.2f}'
-        else:
+        else:                                         # entered value wins — including an explicit $0 (blank)
             display = '' if v == 0 else f'{v:.2f}'
         name = (a.agent_name or a.user.username) if t.get('name_only_agent') \
             else (a.agent_name or a.user.get_full_name() or a.user.username)
@@ -658,11 +659,14 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         welcome_default = enroll.amount if (enroll and enroll.covers_week(week_start) and bonus > 0) else (wi.welcome if wi else Decimal('0'))
         welcome = ov(a.pk, 'welcome', welcome_default)
         referral = ov(a.pk, 'referral', wi.referral if wi else Decimal('0'))
-        # Kill Team QA is a standard $400 for Kill Team agents unless a non-zero
-        # value was entered (or an override set) — mirrors the module's prefill.
-        kq_raw = wi.kill_team_qa if wi else Decimal('0')
-        if kq_raw == 0 and a.role_type == 'kill_team':
+        # Kill Team QA is a standard $400 for Kill Team agents ONLY when nothing was ever
+        # entered (kill_team_qa is NULL). An entered value wins — including an explicit $0,
+        # so a Kill Team agent can be zeroed out and it sticks (mirrors the module's prefill).
+        kq_stored = wi.kill_team_qa if wi else None
+        if kq_stored is None and a.role_type == 'kill_team':
             kq_raw = Decimal(str(INPUT_TYPE_BY_KEY['killqa'].get('default_amount') or 0))
+        else:
+            kq_raw = kq_stored if kq_stored is not None else Decimal('0')
         kill_qa = ov(a.pk, 'kill_qa', kq_raw)
         hol_hrs = hol_hours.get(a.pk, Decimal('0'))            # worked holiday hours → 2×
         hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))      # scheduled, not worked → 1×

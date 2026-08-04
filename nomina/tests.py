@@ -734,6 +734,35 @@ class NominaKillTeamScopeTests(TestCase):
         kt_row = next(r for r in rows if r['agent'].pk == self.kt.pk)
         self.assertEqual(kt_row['kill_qa'], Decimal('250'))
 
+    def test_explicit_zero_sticks_and_is_not_reverted_to_400(self):
+        """A Kill Team agent can be zeroed out: an explicit $0 (a blank/0 box, then Save)
+        is KEPT — not bounced back to the $400 default — on the module box AND the nómina."""
+        import datetime
+        week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        self.client.post(self.url, {f'v_{self.kt.pk}': '0'})            # Save $0 via the module
+        wi = self.WeeklyPayInput.objects.get(agent=self.kt, week_start=self.ws)
+        self.assertEqual(wi.kill_team_qa, Decimal('0'))                 # stored as an explicit 0
+        resp = self.client.get(self.url)
+        self.assertNotContains(resp, 'value="400.00"')                 # box no longer prefills 400
+        from nomina.views import _agent_nomina_data
+        rows, _ = _agent_nomina_data(self.ws, week)
+        kt_row = next(r for r in rows if r['agent'].pk == self.kt.pk)
+        self.assertEqual(kt_row['kill_qa'], Decimal('0'))              # nómina pays 0, not 400
+
+    def test_default_applies_when_only_another_module_created_the_row(self):
+        """A Kill Team agent with a WeeklyPayInput row from ANOTHER module (e.g. LPO) but no
+        Kill Team QA entry still gets the $400 default — it's the never-entered (NULL) state
+        that triggers the default, not merely the absence of a row."""
+        import datetime
+        week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        self.WeeklyPayInput.objects.create(agent=self.kt, week_start=self.ws, lpo=Decimal('500'))
+        wi = self.WeeklyPayInput.objects.get(agent=self.kt, week_start=self.ws)
+        self.assertIsNone(wi.kill_team_qa)                              # QA never entered → NULL
+        from nomina.views import _agent_nomina_data
+        rows, _ = _agent_nomina_data(self.ws, week)
+        kt_row = next(r for r in rows if r['agent'].pk == self.kt.pk)
+        self.assertEqual(kt_row['kill_qa'], Decimal('400'))
+
 
 class NominaComedorUploadTests(TestCase):
     """Comedor is matched by Employee # (EMP), like the real cafeteria export, and
