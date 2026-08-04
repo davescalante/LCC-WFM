@@ -409,19 +409,38 @@ async function submitNote() {
     const btn = document.getElementById('np-submit');
     btn.disabled = true;
     try {
+        const fd = new FormData();
+        fd.append('agent', _noteAgent);
+        fd.append('date', _noteDate);
+        fd.append('body', body);
+        fd.append('csrfmiddlewaretoken', csrfToken());
+
         const resp = await fetch('/adherence/notes/', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken()},
-            body: JSON.stringify({agent_id: _noteAgent, date: _noteDate, body}),
+            headers: {'X-CSRFToken': csrfToken()},
+            body: fd,
         });
         const data = await resp.json();
         if (!data.ok) throw new Error();
         document.getElementById('np-body').value = '';
+        _syncNoteIcon(data.new_count);
         await loadNotes();
     } catch(e) {
         alert('Failed to save note.');
     } finally {
         btn.disabled = false;
+    }
+}
+
+function _syncNoteIcon(count) {
+    if (!_noteBtn) return;
+    _noteBtn.style.color = count > 0 ? '#2563eb' : '#d1d5db';
+    let badge = _noteBtn.querySelector('.note-count-badge');
+    if (count > 0) {
+        if (!badge) { badge = document.createElement('span'); badge.className = 'note-count-badge'; _noteBtn.appendChild(badge); }
+        badge.textContent = count > 9 ? '9+' : count;
+    } else if (badge) {
+        badge.remove();
     }
 }
 
