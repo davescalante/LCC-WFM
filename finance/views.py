@@ -1531,7 +1531,7 @@ def _write_adherence_sheet(ws, rows, week_dates, week_start, week_end, commissio
     day_headers = [d.strftime('%a') for d in week_dates]
     headers = [
         'Username', 'Employee ID', 'Legal Name', 'Agent Name', 'Supervisor',
-        'Commission Deduction %', 'Scheduled Hours',
+        'Commission Deduction %', 'Scheduled Hours', 'Shift Hours',
     ] + day_headers
 
     header_font = Font(bold=True, color='FFFFFF')
@@ -1573,13 +1573,15 @@ def _write_adherence_sheet(ws, rows, week_dates, week_start, week_end, commissio
                 _adherence_export_supervisor_name(agent),
                 float(commission_pct),
                 timedelta(hours=float(row['sched_hours'] or 0)),
+                timedelta(hours=float(row['shift_hours'] or 0)),
             ] + [None] * 7)
             r = ws.max_row
             ws.cell(row=r, column=6).number_format = '0.0"%"'
             ws.cell(row=r, column=7).number_format = '[h]:mm:ss'
+            ws.cell(row=r, column=8).number_format = '[h]:mm:ss'
 
             for i, cell in enumerate(row['cells']):
-                col = 8 + i
+                col = 9 + i
                 status = cell['status']
                 if cell['missing_hrs'] is not None:
                     hrs_line = f"-{_adherence_export_hhmmss(cell['missing_hrs'])}"
@@ -1604,7 +1606,7 @@ def _write_adherence_sheet(ws, rows, week_dates, week_start, week_end, commissio
                 xl_cell.font = font
                 xl_cell.alignment = wrap_center
 
-    col_widths = [17, 14, 30, 22, 20, 12, 14] + [11] * 7
+    col_widths = [17, 14, 30, 22, 20, 12, 14, 14] + [11] * 7
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.row_dimensions[3].height = 30

@@ -10,7 +10,7 @@ import openpyxl
 
 from django.core.cache import cache
 
-from scheduling.models import Agent, Five9Profile, AgentSeparation, Shift
+from scheduling.models import Agent, Five9Profile, AgentSeparation, Shift, ShiftBlock, OvertimeShift
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, PayrollAdjustment
 from finance.models import BillingSettings
 from finance.views import _split_agent_display_name
@@ -1006,7 +1006,7 @@ class AdherenceExportTests(TestCase):
 
         ws = self._export_ws()
         r = self._row_for(ws, agent)
-        cell = ws.cell(row=r, column=8)  # Monday
+        cell = ws.cell(row=r, column=9)  # Monday
         self.assertEqual(cell.value, "P\n8:00:00")
         self.assertTrue(cell.font.color.rgb.upper().endswith('166534'))
         self.assertTrue(cell.fill.fgColor.rgb.upper().endswith('E8F5E9'))
@@ -1018,7 +1018,7 @@ class AdherenceExportTests(TestCase):
 
         ws = self._export_ws()
         r = self._row_for(ws, agent)
-        cell = ws.cell(row=r, column=8)  # Monday: 8h scheduled, 7h45m worked -> 15 min short
+        cell = ws.cell(row=r, column=9)  # Monday: 8h scheduled, 7h45m worked -> 15 min short
         self.assertEqual(cell.value, "T\n-0:15:00")
         self.assertTrue(cell.font.color.rgb.upper().endswith('C0392B'))
 
@@ -1036,7 +1036,7 @@ class AdherenceExportTests(TestCase):
 
         ws = self._export_ws()
         r = self._row_for(ws, admin)
-        cell = ws.cell(row=r, column=8)  # Monday: 8h scheduled, 2h admin-coded -> 6h short
+        cell = ws.cell(row=r, column=9)  # Monday: 8h scheduled, 2h admin-coded -> 6h short
         self.assertEqual(cell.value, "P\n-6:00:00")
 
     def test_identity_columns_populate(self):
@@ -1103,6 +1103,52 @@ class AdherenceExportTests(TestCase):
         self.assertIsInstance(cell.value, timedelta)
         self.assertEqual(cell.number_format, '[h]:mm:ss')
 
+    def test_shift_hours_ignores_vto_zeroing_while_scheduled_hours_stays_zeroed(self):
+        agent = _make_agent('adhexpshifthrs1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), status='VTO', actual_hours=None)
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=7).value, timedelta(hours=8))   # Scheduled Hours: VTO day zeroed
+        self.assertEqual(ws.cell(row=r, column=8).value, timedelta(hours=16))  # Shift Hours: VTO day still counts
+
+    def test_shift_hours_sums_split_shift_blocks(self):
+        agent = _make_agent('adhexpshifthrs2')
+        shift = Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(13, 0))
+        ShiftBlock.objects.create(shift=shift, block_number=2, start_time=time(14, 0), end_time=time(18, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=8).value, timedelta(hours=8))
+
+    def test_shift_hours_excludes_overtime(self):
+        agent = _make_agent('adhexpshifthrs3')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+        OvertimeShift.objects.create(
+            agent=agent, date=_WEEK_START + timedelta(days=2), start_time=time(18, 0), end_time=time(22, 0),
+        )
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=7).value, timedelta(hours=12))  # Scheduled Hours already folds OT in
+        self.assertEqual(ws.cell(row=r, column=8).value, timedelta(hours=8))   # Shift Hours excludes the OT shift
+
+    def test_shift_hours_zero_on_off_day(self):
+        agent = _make_agent('adhexpshifthrs4')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), is_off=True,
+                              start_time=time(0, 0), end_time=time(0, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+
+        ws = self._export_ws()
+        r = self._row_for(ws, agent)
+        self.assertEqual(ws.cell(row=r, column=8).value, timedelta(hours=8))  # off day contributes nothing
+
     def test_off_day_cell_is_blank(self):
         agent = _make_agent('adhexpoff1')
         Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
@@ -1112,7 +1158,7 @@ class AdherenceExportTests(TestCase):
 
         ws = self._export_ws()
         r = self._row_for(ws, agent)
-        self.assertIsNone(ws.cell(row=r, column=13).value)  # Saturday, day 6 -> column 8+5
+        self.assertIsNone(ws.cell(row=r, column=14).value)  # Saturday, day 6 -> column 9+5
 
     def test_lcc_employer_excluded_regular_and_official_admin(self):
         lcc_regular = _make_agent('adhexplccreg1')
@@ -1197,9 +1243,9 @@ class AdherenceExportTests(TestCase):
         wb = self._export_wb()
         vto_ws = wb['VTO Agents']
         self.assertEqual(
-            [vto_ws.cell(row=3, column=c).value for c in range(1, 8)],
+            [vto_ws.cell(row=3, column=c).value for c in range(1, 9)],
             ['Username', 'Employee ID', 'Legal Name', 'Agent Name', 'Supervisor',
-             'Commission Deduction %', 'Scheduled Hours'],
+             'Commission Deduction %', 'Scheduled Hours', 'Shift Hours'],
         )
         self.assertIn('No VTO was recorded for this week.', vto_ws.cell(row=4, column=1).value)
         self.assertEqual(vto_ws.max_row, 4)

@@ -409,8 +409,14 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
     Returns a list of row dicts, one per agent, each containing:
       cells, total_present, total_absent, total_tardy, total_incomplete,
-      sched_hours, actual_hours, coded_hours, adjusted_total,
+      sched_hours, shift_hours, actual_hours, coded_hours, adjusted_total,
       nr_cap_adj, final_adjusted, bonus (Yes/No/—), bonus_mxn, bonus_reasons.
+
+    shift_hours is the raw weekly total from the agent's regular schedule only:
+    same resolved shift/template and split-block hours as sched_hours, but never
+    zeroed by SCHED_HOURS_ZEROING_STATUSES and excluding all OT (ot_map, OT
+    overnight spillover). It intentionally diverges from sched_hours on VTO/
+    LOA/V days and on any day with OT.
     """
     from scheduling.models import Five9Profile as _Five9Profile
     from finance.models import BillingSettings as _BS
@@ -454,6 +460,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
         total_tardy = 0
         total_incomplete = 0
         sched_total = Decimal('0')
+        shift_hours_total = Decimal('0')
         actual_total = Decimal('0')
         bonus = True          # True = eligible, False = disqualified, None = incomplete
         bonus_determined = False
@@ -500,6 +507,13 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
 
             # A day is scheduled if there's a non-off shift, OT shift, or overnight spillover
             is_scheduled_day = (has_shift and not is_off) or bool(ot_shifts) or has_spillover
+
+            # Shift Hours: raw regular-schedule hours only (excludes OT), never zeroed by
+            # status. Same gate and same regular-schedule pieces as sched_total below, just
+            # skipping ot_hrs/prev_ot_shifts and the status-zeroing step.
+            if is_scheduled_day:
+                regular_spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
+                shift_hours_total += sched_hrs + regular_spill_hrs
 
             effective_sched = Decimal('0')
 
@@ -641,6 +655,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             'total_tardy': total_tardy,
             'total_incomplete': total_incomplete,
             'sched_hours': sched_total,
+            'shift_hours': shift_hours_total,
             'actual_hours': actual_total,
             'coded_hours': coded,
             'adjusted_total': adjusted,
