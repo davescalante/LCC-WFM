@@ -1453,3 +1453,45 @@ class NominaFinalizeTests(TestCase):
         self._finalize()
         self._finalize()                                          # second is a no-op
         self.assertEqual(PayrollRun.objects.filter(week_start=self.ws).count(), 1)
+
+
+class NominaAuditFixTests(TestCase):
+    """Fixes from the pre-go-live money-math audit: loan-repayment reconciliation
+    warning, and holiday worked/not-worked mutual exclusion."""
+
+    def test_uncredited_loan_repayment_flagged(self):
+        import datetime
+        from nomina.models import Loan
+        from nomina.views import _admin_nomina_data
+        u = User.objects.create_user('uncadmin', password='x', first_name='Unc')
+        a = Agent.objects.create(user=u, role='admin', role_type='supervisor', agent_name='uncadmin',
+                                 status='active', employer='Infinity', is_official_admin=True,
+                                 admin_bonus_mxn=Decimal('0'), hourly_rate=Decimal('80'))
+        ws = get_week_start(); week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        Loan.objects.create(agent=a, principal=Decimal('1000'), term_weeks=1,
+                            rate=Decimal('1.25'), start_week=ws, granted_by=None)   # no manager
+        _rows, tot = _admin_nomina_data(ws, week)
+        self.assertEqual(tot['uncredited_loans'], 1)               # borrower deducted, credit lands nowhere
+        self.assertEqual(tot['uncredited_repay'], Decimal('1250.00'))
+
+    def test_holiday_notworked_excludes_worked_hours(self):
+        import datetime
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours
+        from scheduling.models import Five9Profile, Shift
+        a = _make_infinity('holx', '9300')
+        Five9Profile.objects.create(agent=a, five9_username='holxf9', billable=True, is_primary=True)
+        ws = get_week_start(); week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        hol = week[2]
+        Holiday.objects.create(date=hol, name='H')
+        Shift.objects.create(agent=a, date=hol, is_off=False,
+                             start_time=datetime.time(9, 0), end_time=datetime.time(17, 0))   # 8h scheduled
+        AdherenceRecord.objects.update_or_create(agent=a, date=hol, defaults={'status': 'Holiday'})
+        up, _ = DailyUpload.objects.get_or_create(date=hol)
+        DailyAgentHours.objects.create(upload=up, agent=a, five9_username='holxf9',
+                                       login_seconds=2 * 3600, not_ready_seconds=0)   # stray login
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('0'))          # not paid as WORKED holiday
+        self.assertEqual(r['holiday_pay'], Decimal('500.00'))     # 8 sched × 62.50 × 1 only

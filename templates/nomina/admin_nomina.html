@@ -35,6 +35,13 @@
 </div>
 {% endif %}
 
+{% if totals.uncredited_loans %}
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#fef2f2;border-left:4px solid #dc2626;">
+    <p style="margin:0;font-size:13px;color:#991b1b;">&#9888;&#65039; <strong>{{ totals.uncredited_loans }} loan repayment{{ totals.uncredited_loans|pluralize }} (${{ totals.uncredited_repay|floatformat:2 }}) not credited to any admin this week.</strong>
+    The manager who granted {% if totals.uncredited_loans == 1 %}it{% else %}them{% endif %} is unset or no longer an official admin, so the borrower is still being deducted but no one is credited. Settle it in person, or fix the loan's manager.</p>
+</div>
+{% endif %}
+
 <div class="card" style="overflow-x:auto;padding:0;">
 <table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;">
     <thead>

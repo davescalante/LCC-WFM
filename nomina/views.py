@@ -174,15 +174,19 @@ def _holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
     (or within-allowance) not-ready, this equals the logged hours."""
     if not agents or not holiday_dates:
         return {}
-    from adherence.models import DailyAgentHours
+    from adherence.models import DailyAgentHours, AdherenceRecord
     from wfm.utils import get_billable_username_map
     bmap, _ = get_billable_username_map([a.pk for a in agents])
+    # Days marked 'Holiday' (scheduled, NOT worked) are paid the 1× not-worked way —
+    # never also as worked hours, even if stray Five9 login exists on that date.
+    notworked = {(r['agent_id'], r['date']) for r in AdherenceRecord.objects.filter(
+        agent__in=agents, date__in=holiday_dates, status='Holiday').values('agent_id', 'date')}
     per_day = {}   # (agent_id, date) -> [login_seconds, nr_seconds]
     for r in DailyAgentHours.objects.filter(
         upload__date__in=holiday_dates, agent__in=agents
     ).values('agent_id', 'upload__date', 'five9_username', 'login_seconds', 'not_ready_seconds'):
         aid = r['agent_id']
-        if aid is None:
+        if aid is None or (aid, r['upload__date']) in notworked:
             continue
         bn = bmap.get(aid)
         if bn is None or r['five9_username'].strip().lower() in bn:
@@ -1374,6 +1378,16 @@ def _admin_nomina_data(week_start, week_dates):
         inst = ln.installment_for_week(week_start)
         if inst:
             granted[ln.granted_by_id] = granted.get(ln.granted_by_id, Decimal('0')) + inst
+    # A borrower is deducted their repayment regardless of who granted the loan, but the
+    # offsetting credit only lands if the manager is on THIS week's admin nómina. Surface
+    # any repayment whose manager is unset / no longer an official admin so it's never
+    # silently unreconciled (the borrower is still being deducted).
+    uncredited_repay, uncredited_loans = Decimal('0'), 0
+    for ln in Loan.objects.exclude(granted_by__in=agents):
+        inst = ln.installment_for_week(week_start)
+        if inst:
+            uncredited_repay += inst
+            uncredited_loans += 1
     # Prestamo OWED: the admin's own loan repayment this week (deducted from the borrower).
     owed = {}
     for ln in Loan.objects.filter(agent__in=agents):
@@ -1455,6 +1469,8 @@ def _admin_nomina_data(week_start, week_dates):
     spiff_unpaid = sum(1 for wi in inputs_map.values() if wi.spiff_usd) if not nweek.spiff_fx_rate else 0
     tot['spiff_needs_rate'] = bool(spiff_unpaid)
     tot['spiff_unpaid_count'] = spiff_unpaid
+    tot['uncredited_loans'] = uncredited_loans
+    tot['uncredited_repay'] = uncredited_repay
     return rows, tot
 
 
