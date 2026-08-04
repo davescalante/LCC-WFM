@@ -1,6 +1,6 @@
 # LCC WFM — System Handoff Document
 
-*Last updated: July 20, 2026. Written for a new assistant/developer with no prior exposure to this project.*
+*Last updated: August 4, 2026. Written for a new assistant/developer with no prior exposure to this project.*
 
 ---
 
@@ -21,7 +21,7 @@ LCC WFM is a workforce-management web application for a bilingual call-center op
 | Excel exports | openpyxl |
 | Frontend | Server-rendered Django templates with inline CSS, vanilla JS. No framework, no build step. Small AJAX endpoints (JSON `fetch`) for in-place updates: OT status pills, adherence cells, codings, notes, live-refresh polling (`/poll/`, `/adherence/poll/`) |
 | Auth | Stock `django.contrib.auth` (login at `/accounts/login/`), custom session-timeout + access middleware |
-| Tests | `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py` — run `python3 manage.py test`. As of the last commit: 222/222 passing |
+| Tests | `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py` — run `python3 manage.py test`. As of the last commit: 227/227 passing |
 
 URL mounts (`wfm/urls.py`): scheduling app at **site root** (and duplicated at `/scheduling/`), `/adherence/`, `/erlang/`, `/finance/`, Django admin at `/admin/`, auth at `/accounts/`.
 
@@ -171,11 +171,12 @@ Adherence-tab footer measuring % of scheduled hours lost. Per day per agent: `Ab
 
 ### 6.7 Billing (Infinity → LCC)
 
-- **Infinity bills LCC** in USD for every agent with at least one **billable Five9 profile**.
+- **Infinity bills LCC** in USD for every agent with at least one **billable Five9 profile** — this applies to `billing_report`/`billing_export` (v1); `billing_export_v2` uses a different roster (see below).
 - `billing_usd = final_hours × rate`, where rate = per-agent `billing_rate_usd` override or the global `billing_rate_usd` (**$15.00/h** default).
 - **Multi-account agents**: only `DailyAgentHours` rows whose Five9 username belongs to one of the agent's *billable* profiles count; non-billable accounts (e.g. a Kill Team OT login) are excluded. The primary billable username is used for display.
 - OT base hours are already inside `final_hours` (agents log into Five9 during OT), so billing needs no separate OT line; incentive top-ups and bonuses are shown as separate USD-equivalent totals.
 - Report groups by employer (Infinity vs LCC Direct) then by role type; separated agents drop off from their `remove_from_adherence_date` week.
+- **`billing_export_v2`'s roster is not billable-Five9-gated.** It uses the same active-or-still-in-pay-window rule as other Finance exports, plus excluding `employer='LCC'` — no billable-Five9-profile filter. An agent with no billable Five9 hours that week still gets a row, zero-filled, rather than being dropped. It also carries its own **Shift Hours** column (position D, ahead of the login/NR/deduction chain) — same definition and same underlying calculation (`adherence.views._compute_shift_hours`) as the combined Adherence export's Shift Hours column, so the two reports cannot disagree on this number. It is schedule data, not a billing input — it plays no part in `billing_usd`.
 
 ### 6.8 Payroll (MXN)
 
@@ -256,7 +257,7 @@ Two distinct formats:
 6. **Login rules**: only supervisor, coordinator, cs, tester, sms_email admins and `role='agent'` users get working passwords; QA/trainer accounts are created with unusable passwords. `teams_password` and `Five9Profile.five9_password` are plain stored credentials (viewable in the UI), unrelated to Django auth.
 7. **Session policy**: 4 h inactivity timeout, 16 h absolute, expire on browser close; AJAX gets `{'expired': true}` 401s, pages redirect to login with a banner.
 8. **`Agent.five9_username`/`five9_password` are dead legacy fields** — superseded by `Five9Profile` (multi-account with `billable` and `is_primary` flags); only a data migration ever read them.
-9. **"Best template" resolution is duplicated** in at least 4 places (shift_list, shift_week, `_best_shift_template`, adherence) with identical rules: overrides beat templates; among templates covering the date, latest `effective_from` wins (NULL = forever). Change one, change all.
+9. **"Best template" resolution is duplicated** in six places with identical rules (overrides beat templates; among templates covering the date, latest `effective_from` wins, NULL = forever): the canonical `scheduling.views._best_shift_template` (reused twice — `agent_my_shifts` and `erlang.views`), plus five independent reimplementations — `shift_list`, `shift_week` (both `scheduling/views.py`), and `adherence.views._build_maps`, `adherence.views._effective_template` (promoted from a closure nested in `_build_rows` to a module-level function, see item 18), and `agent_my_adherence` (all three `adherence/views.py`). A known consolidation candidate, not consolidated as part of this work — change one, check all six.
 10. **`_save_shift_template` deletes future templates** (`effective_from > effective_date`) when writing a permanent change — a schedule change wipes any already-scheduled later changes for that day.
 11. **Silent exception swallowing** in `ApplyScheduledRoleChangesMiddleware` and `AgentAccessMiddleware` — failures to apply role changes or compute badges are invisible.
 12. **Role changes apply on first request of the day** (cache-keyed), not on a guaranteed cron. The management command exists but is a backstop, not scheduled by the repo.
@@ -265,6 +266,7 @@ Two distinct formats:
 15. **`db.sqlite3` is committed to git** (local dev data); production data lives in Render Postgres. A stale `test_path.py` (21 KB) sits at repo root.
 16. **Hardcoded supervisor sort priority** in the Shifts grid admin section: `{'Jesus Urbina': 0, 'Andrea Jones': 1}`.
 17. Timezone: `America/Mexico_City` semantics via Django `timezone.localdate()`; weeks always run Monday–Sunday, and "week_start" params are snapped to Monday.
+18. **Shift Hours has exactly one implementation.** `adherence.views._compute_shift_hours` (module-level, added in `577774e`) is the single source of the "raw regular-schedule hours" summation; `_build_rows` delegates to it instead of accumulating inline, and `finance.views.billing_export_v2` calls it directly (via `_build_maps`, never `_build_rows`) for its own Shift Hours column. Overtime — including OT spillover from the previous day — still determines whether a day counts as scheduled at all (`is_scheduled_day`); it just never contributes to the summed hours. That distinction is subtle and easy to break if this function is ever "simplified."
 
 ---
 
