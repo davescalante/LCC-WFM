@@ -250,6 +250,10 @@ def agent_list(request):
     if role_type_filter not in dict(Agent.ROLE_TYPE_CHOICES):
         role_type_filter = ''
 
+    official_admin_filter = request.GET.get('official_admin', '')
+    if official_admin_filter not in ('yes', 'no'):
+        official_admin_filter = ''
+
     agents = Agent.objects.select_related('user', 'supervisor__user').prefetch_related('separations').order_by(
         'user__last_name', 'user__first_name'
     )
@@ -261,6 +265,11 @@ def agent_list(request):
 
     if role_type_filter:
         agents = agents.filter(role_type=role_type_filter)
+
+    if official_admin_filter == 'yes':
+        agents = agents.filter(is_official_admin=True)
+    elif official_admin_filter == 'no':
+        agents = agents.filter(is_official_admin=False)
 
     if request.GET.get('export') == '1':
         # Excel export of the full filtered list (not just the current page).
@@ -382,6 +391,7 @@ def agent_list(request):
         'status_filter': status_filter,
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'selected_role_type': role_type_filter,
+        'selected_official_admin': official_admin_filter,
         'export_fields': [{'key': k, 'label': l, 'checked': k in USER_EXPORT_DEFAULTS}
                           for k, l, _w in allowed_export_fields],
     })

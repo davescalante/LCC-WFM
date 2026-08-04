@@ -514,6 +514,59 @@ class AgentListRoleTypeFilterTests(TestCase):
         self.assertEqual(names, {'ra3'})
 
 
+class AgentListOfficialAdminFilterTests(TestCase):
+    """The Official Admin filter narrows purely on is_official_admin, is not
+    coupled to role, and combines with the existing filters."""
+
+    def setUp(self):
+        self.sup = _make_agent('oasup', role_type='supervisor')
+        self.viewer = _make_agent('oaviewer', role_type='coordinator')
+        self.official1 = _make_agent('oaoff1', role='admin', role_type='supervisor',
+                                     supervisor=self.sup, official=True)
+        self.official_agent_role = _make_agent('oaoff2', role='agent', role_type='regular_agent',
+                                               official=True)
+        self.regular1 = _make_agent('oareg1', role='admin', role_type='coordinator',
+                                    supervisor=self.sup, official=False)
+        self.inactive_official = _make_agent('oaoff3', role='admin', role_type='supervisor',
+                                             supervisor=self.sup, official=True)
+        self.inactive_official.status = 'inactive'
+        self.inactive_official.save()
+        self.client.login(username='oaviewer', password='pw')
+
+    def _names(self, query=''):
+        resp = self.client.get(reverse('agent_list') + query)
+        return {a.user.username for a in resp.context['agents']}
+
+    def test_yes_filter_returns_only_flagged(self):
+        names = self._names('?official_admin=yes')
+        self.assertEqual(names, {'oaoff1', 'oaoff2'})
+
+    def test_no_filter_returns_only_unflagged(self):
+        names = self._names('?official_admin=no')
+        self.assertIn('oareg1', names)
+        self.assertIn('oaviewer', names)
+        self.assertNotIn('oaoff1', names)
+        self.assertNotIn('oaoff2', names)
+
+    def test_all_default_unchanged(self):
+        baseline = self._names()
+        self.assertEqual(self._names('?official_admin='), baseline)
+
+    def test_not_coupled_to_role(self):
+        # oaoff2 has role='agent' with is_official_admin=True — must still
+        # surface under the filter, proving it isn't gated on the role field.
+        names = self._names('?official_admin=yes')
+        self.assertIn('oaoff2', names)
+
+    def test_invalid_value_ignored(self):
+        baseline = self._names()
+        self.assertEqual(self._names('?official_admin=bogus'), baseline)
+
+    def test_combines_with_existing_filters(self):
+        names = self._names(f'?official_admin=yes&supervisor={self.sup.pk}&status_filter=active')
+        self.assertEqual(names, {'oaoff1'})
+
+
 import io
 
 import openpyxl
@@ -567,6 +620,36 @@ class AgentListExportTests(TestCase):
         rows = self._export_rows(f'&supervisor={self.sup.pk}&role_type=regular_agent&status_filter=active')
         names = [r[0] for r in rows[1:]]
         self.assertEqual(names, ['Test Exp1'])
+
+    def test_export_respects_official_admin_filter(self):
+        official = self._make_full_agent('oaexp1', official=True)
+        self._make_full_agent('oaexp2', official=False)
+        rows = self._export_rows('&official_admin=yes')
+        self.assertEqual([r[0] for r in rows[1:]], ['Test Oaexp1'])
+        rows = self._export_rows('&official_admin=no')
+        names = [r[0] for r in rows[1:]]
+        self.assertIn('Test Oaexp2', names)
+        self.assertNotIn('Test Oaexp1', names)
+
+    def test_official_admin_pay_window_agent_included(self):
+        # Mirrors AgentListExportPayWindowTests._separated_agent: inactive with
+        # a finalized separation whose pay window is still open must still be
+        # exported when official_admin=yes — proving the filter composes with
+        # pay_window_q instead of replacing/short-circuiting it.
+        a = self._make_full_agent('oaowed1', official=True)
+        a.status = 'inactive'
+        a.save()
+        today = date.today()
+        this_monday = today - timedelta(days=today.weekday())
+        next_monday = this_monday + timedelta(days=7)
+        AgentSeparation.objects.create(
+            agent=a, status='finalized', separation_type='quit',
+            last_day_worked=this_monday - timedelta(days=1),
+            remove_from_adherence_date=next_monday,
+        )
+        rows = self._export_rows('&official_admin=yes')
+        names = [r[0] for r in rows[1:]]
+        self.assertIn('Test Oaowed1', names)
 
     def test_full_row_content(self):
         a = self._make_full_agent('exp4', supervisor=self.sup)
