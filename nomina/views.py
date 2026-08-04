@@ -589,6 +589,23 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
 
     agents = _infinity_agents(week_start)
     data = _get_billable_weekly_data(agents, week_dates, settings)
+    # The roster now includes sales-type agents who take no calls — no attendance
+    # tracking AND no billable Five9 profile. If such a person happens to have a
+    # NON-billable Five9 profile that logged time, the billing engine's fallback
+    # (bnames is None → count everything) would sum those hours as base pay, and the
+    # adherence bonus is derived from the same hours — an overpay on hours deliberately
+    # marked non-billable. Zero the call-derived figures (base pay, hours, adherence
+    # bonus) for exactly those agents; their pay is LPO / manual inputs, not calls.
+    # Their hourly rate is left intact, so manual Extra Hours / vacation / holiday pay
+    # still compute. Tracked agents and anyone with a billable profile are untouched, so
+    # no previously-paid agent's numbers change.
+    for a in agents:
+        if not a.track_attendance and not any(p.billable for p in a.five9_profiles.all()):
+            d = data.get(a.pk)
+            if d:
+                d['base_pay_mxn'] = Decimal('0')
+                d['bonus_mxn'] = Decimal('0')
+                d['final_hrs'] = Decimal('0')
     inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
     ba_agents = set(BreakAbuseIncident.objects.filter(

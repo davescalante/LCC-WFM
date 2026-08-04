@@ -299,6 +299,62 @@ class NominaVacationPayTests(TestCase):
         self.assertEqual(r['vac_hrs'], Decimal('8'))         # capped at 8
 
 
+class NominaNonBillableNoOverpayTests(TestCase):
+    """The Agent Nómina lists everyone Infinity, including untracked sales agents. But a
+    person who is untracked AND has no billable Five9 profile must NOT be paid base pay or
+    an adherence bonus on any NON-billable Five9 hours — the billing engine's 'no billable
+    profile → count everything' fallback would otherwise silently overpay them. Their rate
+    is preserved so manual Extra Hours / vacation still compute; tracked or billable agents
+    are unaffected."""
+
+    def _week(self):
+        import datetime
+        ws = get_week_start()
+        return ws, [ws + datetime.timedelta(days=i) for i in range(7)]
+
+    def test_untracked_non_billable_hours_are_not_paid(self):
+        from scheduling.models import Five9Profile
+        from adherence.models import DailyUpload, DailyAgentHours
+        from nomina.views import _agent_nomina_data
+        ws, week = self._week()
+        day = week[1]
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+
+        # Sales-type agent: Infinity, NOT tracked, ONE non-billable Five9 profile that
+        # logged 40 hours this week (e.g. a non-billable campaign / trainee account).
+        sales = _make_infinity('salesrep', '4001')
+        sales.track_attendance = False
+        sales.hourly_rate = Decimal('62.50')
+        sales.save()
+        Five9Profile.objects.create(agent=sales, five9_username='salesrep.f9',
+                                    billable=False, is_primary=True)
+        DailyAgentHours.objects.create(upload=up, agent=sales,
+            five9_username='salesrep.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+
+        # Control: a normal tracked agent with a BILLABLE profile and the same hours.
+        normal = _make_infinity('callrep', '4002')
+        normal.hourly_rate = Decimal('62.50')
+        normal.save()
+        Five9Profile.objects.create(agent=normal, five9_username='callrep.f9',
+                                    billable=True, is_primary=True)
+        DailyAgentHours.objects.create(upload=up, agent=normal,
+            five9_username='callrep.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        s = next(r for r in rows if r['agent'].pk == sales.pk)
+        n = next(r for r in rows if r['agent'].pk == normal.pk)
+
+        # Sales rep shows on the roster but earns no call-based pay on non-billable hours.
+        self.assertEqual(s['base_pay'], Decimal('0'))
+        self.assertEqual(s['hours'], Decimal('0'))
+        self.assertEqual(s['adherence_bonus'], Decimal('0'))
+        # Rate is preserved, so manual Extra Hours / vacation / holiday still compute.
+        self.assertEqual(s['rate'], Decimal('62.50'))
+        # Control agent (tracked, billable) is paid normally — no regression.
+        self.assertGreater(n['base_pay'], Decimal('0'))
+        self.assertGreater(n['hours'], Decimal('0'))
+
+
 class NominaWelcomeBonusTests(TestCase):
     """Welcome Bonus is a POSITIVE for the enrolled agent — paid the enrollment
     amount in a covered week, but only when they earned that week's adherence bonus."""
