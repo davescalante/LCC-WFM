@@ -965,3 +965,28 @@ class AgentCreateEditAtomicityTests(TestCase):
         self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
         target.user.refresh_from_db()
         self.assertEqual(target.user.email, 'editok-new@example.com')
+
+
+class AgentFormFinanceGatingTests(TestCase):
+    """The Finance fields (pay/billing rate, admin bonus) and the Super Admin flag are
+    stripped from the user form server-side for non-super-admins — not merely hidden."""
+
+    def test_non_super_editor_form_strips_finance_and_super_flag(self):
+        from scheduling.forms import AgentForm
+        f = AgentForm(can_grant_admin_tabs=False)          # non-super editor
+        for field in ('hourly_rate', 'billing_rate_usd', 'admin_bonus_mxn', 'is_super_admin'):
+            self.assertNotIn(field, f.fields)
+        self.assertNotIn('can_access_admin_tabs', f.fields)   # existing behavior preserved
+
+    def test_super_editor_form_keeps_finance_and_super_flag(self):
+        from scheduling.forms import AgentForm
+        f = AgentForm(can_grant_admin_tabs=True)           # super-admin editor
+        for field in ('hourly_rate', 'billing_rate_usd', 'admin_bonus_mxn', 'is_super_admin'):
+            self.assertIn(field, f.fields)
+
+    def test_non_super_post_cannot_write_rate_or_super_admin(self):
+        # A crafted POST with these fields is ignored — the fields don't exist on the form.
+        from scheduling.forms import AgentForm
+        f = AgentForm(data={'hourly_rate': '999', 'is_super_admin': 'on'}, can_grant_admin_tabs=False)
+        self.assertNotIn('hourly_rate', f.fields)
+        self.assertNotIn('is_super_admin', f.fields)

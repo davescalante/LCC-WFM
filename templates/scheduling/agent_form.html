@@ -96,7 +96,8 @@
             {{ agent_form.teams_password }}
         </div>
 
-        <!-- Finance -->
+        {% if request.has_finance_access %}
+        <!-- Finance (super-admin only) -->
         <div class="card">
             <h2>Finance</h2>
             <label>Hourly Rate (MXN)</label>
@@ -111,6 +112,7 @@
             </div>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 
     <div class="card" id="five9-accounts-card">
