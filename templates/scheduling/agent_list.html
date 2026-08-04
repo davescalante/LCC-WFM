@@ -30,6 +30,7 @@
             <input type="hidden" name="supervisor" value="{{ selected_supervisor }}">
             <input type="hidden" name="status_filter" value="{{ status_filter }}">
             <input type="hidden" name="role_type" value="{{ selected_role_type }}">
+            <input type="hidden" name="official_admin" value="{{ selected_official_admin }}">
             <div style="margin-bottom:10px;display:flex;gap:8px;">
                 <button type="button" onclick="expToggle(true)" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Select all</button>
                 <button type="button" onclick="expToggle(false)" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Clear</button>
@@ -88,7 +89,15 @@ document.getElementById('exportModal').addEventListener('click',function(e){if(e
             <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All</option>
         </select>
 
-        {% if selected_supervisor or selected_role_type %}
+        <label style="margin:0 0 0 8px;font-size:13px;color:#555;white-space:nowrap;">Official Admin:</label>
+        <select name="official_admin" onchange="this.form.submit()"
+            style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:auto;margin:0;">
+            <option value="" {% if selected_official_admin == '' %}selected{% endif %}>All</option>
+            <option value="yes" {% if selected_official_admin == 'yes' %}selected{% endif %}>Yes</option>
+            <option value="no" {% if selected_official_admin == 'no' %}selected{% endif %}>No</option>
+        </select>
+
+        {% if selected_supervisor or selected_role_type or selected_official_admin %}
         <a href="?" style="font-size:12px;color:#888;text-decoration:none;margin-left:4px;">✕ Clear filters</a>
         {% endif %}
     </form>
@@ -140,11 +149,11 @@ document.getElementById('exportModal').addEventListener('click',function(e){if(e
     {% if page_obj.has_other_pages %}
     <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid #eee;font-size:13px;">
         {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}&role_type={{ selected_role_type }}" class="btn btn-cancel" style="padding:4px 12px;">&#8592; Prev</a>
+        <a href="?page={{ page_obj.previous_page_number }}&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}&role_type={{ selected_role_type }}&official_admin={{ selected_official_admin }}" class="btn btn-cancel" style="padding:4px 12px;">&#8592; Prev</a>
         {% endif %}
         <span style="color:#888;">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }} &nbsp;·&nbsp; {{ page_obj.paginator.count }} users</span>
         {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}&role_type={{ selected_role_type }}" class="btn btn-cancel" style="padding:4px 12px;">Next &#8594;</a>
+        <a href="?page={{ page_obj.next_page_number }}&supervisor={{ selected_supervisor }}&status_filter={{ status_filter }}&role_type={{ selected_role_type }}&official_admin={{ selected_official_admin }}" class="btn btn-cancel" style="padding:4px 12px;">Next &#8594;</a>
         {% endif %}
     </div>
     {% endif %}

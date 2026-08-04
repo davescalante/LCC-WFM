@@ -1,12 +1,13 @@
 import json
 from decimal import Decimal
 from datetime import date, timedelta, time
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import User
 
-from scheduling.models import Agent, Shift
-from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding
+from scheduling.models import Agent, Five9Profile, Shift
+from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
 from finance.models import BillingSettings
 
 
@@ -391,3 +392,208 @@ class AdminEditScopeTests(TestCase):
         })
         self.assertEqual(resp_get.status_code, 200)
         self.assertEqual(resp_post.status_code, 200)
+
+    # ── edit_adherence_note / delete_adherence_note ─────────────────────────
+
+    def test_supervisor_can_edit_note_for_supervised_admin(self):
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'updated',
+        })
+        self.assertEqual(resp.status_code, 200)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'updated')
+
+    def test_supervisor_denied_editing_note_for_out_of_team_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'hacked',
+        })
+        self.assertEqual(resp.status_code, 403)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'orig')
+
+    def test_super_admin_can_edit_note_for_any_official_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editboss', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'updated by boss',
+        })
+        self.assertEqual(resp.status_code, 200)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'updated by boss')
+
+    def test_regular_agent_note_edit_unchanged_for_non_holder(self):
+        note = AdherenceNote.objects.create(agent=self.regular, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'updated',
+        })
+        self.assertEqual(resp.status_code, 200)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'updated')
+
+    def test_plain_staff_denied_editing_note_for_official_admin_not_supervised(self):
+        # editothersup has no is_super_admin / can_access_admin_tabs / superuser
+        # flag, and does not supervise self.supervised (that's vrenely's report).
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'hacked',
+        })
+        self.assertEqual(resp.status_code, 403)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'orig')
+
+    def test_supervisor_can_delete_note_for_supervised_admin(self):
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_supervisor_denied_deleting_note_for_out_of_team_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_super_admin_can_delete_note_for_any_official_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editboss', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_regular_agent_note_delete_unchanged_for_non_holder(self):
+        note = AdherenceNote.objects.create(agent=self.regular, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_plain_staff_denied_deleting_note_for_official_admin_not_supervised(self):
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+
+class DailyUploadStaleActualHoursTests(TestCase):
+    """
+    Regression coverage for the stale actual_hours bug: after a Daily Hours
+    upload is deleted or replaced by a file that no longer contains a given
+    agent, that agent's previously-written actual_hours must be zeroed
+    without touching status or creating rows for agents that had none.
+
+    Tests 1 and 2 use a lowercase billable Five9Profile username
+    deliberately: upload_daily_file's own billable-match filter (a separate,
+    pre-existing, out-of-scope gap — see test 3) compares raw
+    Five9Profile.five9_username against the always-lowercased
+    DailyAgentHours.five9_username, so a mixed-case *billable* username
+    would silently skip the actual_hours write entirely, for a reason
+    unrelated to what these two tests guard.
+    """
+
+    def setUp(self):
+        _settings()
+        staff_user = User.objects.create_user('dhstaff', password='x')
+        Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='DH Staff', status='active',
+        )
+        self.client.login(username='dhstaff', password='x')
+        self.agent_x = _make_agent('agentx')
+
+    def _csv(self, username, login='08:00:00', not_ready='00:30:00'):
+        content = f"AGENT,LOGIN TIME,NOT READY TIME\n{username},{login},{not_ready}\n"
+        return SimpleUploadedFile('daily.csv', content.encode('utf-8'), content_type='text/csv')
+
+    def _upload(self, date_str, username):
+        resp = self.client.post(reverse('upload_daily_file'), {
+            'date': date_str, 'file': self._csv(username),
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        return resp
+
+    def test_replacement_without_agent_zeroes_actual_hours_keeps_status(self):
+        Five9Profile.objects.create(
+            agent=self.agent_x, five9_username='jguerrero', billable=True, is_primary=True,
+        )
+        d = date(2026, 8, 1)
+        AdherenceRecord.objects.create(agent=self.agent_x, date=d, status='Quit')
+
+        self._upload(d.isoformat(), 'jguerrero')
+        rec = AdherenceRecord.objects.get(agent=self.agent_x, date=d)
+        self.assertGreater(rec.actual_hours, Decimal('0'))
+        self.assertEqual(rec.status, 'Quit')
+
+        # Replace the same date's file with one that no longer contains X.
+        other = _make_agent('agenty')
+        Five9Profile.objects.create(agent=other, five9_username='otheruser', billable=True, is_primary=True)
+        self._upload(d.isoformat(), 'otheruser')
+
+        rec.refresh_from_db()
+        self.assertEqual(rec.actual_hours, Decimal('0'))
+        self.assertEqual(rec.status, 'Quit')
+
+    def test_delete_with_no_replacement_zeroes_actual_hours(self):
+        Five9Profile.objects.create(
+            agent=self.agent_x, five9_username='jguerrero', billable=True, is_primary=True,
+        )
+        d = date(2026, 8, 2)
+        AdherenceRecord.objects.create(agent=self.agent_x, date=d, status='Quit')
+
+        self._upload(d.isoformat(), 'jguerrero')
+        rec = AdherenceRecord.objects.get(agent=self.agent_x, date=d)
+        self.assertGreater(rec.actual_hours, Decimal('0'))
+
+        before_count = AdherenceRecord.objects.filter(date=d).count()
+        resp = self.client.post(
+            reverse('delete_daily_upload'),
+            data=json.dumps({'date': d.isoformat()}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        rec.refresh_from_db()
+        self.assertEqual(rec.actual_hours, Decimal('0'))
+        self.assertEqual(rec.status, 'Quit')
+        self.assertEqual(AdherenceRecord.objects.filter(date=d).count(), before_count)
+
+    def test_mixed_case_billable_username_not_zeroed(self):
+        """
+        Regression guard for the normalization fix in
+        _reconcile_stale_actual_hours: if the .strip().lower() call on
+        either side of its billable-username comparison is ever removed, a
+        billable Five9Profile username with uppercase characters will fail
+        to match the always-lowercased DailyAgentHours row, the agent will
+        be (wrongly) excluded from valid_agent_ids, and this test will
+        start failing because their real, current hours get zeroed.
+
+        Built directly via the ORM (not through upload_daily_file) to
+        represent the state a correct write produces, isolating this from
+        the separate, pre-existing billable-match gap in the write loop
+        itself (see the class docstring and tests above).
+        """
+        d = date(2026, 8, 3)
+        Five9Profile.objects.create(
+            agent=self.agent_x, five9_username='JGuerrero', billable=True, is_primary=True,
+        )
+        upload = DailyUpload.objects.create(date=d, filename='daily.csv', row_count=1)
+        DailyAgentHours.objects.create(
+            upload=upload, agent=self.agent_x, five9_username='jguerrero',
+            login_seconds=8 * 3600, not_ready_seconds=1800,
+        )
+        AdherenceRecord.objects.create(agent=self.agent_x, date=d, actual_hours=Decimal('8'))
+
+        from adherence.views import _reconcile_stale_actual_hours
+        _reconcile_stale_actual_hours(d)
+
+        rec = AdherenceRecord.objects.get(agent=self.agent_x, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('8'))
