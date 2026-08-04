@@ -355,6 +355,33 @@ class NominaNonBillableNoOverpayTests(TestCase):
         self.assertGreater(n['hours'], Decimal('0'))
 
 
+class NominaLoanPickerTests(TestCase):
+    """Loans page: the agent picker is A–Z by agent name, and the Active-loans panel
+    totals the installments actually deducted THIS week (not every loan's weekly amount)."""
+
+    def setUp(self):
+        _make_agent('loan_super', is_super_admin=True)
+        self.client.login(username='loan_super', password='x')
+        self.ws = get_week_start()
+
+    def test_picker_is_alphabetical_and_week_total_is_this_weeks_installments(self):
+        import datetime
+        from nomina.models import Loan
+        zoe = _make_infinity('zoepicker', '9001'); zoe.agent_name = 'Zoe Zapata'; zoe.save()
+        amy = _make_infinity('amypicker', '9002'); amy.agent_name = 'amy alvarez'; amy.save()
+        # zoe's loan is active THIS week; amy's 1-week loan started last week → not this week.
+        Loan.objects.create(agent=zoe, principal=Decimal('1000'), term_weeks=1,
+                            rate=Decimal('1.25'), start_week=self.ws)                      # 1,250 this week
+        Loan.objects.create(agent=amy, principal=Decimal('500'), term_weeks=1,
+                            rate=Decimal('1.25'), start_week=self.ws - datetime.timedelta(days=7))
+        resp = self.client.get(reverse('nomina:loans') + f'?week_start={self.ws.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        names = [a.agent_name for a in resp.context['agents']]
+        self.assertEqual(names, sorted(names, key=lambda s: (s or '').lower()))   # A–Z (case-insensitive)
+        # Only zoe's loan is deducted this week; amy's contributes 0.
+        self.assertEqual(resp.context['week_total'], Decimal('1250.00'))
+
+
 class NominaWelcomeBonusTests(TestCase):
     """Welcome Bonus is a POSITIVE for the enrolled agent — paid the enrollment
     amount in a covered week, but only when they earned that week's adherence bonus."""
