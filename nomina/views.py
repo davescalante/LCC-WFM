@@ -929,12 +929,20 @@ def loans(request):
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     loan_list = list(Loan.objects.select_related('agent__user').all())
+    week_total = total_balance = Decimal('0')
     for ln in loan_list:
         ln.bal = ln.balance(week_start)
-    agents = Agent.objects.filter(status='active').select_related('user').order_by(
-        'user__last_name', 'user__first_name')
+        ln.this_week = ln.installment_for_week(week_start)   # amount deducted THIS pay week (0 if not active)
+        week_total += ln.this_week
+        total_balance += ln.bal
+    # A–Z by the agent_name shown in the picker (not by last name — otherwise the list
+    # reads scrambled since the picker shows the agent name, not "Last, First").
+    agents = sorted(
+        Agent.objects.filter(status='active').select_related('user'),
+        key=lambda a: (a.agent_name or '').lower())
     ctx = _nav(week_start, week_dates)
-    ctx.update({'loans': loan_list, 'agents': agents})
+    ctx.update({'loans': loan_list, 'agents': agents,
+                'week_total': week_total, 'total_balance': total_balance})
     return render(request, 'nomina/loans.html', ctx)
 
 
