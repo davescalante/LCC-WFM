@@ -7,7 +7,7 @@ from django.urls import reverse
 from django.contrib.auth.models import User
 
 from scheduling.models import Agent, Five9Profile, Shift
-from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding
+from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
 from finance.models import BillingSettings
 
 
@@ -392,6 +392,95 @@ class AdminEditScopeTests(TestCase):
         })
         self.assertEqual(resp_get.status_code, 200)
         self.assertEqual(resp_post.status_code, 200)
+
+    # ── edit_adherence_note / delete_adherence_note ─────────────────────────
+
+    def test_supervisor_can_edit_note_for_supervised_admin(self):
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'updated',
+        })
+        self.assertEqual(resp.status_code, 200)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'updated')
+
+    def test_supervisor_denied_editing_note_for_out_of_team_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'hacked',
+        })
+        self.assertEqual(resp.status_code, 403)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'orig')
+
+    def test_super_admin_can_edit_note_for_any_official_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editboss', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'updated by boss',
+        })
+        self.assertEqual(resp.status_code, 200)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'updated by boss')
+
+    def test_regular_agent_note_edit_unchanged_for_non_holder(self):
+        note = AdherenceNote.objects.create(agent=self.regular, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'updated',
+        })
+        self.assertEqual(resp.status_code, 200)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'updated')
+
+    def test_plain_staff_denied_editing_note_for_official_admin_not_supervised(self):
+        # editothersup has no is_super_admin / can_access_admin_tabs / superuser
+        # flag, and does not supervise self.supervised (that's vrenely's report).
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('edit_adherence_note'), data={
+            'note_id': note.pk, 'body': 'hacked',
+        })
+        self.assertEqual(resp.status_code, 403)
+        note.refresh_from_db()
+        self.assertEqual(note.body, 'orig')
+
+    def test_supervisor_can_delete_note_for_supervised_admin(self):
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_supervisor_denied_deleting_note_for_out_of_team_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editvrenely', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_super_admin_can_delete_note_for_any_official_admin(self):
+        note = AdherenceNote.objects.create(agent=self.other_admin, date=_WEEK_START, body='orig')
+        self.client.login(username='editboss', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_regular_agent_note_delete_unchanged_for_non_holder(self):
+        note = AdherenceNote.objects.create(agent=self.regular, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(AdherenceNote.objects.filter(pk=note.pk).exists())
+
+    def test_plain_staff_denied_deleting_note_for_official_admin_not_supervised(self):
+        note = AdherenceNote.objects.create(agent=self.supervised, date=_WEEK_START, body='orig')
+        self.client.login(username='editothersup', password='x')
+        resp = self.client.post(reverse('delete_adherence_note'), data={'note_id': note.pk})
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(AdherenceNote.objects.filter(pk=note.pk).exists())
 
 
 class DailyUploadStaleActualHoursTests(TestCase):

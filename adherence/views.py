@@ -1770,6 +1770,8 @@ def edit_adherence_note(request):
     if not body:
         return JsonResponse({'error': 'Empty note'}, status=400)
     note = get_object_or_404(AdherenceNote, pk=note_id)
+    if _attendance_edit_denied(request.user, note.agent_id):
+        return JsonResponse({'error': 'Not permitted for this agent.'}, status=403)
     note.body = body
     note.save()
     log_action(request.user, 'Edited adherence note',
@@ -1783,6 +1785,8 @@ def delete_adherence_note(request):
     note_id = request.POST.get('note_id')
     note = get_object_or_404(AdherenceNote, pk=note_id)
     agent_id, date_val, _agent = note.agent_id, note.date, note.agent
+    if _attendance_edit_denied(request.user, agent_id):
+        return JsonResponse({'error': 'Not permitted for this agent.'}, status=403)
     log_action(request.user, 'Deleted adherence note',
                f'{_agent} — {date_val}', agent=_agent)
     note.delete()
