@@ -157,6 +157,25 @@ class NominaSpiffUploadTests(TestCase):
         self.assertEqual(UnmatchedInputRow.objects.filter(
             week_start=self.ws, input_key='spiff', acknowledged=False).count(), 0)
 
+    def test_official_admin_matches_by_username_not_unmatched(self):
+        """One file covers the whole roster: an Official Admin in an uploaded input
+        file matches by username (not flagged unmatched) and the value lands on their
+        WeeklyPayInput, so it flows to the Admin Nómina."""
+        from nomina.models import UnmatchedInputRow
+        admin = Agent.objects.create(
+            user=User.objects.create_user('petdamian', password='x', first_name='Pet'),
+            role='admin', role_type='supervisor', agent_name='petdamian',
+            status='active', employer='Infinity', is_official_admin=True, employee_id='5000')
+        csv = ("Agent Username,Agent ID,7/20/2026,Amount\n"
+               "petdamian,5000,PET DAMIAN,$300.00 \n")
+        f = SimpleUploadedFile('lpo.csv', csv.encode('utf-8'), content_type='text/csv')
+        lpo_url = reverse('nomina:input_type', args=['lpo']) + f'?week_start={self.ws.isoformat()}'
+        self.client.post(lpo_url, {'file': f}, follow=True)
+        wi = self.WeeklyPayInput.objects.get(agent=admin, week_start=self.ws)
+        self.assertEqual(wi.lpo, Decimal('300.00'))
+        self.assertFalse(UnmatchedInputRow.objects.filter(
+            week_start=self.ws, input_key='lpo').exists())
+
 
 class NominaVacationsPageTests(TestCase):
     """The top-level Vacations page: admins see everyone, agents see only their own
@@ -278,6 +297,62 @@ class NominaVacationPayTests(TestCase):
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
         self.assertEqual(r['vac_hrs'], Decimal('8'))         # capped at 8
+
+
+class NominaNonBillableNoOverpayTests(TestCase):
+    """The Agent Nómina lists everyone Infinity, including untracked sales agents. But a
+    person who is untracked AND has no billable Five9 profile must NOT be paid base pay or
+    an adherence bonus on any NON-billable Five9 hours — the billing engine's 'no billable
+    profile → count everything' fallback would otherwise silently overpay them. Their rate
+    is preserved so manual Extra Hours / vacation still compute; tracked or billable agents
+    are unaffected."""
+
+    def _week(self):
+        import datetime
+        ws = get_week_start()
+        return ws, [ws + datetime.timedelta(days=i) for i in range(7)]
+
+    def test_untracked_non_billable_hours_are_not_paid(self):
+        from scheduling.models import Five9Profile
+        from adherence.models import DailyUpload, DailyAgentHours
+        from nomina.views import _agent_nomina_data
+        ws, week = self._week()
+        day = week[1]
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+
+        # Sales-type agent: Infinity, NOT tracked, ONE non-billable Five9 profile that
+        # logged 40 hours this week (e.g. a non-billable campaign / trainee account).
+        sales = _make_infinity('salesrep', '4001')
+        sales.track_attendance = False
+        sales.hourly_rate = Decimal('62.50')
+        sales.save()
+        Five9Profile.objects.create(agent=sales, five9_username='salesrep.f9',
+                                    billable=False, is_primary=True)
+        DailyAgentHours.objects.create(upload=up, agent=sales,
+            five9_username='salesrep.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+
+        # Control: a normal tracked agent with a BILLABLE profile and the same hours.
+        normal = _make_infinity('callrep', '4002')
+        normal.hourly_rate = Decimal('62.50')
+        normal.save()
+        Five9Profile.objects.create(agent=normal, five9_username='callrep.f9',
+                                    billable=True, is_primary=True)
+        DailyAgentHours.objects.create(upload=up, agent=normal,
+            five9_username='callrep.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        s = next(r for r in rows if r['agent'].pk == sales.pk)
+        n = next(r for r in rows if r['agent'].pk == normal.pk)
+
+        # Sales rep shows on the roster but earns no call-based pay on non-billable hours.
+        self.assertEqual(s['base_pay'], Decimal('0'))
+        self.assertEqual(s['hours'], Decimal('0'))
+        self.assertEqual(s['adherence_bonus'], Decimal('0'))
+        # Rate is preserved, so manual Extra Hours / vacation / holiday still compute.
+        self.assertEqual(s['rate'], Decimal('62.50'))
+        # Control agent (tracked, billable) is paid normally — no regression.
+        self.assertGreater(n['base_pay'], Decimal('0'))
+        self.assertGreater(n['hours'], Decimal('0'))
 
 
 class NominaWelcomeBonusTests(TestCase):
@@ -880,7 +955,8 @@ class NominaTuesdayEditTests(TestCase):
 
     def test_add_more_rejects_out_of_scope_agent(self):
         from nomina.models import WeeklyPayInput
-        outsider = _make_agent('outsider', role='agent', role_type='regular_agent')   # not Infinity
+        outsider = _make_agent('outsider', role='agent', role_type='regular_agent')
+        outsider.employer = 'LCC'; outsider.save()        # non-Infinity → not on the Agent Nómina
         self._add_more('spiff', outsider, '50')
         self.assertFalse(WeeklyPayInput.objects.filter(agent=outsider).exists())
 
@@ -1324,28 +1400,26 @@ class NominaRosterTests(TestCase):
     """Split keys off is_official_admin (non-official → Agent, official → Admin); no
     Infinity person is silently dropped from BOTH sheets."""
 
-    def test_split_and_unrostered_safety_net(self):
+    def test_everyone_infinity_shows_no_overlap(self):
         from nomina.views import _unrostered_infinity, _infinity_agents, _admin_agents
         from scheduling.models import Agent
         ws = get_week_start()
-        # Non-official admin, no tracking/billable → on neither → flagged.
-        stray = _make_agent('strayadmin', role='admin', role_type='supervisor')
+        # A sales-type agent: Infinity, NO attendance tracking, NO billable Five9 profile.
+        stray = _make_agent('salesagent', role='agent', role_type='regular_agent')
         stray.employer = 'Infinity'; stray.track_attendance = False; stray.save()
-        worker = _make_infinity('rworker', '7001')                 # tracked → Agent nómina
+        worker = _make_infinity('rworker', '7001')                 # tracked
         offu = User.objects.create_user('roffadmin', password='x', first_name='Off')
         off = Agent.objects.create(user=offu, role='admin', role_type='supervisor', agent_name='roffadmin',
                                    status='active', employer='Infinity', is_official_admin=True)
 
-        unros = {a.pk for a in _unrostered_infinity(ws)}
-        self.assertIn(stray.pk, unros)
-        self.assertNotIn(worker.pk, unros)
-        self.assertNotIn(off.pk, unros)
-
         agent_ids = {a.pk for a in _infinity_agents(ws)}
         admin_ids = {a.pk for a in _admin_agents(ws)}
+        self.assertIn(stray.pk, agent_ids)                 # shows even without tracking/billable
+        self.assertIn(worker.pk, agent_ids)
+        self.assertIn(off.pk, admin_ids)                   # official admin → Admin nómina
         self.assertFalse(agent_ids & admin_ids)            # no overlap
-        self.assertIn(worker.pk, agent_ids)                # non-official/tracked → Agent
-        self.assertIn(off.pk, admin_ids)                   # official → Admin
+        # Everyone Infinity is now rostered → nobody flagged as unpaid.
+        self.assertNotIn(stray.pk, {a.pk for a in _unrostered_infinity(ws)})
 
 
 class NominaAdminVacationTests(TestCase):
