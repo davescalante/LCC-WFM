@@ -580,6 +580,44 @@ AGENT_EXPORT_COLS = [
     ('Transportation', 'transport'), ('Total', 'total'),
 ]
 
+# Excel cell number formats for the export.
+MONEY_FMT = '$#,##0.00'          # e.g. $3,000.00
+INT_FMT = '0'                    # whole number, no decimals
+# A, D, E, G — whole numbers; F and H–S — currency.
+AGENT_INT_FIELDS = {'emp', 'worked_hrs', 'holiday_hrs', 'total_hrs'}
+AGENT_MONEY_FIELDS = {'holiday_pay', 'base_pay', 'net_lpo', 'referral', 'welcome', 'kill_qa',
+                      'spiff_mxn', 'adherence_bonus', 'subtotal', 'comedor', 'loan', 'transport', 'total'}
+
+
+def _write_nomina_sheet(ws, cols, rows, int_fields, money_fields, note_fn=None):
+    """Append the header + data rows to `ws`, writing numeric cells as real numbers
+    and applying whole-number / currency formats per column."""
+    from openpyxl.styles import Font
+    headers = [h for h, _ in cols] + (['Notes'] if note_fn else [])
+    ws.append(headers)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for r in rows:
+        values = []
+        for _h, f in cols:
+            v = r.get(f)
+            if f in ('emp',):
+                v = int(v) if str(v).isdigit() else (v or '')
+            elif hasattr(v, 'quantize'):
+                v = float(v)
+            elif v is None:
+                v = ''
+            values.append(v)
+        if note_fn:
+            values.append(note_fn(r))
+        ws.append(values)
+        ri = ws.max_row
+        for ci, (_h, f) in enumerate(cols, start=1):
+            if f in money_fields:
+                ws.cell(row=ri, column=ci).number_format = MONEY_FMT
+            elif f in int_fields:
+                ws.cell(row=ri, column=ci).number_format = INT_FMT
+
 
 def _agent_note(r):
     """Auto-note for the 'Yours' sheet."""
@@ -596,7 +634,6 @@ def _agent_note(r):
 def agent_export(request):
     """Export the Agent Nómina: 'Yours' (with a Notes column) + 'Mine' sheets."""
     import openpyxl
-    from openpyxl.styles import Font
     week_start, week_dates = _week(request)
     rows, _ = _agent_nomina_data(week_start, week_dates)
 
@@ -604,17 +641,8 @@ def agent_export(request):
     for i, sheet in enumerate(('Yours', 'Mine')):
         ws = wb.active if i == 0 else wb.create_sheet(sheet)
         ws.title = sheet
-        headers = [h for h, _ in AGENT_EXPORT_COLS] + (['Notes'] if sheet == 'Yours' else [])
-        ws.append(headers)
-        for c in ws[1]:
-            c.font = Font(bold=True)
-        for r in rows:
-            row = [r[f] if not isinstance(r[f], type(None)) else '' for _, f in AGENT_EXPORT_COLS]
-            # Decimals → float for Excel
-            row = [float(v) if hasattr(v, 'quantize') else v for v in row]
-            if sheet == 'Yours':
-                row.append(_agent_note(r))
-            ws.append(row)
+        _write_nomina_sheet(ws, AGENT_EXPORT_COLS, rows, AGENT_INT_FIELDS, AGENT_MONEY_FIELDS,
+                            note_fn=_agent_note if sheet == 'Yours' else None)
     resp = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f'attachment; filename="LCC AGENT NOMINA {week_start:%m%d%Y}.xlsx"'
     wb.save(resp)
@@ -1041,6 +1069,9 @@ ADMIN_EXPORT_COLS = [
     ('Cafeteria', 'comedor'), ('Prestamo', 'prestamo_repay'),
     ('Transportation', 'transport'), ('Total', 'total'),
 ]
+ADMIN_INT_FIELDS = {'emp', 'hours', 'holiday_hrs'}
+ADMIN_MONEY_FIELDS = {'wage', 'holiday_pay', 'spiffs', 'lpo', 'referral', 'prestamo_given',
+                      'subtotal', 'admin_bonus', 'comedor', 'prestamo_repay', 'transport', 'total'}
 
 
 @login_required
@@ -1048,19 +1079,14 @@ ADMIN_EXPORT_COLS = [
 def admin_export(request):
     """Export the Admin Nómina — one 'Yours' sheet (with a Notes column)."""
     import openpyxl
-    from openpyxl.styles import Font
     week_start, week_dates = _week(request)
     rows, _ = _admin_nomina_data(week_start, week_dates)
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'Yours'
-    ws.append([h for h, _ in ADMIN_EXPORT_COLS] + ['Notes'])
-    for c in ws[1]:
-        c.font = Font(bold=True)
-    for r in rows:
-        row = [float(r[f]) if hasattr(r[f], 'quantize') else r[f] for _, f in ADMIN_EXPORT_COLS]
-        ws.append(row + [''])
+    _write_nomina_sheet(ws, ADMIN_EXPORT_COLS, rows, ADMIN_INT_FIELDS, ADMIN_MONEY_FIELDS,
+                        note_fn=lambda r: '')
     resp = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f'attachment; filename="LCC ADMIN NOMINA {week_start:%m%d%Y}.xlsx"'
     wb.save(resp)
