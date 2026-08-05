@@ -448,6 +448,75 @@ class NominaExportFormattingTests(TestCase):
         self.assertIn('39.34', admin); self.assertNotIn('39.3358', admin)
 
 
+class NominaAdminHoursTests(TestCase):
+    """The Admin Hours module: Current (computed) + Add − Deduct = Total, which the Admin
+    Nómina pays. Add/Deduct persist per admin/week. Official admins are excluded from the
+    generic Extra Hours module (they use this dedicated one)."""
+
+    def setUp(self):
+        import datetime
+        from nomina.models import WeeklyPayInput
+        from adherence.models import Coding
+        self.WeeklyPayInput = WeeklyPayInput
+        _make_agent('ah_super', is_super_admin=True)
+        self.client.login(username='ah_super', password='x')
+        self.ws = get_week_start()
+        self.week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        u = User.objects.create_user('ahadmin', password='x', first_name='Ah', last_name='Admin')
+        self.admin = Agent.objects.create(user=u, role='admin', role_type='supervisor', agent_name='Ah Admin',
+            status='active', employer='Infinity', is_official_admin=True, hourly_rate=Decimal('80'))
+        for d in self.week[:5]:   # 8h × 5 = 40h admin codings → current hours = 40
+            Coding.objects.create(agent=self.admin, date=d, start_time=datetime.time(8, 0),
+                                  end_time=datetime.time(16, 0), is_admin_coding=True)
+        self.url = reverse('nomina:admin_hours') + f'?week_start={self.ws.isoformat()}'
+
+    def test_page_shows_admin_current_hours(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        r = next(x for x in resp.context['rows'] if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['current'], Decimal('40'))
+        self.assertEqual(r['total'], Decimal('40'))          # no adjustment yet
+
+    def test_add_and_deduct_persist_and_flow_to_nomina(self):
+        from nomina.views import _admin_nomina_data
+        self.client.post(self.url, {f'add_{self.admin.pk}': '5', f'ded_{self.admin.pk}': '2'})
+        wi = self.WeeklyPayInput.objects.get(agent=self.admin, week_start=self.ws)
+        self.assertEqual(wi.hours_add, Decimal('5'))
+        self.assertEqual(wi.hours_deduct, Decimal('2'))
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['hours'], Decimal('43'))          # 40 current + 5 − 2
+
+    def test_extra_hours_module_excludes_official_admins(self):
+        resp = self.client.get(reverse('nomina:input_type', args=['hours']) + f'?week_start={self.ws.isoformat()}')
+        self.assertNotContains(resp, 'ahadmin')              # admins use the Admin Hours module instead
+
+    def test_migration_backfill_moves_admin_extra_hours_but_not_agents(self):
+        """The 0013 data migration relocates an admin's pre-existing extra_hours into
+        hours_add (preserving open-week pay on deploy); a regular agent's extra_hours,
+        which the Agent Nómina still uses, is left untouched."""
+        import importlib
+        from django.apps import apps as django_apps
+        admin2 = Agent.objects.create(
+            user=User.objects.create_user('bf_admin', password='x'),
+            role='admin', role_type='supervisor', agent_name='BF Admin',
+            status='active', employer='Infinity', is_official_admin=True)
+        wa = self.WeeklyPayInput.objects.create(agent=admin2, week_start=self.ws, extra_hours=Decimal('7'))
+        agent = _make_infinity('bf_agent', '8001')
+        wg = self.WeeklyPayInput.objects.create(agent=agent, week_start=self.ws, extra_hours=Decimal('3'))
+
+        mod = importlib.import_module(
+            'nomina.migrations.0013_weeklypayinput_hours_add_weeklypayinput_hours_deduct')
+        mod.move_admin_extra_hours(django_apps, None)
+
+        wa.refresh_from_db(); wg.refresh_from_db()
+        self.assertEqual(wa.hours_add, Decimal('7'))         # admin: moved into add
+        self.assertEqual(wa.hours_deduct, Decimal('0'))
+        self.assertEqual(wa.extra_hours, Decimal('0'))       # old field cleared
+        self.assertEqual(wg.extra_hours, Decimal('3'))       # agent: untouched
+        self.assertEqual(wg.hours_add, Decimal('0'))
+
+
 class NominaWelcomeBonusTests(TestCase):
     """Welcome Bonus is a POSITIVE for the enrolled agent — paid the enrollment
     amount in a covered week, but only when they earned that week's adherence bonus."""

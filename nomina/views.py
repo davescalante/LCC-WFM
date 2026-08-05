@@ -400,6 +400,8 @@ def input_type(request, key):
     agents = _infinity_agents(week_start) + _admin_agents(week_start)
     if t.get('roles'):   # some modules are role-scoped (e.g. Kill Team QA → Kill Team only)
         agents = [a for a in agents if a.role_type in t['roles']]
+    if key == 'hours':   # Extra Hours is agent-only — official admins use the Admin Hours module
+        agents = [a for a in agents if not getattr(a, 'is_official_admin', False)]
     by_username, dupe_usernames = {}, set()
     for a in agents:
         k = a.user.username.strip().lower()
@@ -725,6 +727,55 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
               'comedor': tot_comedor, 'transport': tot_transport, 'loan': tot_loan,
               'spiff_needs_rate': bool(spiff_unpaid), 'spiff_unpaid_count': spiff_unpaid}
     return rows, totals
+
+
+@login_required
+@nomina_access_required
+def admin_hours(request):
+    """Admin Hours module — one row per admin: Current hours (computed: Five9 login +
+    admin codings) · Add · Deduct · Total (= Current + Add − Deduct). Add/Deduct persist
+    per admin/week; the Admin Nómina pays on the Total."""
+    from finance.views import _get_billable_weekly_data
+    from finance.models import BillingSettings
+    week_start, week_dates = _week(request)
+    admins = _admin_agents(week_start)
+
+    if request.method == 'POST':
+        if _finalized_run(week_start):
+            messages.error(request, "This week is finalized (locked) — hours can't be changed.")
+            return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+        admin_pks = {a.pk for a in admins}
+        for a in admins:
+            add = _dec(request.POST.get(f'add_{a.pk}'))
+            ded = _dec(request.POST.get(f'ded_{a.pk}'))
+            WeeklyPayInput.objects.update_or_create(
+                agent_id=a.pk, week_start=week_start,
+                defaults={'hours_add': add, 'hours_deduct': ded})
+        messages.success(request, "Admin hours saved.")
+        return redirect(f"{request.path}?week_start={week_start.isoformat()}")
+
+    settings = BillingSettings.get_for_week(week_start)
+    data = _get_billable_weekly_data(admins, week_dates, settings)
+    inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
+        agent__in=admins, week_start=week_start)}
+    rows = []
+    tot_current = tot_add = tot_deduct = tot_total = Decimal('0')
+    for a in admins:
+        d = data.get(a.pk, {})
+        wi = inputs_map.get(a.pk)
+        current = d.get('final_hrs', Decimal('0'))
+        add = wi.hours_add if wi else Decimal('0')
+        ded = wi.hours_deduct if wi else Decimal('0')
+        total = current + add - ded
+        rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
+                     'username': a.user.username, 'current': current, 'add': add,
+                     'deduct': ded, 'total': total})
+        tot_current += current; tot_add += add; tot_deduct += ded; tot_total += total
+    ctx = _nav(week_start, week_dates)
+    ctx.update({'rows': rows, 'finalized': _finalized_run(week_start),
+                'tot_current': tot_current, 'tot_add': tot_add,
+                'tot_deduct': tot_deduct, 'tot_total': tot_total})
+    return render(request, 'nomina/admin_hours.html', ctx)
 
 
 @login_required
@@ -1471,7 +1522,7 @@ def _admin_nomina_data(week_start, week_dates):
         d = data.get(a.pk, {})
         wi = inputs_map.get(a.pk)
         rate = d.get('hourly_mxn', Decimal('0'))
-        extra_hrs = wi.extra_hours if wi else Decimal('0')          # manual hours correction
+        extra_hrs = (wi.hours_add - wi.hours_deduct) if wi else Decimal('0')   # Admin Hours module: net add − deduct
         hours = d.get('final_hrs', Decimal('0')) + extra_hrs
         base = ov(a.pk, 'base_pay', d.get('base_pay_mxn', Decimal('0')) + (extra_hrs * rate).quantize(Decimal('0.01')))
         # Bonus is shown FULL/unmodified; the penalty % + vacation proration land in the Note.
