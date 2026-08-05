@@ -404,6 +404,50 @@ class NominaLoanPickerTests(TestCase):
         self.assertEqual(loan_ids(wk3), set())      # after the 2-week term → empty
 
 
+class NominaExportFormattingTests(TestCase):
+    """Export cells and notes show HOURS to two decimals — not rounded to whole numbers
+    (the old '0' format) and not at raw float precision. Money stays currency; EMP stays
+    a whole-number ID."""
+
+    def test_hours_cells_two_decimals_emp_integer_money_currency(self):
+        import openpyxl
+        from nomina.views import _write_nomina_sheet, HOURS_FMT, MONEY_FMT, INT_FMT
+        ws = openpyxl.Workbook().active
+        cols = [('EMP', 'emp'), ('Hours Worked', 'worked_hrs'), ('Total Hours', 'total_hrs'),
+                ('Pay (48)', 'base_pay')]
+        rows = [{'emp': '5327', 'worked_hrs': Decimal('25.11041666666667'),
+                 'total_hrs': Decimal('25.11041666666667'), 'base_pay': Decimal('1569.40')}]
+        _write_nomina_sheet(ws, cols, rows, int_fields={'emp'}, money_fields={'base_pay'},
+                            hours_fields={'worked_hrs', 'total_hrs'})
+        emp, hrs, tot, pay = ws[2]
+        self.assertEqual(emp.value, 5327);   self.assertEqual(emp.number_format, INT_FMT)
+        self.assertEqual(hrs.value, 25.11);  self.assertEqual(hrs.number_format, HOURS_FMT)  # not 25 / 25.1104…
+        self.assertEqual(tot.value, 25.11);  self.assertEqual(tot.number_format, HOURS_FMT)
+        self.assertEqual(pay.number_format, MONEY_FMT)
+
+    def test_finalized_snapshot_floats_also_round_to_two_decimals(self):
+        import openpyxl
+        from nomina.views import _write_nomina_sheet, HOURS_FMT
+        ws = openpyxl.Workbook().active
+        # A finalized week exports from a JSON snapshot where hours are plain floats.
+        rows = [{'worked_hrs': 25.11041666666667}]
+        _write_nomina_sheet(ws, [('Hours Worked', 'worked_hrs')], rows,
+                            int_fields=set(), money_fields=set(), hours_fields={'worked_hrs'})
+        cell = ws.cell(row=2, column=1)
+        self.assertEqual(cell.value, 25.11)
+        self.assertEqual(cell.number_format, HOURS_FMT)
+
+    def test_notes_show_hours_to_two_decimals(self):
+        from nomina.views import _agent_note, _admin_note
+        agent = _agent_note({'net_lpo': Decimal('0'), 'total_hrs': Decimal('40')},
+                            {'net_lpo': Decimal('0'), 'total_hrs': Decimal('48.5041666'), 'vac_days': 1})
+        self.assertIn('48.50', agent); self.assertNotIn('48.5041', agent)
+        admin = _admin_note({'admin_bonus_corrected': Decimal('400'), 'admin_bonus': Decimal('400'),
+                             'bonus_ded_pct': Decimal('0'), 'vac_days': 1, 'vac_hrs': Decimal('8'),
+                             'corrected_hours': Decimal('39.3358333')})
+        self.assertIn('39.34', admin); self.assertNotIn('39.3358', admin)
+
+
 class NominaWelcomeBonusTests(TestCase):
     """Welcome Bonus is a POSITIVE for the enrolled agent — paid the enrollment
     amount in a covered week, but only when they earned that week's adherence bonus."""
