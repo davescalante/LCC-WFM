@@ -932,13 +932,20 @@ def loans(request):
                 messages.success(request, "Loan added.")
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
-    loan_list = list(Loan.objects.select_related('agent__user').all())
+    # A loan appears ONLY in the week(s) it is actually being repaid — a 1-week loan in its
+    # one week, a 2-week loan in both — so navigating to a week with no active loans shows an
+    # empty list. installment_for_week() is 0 outside a loan's repayment window.
+    loan_list = []
     week_total = total_balance = Decimal('0')
-    for ln in loan_list:
+    for ln in Loan.objects.select_related('agent__user').all():
+        inst = ln.installment_for_week(week_start)
+        if inst <= 0:
+            continue                                         # not repaid this week → not shown here
         ln.bal = ln.balance(week_start)
-        ln.this_week = ln.installment_for_week(week_start)   # amount deducted THIS pay week (0 if not active)
-        week_total += ln.this_week
+        ln.this_week = inst                                  # amount deducted THIS pay week
+        week_total += inst
         total_balance += ln.bal
+        loan_list.append(ln)
     # A–Z by the agent_name shown in the picker (not by last name — otherwise the list
     # reads scrambled since the picker shows the agent name, not "Last, First").
     agents = sorted(

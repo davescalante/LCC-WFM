@@ -378,8 +378,30 @@ class NominaLoanPickerTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         names = [a.agent_name for a in resp.context['agents']]
         self.assertEqual(names, sorted(names, key=lambda s: (s or '').lower()))   # A–Z (case-insensitive)
-        # Only zoe's loan is deducted this week; amy's contributes 0.
+        # Only zoe's loan is active this week; amy's last-week loan is not shown at all.
+        self.assertEqual({ln.agent_id for ln in resp.context['loans']}, {zoe.pk})
         self.assertEqual(resp.context['week_total'], Decimal('1250.00'))
+
+    def test_loan_only_shows_in_its_repayment_weeks(self):
+        """A loan appears only in the week(s) it's repaid: a 1-week loan in its one week,
+        a 2-week loan in both — and a week with no active loans is empty."""
+        import datetime
+        from nomina.models import Loan
+        a = _make_infinity('loanwk', '9003')
+        prevw = self.ws - datetime.timedelta(days=7)
+        wk2 = self.ws + datetime.timedelta(days=7)
+        wk3 = self.ws + datetime.timedelta(days=14)
+        ln = Loan.objects.create(agent=a, principal=Decimal('1000'), term_weeks=2,
+                                 rate=Decimal('1.35'), start_week=self.ws)   # active this week + next
+
+        def loan_ids(week):
+            resp = self.client.get(reverse('nomina:loans') + f'?week_start={week.isoformat()}')
+            return {x.pk for x in resp.context['loans']}
+
+        self.assertIn(ln.pk, loan_ids(self.ws))     # week 1 → shows
+        self.assertIn(ln.pk, loan_ids(wk2))         # week 2 → carries over
+        self.assertEqual(loan_ids(prevw), set())    # before it starts → empty
+        self.assertEqual(loan_ids(wk3), set())      # after the 2-week term → empty
 
 
 class NominaWelcomeBonusTests(TestCase):
