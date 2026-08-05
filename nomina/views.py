@@ -757,16 +757,18 @@ AGENT_EXPORT_COLS = [
 
 # Excel cell number formats for the export.
 MONEY_FMT = '$#,##0.00'          # e.g. $3,000.00
-INT_FMT = '0'                    # whole number, no decimals
-# A, D, E, G — whole numbers; F and H–S — currency.
-AGENT_INT_FIELDS = {'emp', 'worked_hrs', 'holiday_hrs', 'total_hrs'}
+HOURS_FMT = '#,##0.00'           # e.g. 25.11 — always two decimals, no currency
+INT_FMT = '0'                    # whole number, no decimals (employee IDs only)
+# A — whole-number ID; D, E, G — hours (two decimals); F and H–S — currency.
+AGENT_INT_FIELDS = {'emp'}
+AGENT_HOURS_FIELDS = {'worked_hrs', 'holiday_hrs', 'total_hrs'}
 AGENT_MONEY_FIELDS = {'holiday_pay', 'base_pay', 'net_lpo', 'referral', 'welcome', 'kill_qa',
                       'spiff_mxn', 'adherence_bonus', 'subtotal', 'comedor', 'loan', 'transport', 'total'}
 
 
-def _write_nomina_sheet(ws, cols, rows, int_fields, money_fields, note_fn=None):
+def _write_nomina_sheet(ws, cols, rows, int_fields, money_fields, hours_fields=frozenset(), note_fn=None):
     """Append the header + data rows to `ws`, writing numeric cells as real numbers
-    and applying whole-number / currency formats per column."""
+    and applying whole-number / two-decimal / currency formats per column."""
     from openpyxl.styles import Font
     headers = [h for h, _ in cols] + (['Notes'] if note_fn else [])
     ws.append(headers)
@@ -778,8 +780,12 @@ def _write_nomina_sheet(ws, cols, rows, int_fields, money_fields, note_fn=None):
             v = r.get(f)
             if f in ('emp',):
                 v = int(v) if str(v).isdigit() else (v or '')
-            elif hasattr(v, 'quantize'):
-                v = float(v)
+            elif hasattr(v, 'quantize'):        # Decimal (live rows)
+                # Round to two decimals so the stored value matches the displayed value —
+                # money is already 2dp; hours (raw login fractions) become clean 2dp too.
+                v = float(v.quantize(Decimal('0.01')))
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                v = round(float(v), 2)          # float (finalized snapshot rows) → same 2dp
             elif v is None:
                 v = ''
             values.append(v)
@@ -790,6 +796,8 @@ def _write_nomina_sheet(ws, cols, rows, int_fields, money_fields, note_fn=None):
         for ci, (_h, f) in enumerate(cols, start=1):
             if f in money_fields:
                 ws.cell(row=ri, column=ci).number_format = MONEY_FMT
+            elif f in hours_fields:
+                ws.cell(row=ri, column=ci).number_format = HOURS_FMT
             elif f in int_fields:
                 ws.cell(row=ri, column=ci).number_format = INT_FMT
 
@@ -806,7 +814,7 @@ def _agent_note(yours, mine):
     if mine['total_hrs'] != yours['total_hrs']:        # vacation and/or manual hours
         vd = mine.get('vac_days', 0)
         prefix = f"Agent had {vd} day{'s' if vd != 1 else ''} of vacation, " if vd else ""
-        notes.append(f"{prefix}total hours worked should be {mine['total_hrs']:g}")
+        notes.append(f"{prefix}total hours worked should be {mine['total_hrs']:.2f}")
     return " · ".join(notes)
 
 
@@ -830,9 +838,11 @@ def agent_export(request):
     wb = openpyxl.Workbook()
     ws_yours = wb.active
     ws_yours.title = 'Yours'
-    _write_nomina_sheet(ws_yours, AGENT_EXPORT_COLS, rows_yours, AGENT_INT_FIELDS, AGENT_MONEY_FIELDS, note_fn=note_of)
+    _write_nomina_sheet(ws_yours, AGENT_EXPORT_COLS, rows_yours, AGENT_INT_FIELDS, AGENT_MONEY_FIELDS,
+                        hours_fields=AGENT_HOURS_FIELDS, note_fn=note_of)
     ws_mine = wb.create_sheet('Mine')
-    _write_nomina_sheet(ws_mine, AGENT_EXPORT_COLS, rows_mine, AGENT_INT_FIELDS, AGENT_MONEY_FIELDS)
+    _write_nomina_sheet(ws_mine, AGENT_EXPORT_COLS, rows_mine, AGENT_INT_FIELDS, AGENT_MONEY_FIELDS,
+                        hours_fields=AGENT_HOURS_FIELDS)
 
     resp = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f'attachment; filename="LCC AGENT NOMINA {week_start:%m%d%Y}.xlsx"'
@@ -1389,7 +1399,7 @@ def _admin_note(r):
         notes.append(f"Bonus should be ${r['admin_bonus_corrected']:.2f}{rtxt}")
     if r['vac_hrs']:
         notes.append(f"Admin had {r['vac_days']} day{'s' if r['vac_days'] != 1 else ''} of vacation, "
-                     f"total hours worked should be {r['corrected_hours']:g}")
+                     f"total hours worked should be {r['corrected_hours']:.2f}")
     return " · ".join(notes)
 
 
@@ -1542,7 +1552,8 @@ ADMIN_EXPORT_COLS = [
     ('Cafeteria', 'comedor'), ('Prestamo', 'prestamo_repay'),
     ('Transportation', 'transport'), ('Total', 'total'),
 ]
-ADMIN_INT_FIELDS = {'emp', 'hours', 'holiday_hrs'}
+ADMIN_INT_FIELDS = {'emp'}
+ADMIN_HOURS_FIELDS = {'hours', 'holiday_hrs'}
 ADMIN_MONEY_FIELDS = {'wage', 'holiday_pay', 'spiffs', 'lpo', 'referral', 'prestamo_given',
                       'subtotal', 'admin_bonus', 'comedor', 'prestamo_repay', 'transport', 'total'}
 
@@ -1560,7 +1571,7 @@ def admin_export(request):
     ws = wb.active
     ws.title = 'Yours'
     _write_nomina_sheet(ws, ADMIN_EXPORT_COLS, rows, ADMIN_INT_FIELDS, ADMIN_MONEY_FIELDS,
-                        note_fn=lambda r: r.get('note', ''))
+                        hours_fields=ADMIN_HOURS_FIELDS, note_fn=lambda r: r.get('note', ''))
     resp = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f'attachment; filename="LCC ADMIN NOMINA {week_start:%m%d%Y}.xlsx"'
     wb.save(resp)
