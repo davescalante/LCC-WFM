@@ -967,6 +967,63 @@ class AgentCreateEditAtomicityTests(TestCase):
         self.assertEqual(target.user.email, 'editok-new@example.com')
 
 
+class AgentAdherenceStartDateValidationTests(TestCase):
+    """adherence_start_date must be a Monday, enforced server-side via
+    AgentForm.clean_adherence_start_date. Both agent_create and agent_edit gate
+    their POST handling on AgentForm.is_valid() identically (no separate
+    manual-parsing path for this field, unlike the legacy start_date), so both
+    write paths must reject a non-Monday submission — tested explicitly rather
+    than assuming create inherits edit's behavior."""
+
+    def setUp(self):
+        self.admin = _make_agent('floorformadmin', role_type='supervisor')
+        self.client.login(username='floorformadmin', password='pw')
+
+    def _payload(self, username, adherence_start_date=''):
+        return {
+            'username': username,
+            'email': f'{username}@example.com',
+            'legal_name': 'Floor Test',
+            'password': '',
+            'agent_name': 'Floor Test',
+            'employee_id': '',
+            'role': 'agent',
+            'role_type': 'regular_agent',
+            'status': 'active',
+            'employer': 'Infinity',
+            'billing_status': 'Not Billed',
+            'phone_country_code': '+1',
+            'phone_number': '',
+            'teams_password': '',
+            'hourly_rate': '62.50',
+            'billing_rate_usd': '',
+            'admin_bonus_mxn': '',
+            'adherence_start_date': adherence_start_date,
+            'notes': '',
+        }
+
+    def test_agent_create_rejects_non_monday(self):
+        payload = self._payload('floorcreatebad', adherence_start_date='2025-01-07')  # Tuesday
+        resp = self.client.post(reverse('agent_create'), payload)
+        self.assertEqual(resp.status_code, 200)  # form re-rendered with errors, no redirect
+        self.assertFalse(User.objects.filter(username='floorcreatebad').exists())
+
+    def test_agent_create_accepts_monday(self):
+        payload = self._payload('floorcreateok', adherence_start_date='2025-01-06')  # Monday
+        resp = self.client.post(reverse('agent_create'), payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        agent = Agent.objects.get(user__username='floorcreateok')
+        self.assertEqual(agent.adherence_start_date, date(2025, 1, 6))
+
+    def test_agent_edit_rejects_non_monday(self):
+        target = _make_agent('floorexistbad', role='agent', role_type='regular_agent')
+        payload = self._payload('floorexistbad', adherence_start_date='2025-01-07')  # Tuesday
+        resp = self.client.post(reverse('agent_edit', args=[target.pk]), payload)
+        self.assertEqual(resp.status_code, 200)
+        target.refresh_from_db()
+        self.assertIsNone(target.adherence_start_date)
+
+
 class AgentFormFinanceGatingTests(TestCase):
     """The Finance fields (pay/billing rate, admin bonus) and the Super Admin flag are
     stripped from the user form server-side for non-super-admins — not merely hidden."""

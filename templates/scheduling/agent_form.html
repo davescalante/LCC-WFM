@@ -29,6 +29,8 @@
             <label>Start Date</label>
             <input type="date" name="start_date" style="margin-bottom:14px;">
             {% endif %}
+            <label>Adherence Start Date <span style="font-size:11px;font-weight:400;color:#888;">optional — first Monday this agent appears on the Adherence tab. Changes can take up to 5 minutes to show on the tab.</span></label>
+            {{ agent_form.adherence_start_date }}
         </div>
 
         <!-- Role & Access -->

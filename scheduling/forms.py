@@ -61,11 +61,12 @@ class AgentForm(forms.ModelForm):
             'phone_country_code', 'phone_number',
             'teams_password', 'hourly_rate', 'billing_rate_usd',
             'is_official_admin', 'admin_bonus_mxn', 'is_super_admin',
-            'can_access_admin_tabs', 'can_manage_loans', 'notes',
+            'can_access_admin_tabs', 'can_manage_loans', 'adherence_start_date', 'notes',
         ]
         widgets = {
             'teams_password': forms.PasswordInput(render_value=True),
             'notes': forms.Textarea(attrs={'rows': 4}),
+            'adherence_start_date': forms.DateInput(attrs={'type': 'date'}),
         }
         labels = {
             'agent_name': 'Agent Name',
@@ -88,6 +89,12 @@ class AgentForm(forms.ModelForm):
         val = self.cleaned_data.get('hourly_rate')
         if val is not None and val < 0:
             raise forms.ValidationError("Hourly rate cannot be negative.")
+        return val
+
+    def clean_adherence_start_date(self):
+        val = self.cleaned_data.get('adherence_start_date')
+        if val is not None and val.weekday() != 0:
+            raise forms.ValidationError("Adherence start date must be a Monday.")
         return val
 
 

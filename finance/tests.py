@@ -1071,6 +1071,28 @@ class AdherenceExportTests(TestCase):
         self._row_for(ws, regular)   # raises if not exactly one row
         self._row_for(ws, admin)     # raises if not exactly one row
 
+    def test_adherence_start_date_floor_matches_screen_roster(self):
+        """The export builds its regular roster from the same
+        _get_adherence_agent_pks the screen uses, so an adherence_start_date floor
+        must exclude/include identically on both — proving the two never drift."""
+        agent = _make_agent('adhexpfloor1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(
+            agent=agent, date=_WEEK_START + timedelta(weeks=1),
+            start_time=time(9, 0), end_time=time(17, 0),
+        )
+        agent.adherence_start_date = _WEEK_START + timedelta(weeks=1)
+        agent.save()
+
+        cache.clear()
+        ws_before_floor = self._export_ws()
+        self.assertEqual(self._rows_for(ws_before_floor, agent), [],
+                          "Agent should be absent from the export for a week before their floor.")
+
+        cache.clear()
+        ws_at_floor = self._export_ws(week_start=_WEEK_START + timedelta(weeks=1))
+        self._row_for(ws_at_floor, agent)   # raises if not exactly one row
+
     def test_met_day_shows_status_and_green_completed_hours(self):
         agent = _make_agent('adhexpmet1')
         Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))

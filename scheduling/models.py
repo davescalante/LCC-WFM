@@ -47,6 +47,10 @@ class Agent(models.Model):
     employee_id = models.CharField(max_length=50, blank=True, unique=True, null=True)
     start_date = models.DateField(null=True, blank=True)
     termination_date = models.DateField(null=True, blank=True)
+    adherence_start_date = models.DateField(
+        null=True, blank=True,
+        help_text="First Monday this agent should appear on the Adherence tab. Leave blank for no change — this is opt-in only."
+    )
     COUNTRY_CODE_CHOICES = [
         ('+1', '+1 (US/Canada)'),
         ('+52', '+52 (Mexico)'),

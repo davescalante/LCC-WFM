@@ -1,13 +1,15 @@
 import json
 from decimal import Decimal
 from datetime import date, timedelta, time
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import User
 
-from scheduling.models import Agent, Five9Profile, Shift
+from scheduling.models import Agent, Five9Profile, Shift, ShiftTemplate
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
+from adherence.views import _get_adherence_agent_pks
 from finance.models import BillingSettings
 
 
@@ -254,6 +256,67 @@ class CodingsRosterExcludesOfficialAdminsTests(TestCase):
         regular_row = next(r for r in rows if r['agent'].pk == self.regular.pk)
         # 2h coding, in seconds — unaffected by the official admin's exclusion.
         self.assertEqual(regular_row['total_seconds'], 2 * 3600)
+
+
+class AdherenceStartDateFloorTests(TestCase):
+    """
+    adherence_start_date is an opt-in per-agent floor on _get_adherence_agent_pks:
+    NULL is a no-op (today's behavior, unchanged for every existing agent); once set,
+    it excludes any week whose Monday is before the floor and includes the floor's own
+    week and every later one. It is a floor only — it never adds an agent the activity
+    gate wouldn't otherwise include, it only ever removes one.
+
+    _get_adherence_agent_pks caches its result for 300s per (week_start, supervisor_id),
+    so every call below that could observe a previous call's cached result clears the
+    cache first — otherwise a test could pass or fail for the wrong reason.
+    """
+
+    def _agent_with_template(self, username):
+        agent = _make_agent(username)
+        ShiftTemplate.objects.create(
+            agent=agent, day_of_week=0, start_time=time(9, 0), end_time=time(17, 0),
+        )
+        return agent
+
+    def test_null_floor_behaves_exactly_as_today(self):
+        agent = self._agent_with_template('floornull1')
+        far_past_week = _WEEK_START - timedelta(weeks=104)
+        far_past_dates = [far_past_week + timedelta(days=i) for i in range(7)]
+
+        cache.clear()
+        pks = _get_adherence_agent_pks(far_past_dates, far_past_week)
+        self.assertIn(agent.pk, pks)
+
+    def test_floor_excludes_a_week_before_it(self):
+        agent = self._agent_with_template('floorexcl1')
+        agent.adherence_start_date = _WEEK_START
+        agent.save()
+        earlier_week = _WEEK_START - timedelta(weeks=1)
+        earlier_dates = [earlier_week + timedelta(days=i) for i in range(7)]
+
+        cache.clear()
+        pks = _get_adherence_agent_pks(earlier_dates, earlier_week)
+        self.assertNotIn(agent.pk, pks)
+
+    def test_floor_includes_its_own_week(self):
+        agent = self._agent_with_template('floorown1')
+        agent.adherence_start_date = _WEEK_START
+        agent.save()
+
+        cache.clear()
+        pks = _get_adherence_agent_pks(_WEEK, _WEEK_START)
+        self.assertIn(agent.pk, pks)
+
+    def test_floor_includes_a_later_week(self):
+        agent = self._agent_with_template('floorlater1')
+        agent.adherence_start_date = _WEEK_START
+        agent.save()
+        later_week = _WEEK_START + timedelta(weeks=1)
+        later_dates = [later_week + timedelta(days=i) for i in range(7)]
+
+        cache.clear()
+        pks = _get_adherence_agent_pks(later_dates, later_week)
+        self.assertIn(agent.pk, pks)
 
 
 class AdminEditScopeTests(TestCase):

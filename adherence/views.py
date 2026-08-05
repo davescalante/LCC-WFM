@@ -303,6 +303,8 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
         Q(overtime_shifts__date__in=week_dates) |
         Q(shift_templates__isnull=False) |
         Q(adherence_records__date__in=week_dates)
+    ).filter(
+        Q(adherence_start_date__isnull=True) | Q(adherence_start_date__lte=week_start)
     ).values_list('pk', flat=True).distinct())
     cache.set(cache_key, pks, 300)
     return pks
