@@ -50,7 +50,7 @@
             <tr>
                 <td style="font-weight:600;">{{ ln.agent }}</td>
                 <td style="text-align:right;font-family:monospace;">${{ ln.total_owed|floatformat:2 }}</td>
-                <td style="text-align:right;font-family:monospace;{% if not ln.this_week %}color:#bbb;{% endif %}" {% if ln.this_week %}title="Deducted this week"{% else %}title="Not deducted this week"{% endif %}>${{ ln.weekly_repayment|floatformat:2 }}</td>
+                <td style="text-align:right;font-family:monospace;" title="Deducted this week">${{ ln.weekly_repayment|floatformat:2 }}</td>
                 <td style="text-align:right;font-family:monospace;font-weight:700;{% if ln.bal <= 0 %}color:#16a34a;{% endif %}">${{ ln.bal|floatformat:2 }}</td>
                 <td style="text-align:right;"><form method="post" style="margin:0;" onsubmit="return confirm('Remove loan?');">{% csrf_token %}<input type="hidden" name="delete" value="{{ ln.pk }}"><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Remove</button></form></td>
             </tr>
@@ -66,8 +66,8 @@
             </tr>
             </tfoot>
         </table>
-        <p style="font-size:11px;color:#999;margin:8px 0 0;">“Total for this week” = installments deducted for the week of {{ week_start|date:'M d' }}. Loans not active this week show their weekly amount greyed and don’t count toward it. The last column totals all outstanding balance.</p>
-        {% else %}<p style="color:#888;font-size:13px;">No loans yet.</p>{% endif %}
+        <p style="font-size:11px;color:#999;margin:8px 0 0;">Only loans being repaid the week of {{ week_start|date:'M d' }} are shown — a 1-week loan appears in its one week, a 2-week loan in both. “Total for this week” is the amount deducted that week; the last column totals the shown loans’ outstanding balance.</p>
+        {% else %}<p style="color:#888;font-size:13px;">No loans this week. Add one on the left — it applies to the week of {{ week_start|date:'M d' }}.</p>{% endif %}
     </div>
 </div>
 <script>
