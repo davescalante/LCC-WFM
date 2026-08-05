@@ -26,6 +26,8 @@ class WeeklyPayInput(models.Model):
     lpo = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Sales commission (MXN)")
     spiff_usd = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Spiffs in USD (converted at the week's rate)")
     extra_hours = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Manual hours correction — folds into Hours Worked + Pay (48)")
+    hours_add = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Admin Hours module: hours to ADD this week")
+    hours_deduct = models.DecimalField(max_digits=7, decimal_places=2, default=0, help_text="Admin Hours module: hours to DEDUCT this week")
     welcome = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     referral = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     kill_team_qa = models.DecimalField(

@@ -46,6 +46,12 @@
         <span style="font-size:11px;color:#999;margin-left:6px;">{{ c.unit }}</span>
     </a>
     {% endfor %}
+    <a class="in-card" href="{% url 'nomina:admin_hours' %}?week_start={{ week_start|date:'Y-m-d' }}" style="border-color:#6d28d9;">
+        <h3 style="color:#6d28d9;">Admin Hours</h3>
+        <p>Adjust admins' hours — Current + Add − Deduct = Total. Admin Nómina only.</p>
+        <span class="in-tag none" style="background:#ede9fe;color:#6d28d9;">admins</span>
+        <span style="font-size:11px;color:#999;margin-left:6px;">hrs</span>
+    </a>
 </div>
 
 <p style="margin-top:18px;font-size:12px;color:#999;">Each module accepts a file upload (mapped by column headers) or manual entry. Welcome Bonus and Loans have their own modules on the Nómina hub.</p>
