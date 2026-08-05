@@ -172,8 +172,16 @@ def _get_billable_weekly_data(agents, week_dates, settings):
             login_secs_map[aid] = login_secs_map.get(aid, 0) + row['login_seconds']
 
     # ── Coding hours ──────────────────────────────────────────────────────
+    # Hard partition (is_admin_coding / is_official_admin): each person's coded time comes
+    # from exactly ONE place — official admins from their ADMIN codings, everyone else from
+    # REGULAR codings. Summing both (the old behaviour) double-counted anyone with entries in
+    # both tabs — e.g. an admin whose time was also coded on the regular Codings tab — which
+    # inflated their hours here and everywhere this engine feeds (billing report + Nómina).
+    admin_ids = {a.pk for a in agents if getattr(a, 'is_official_admin', False)}
     coded_hrs_map = {}
     for coding in Coding.objects.filter(agent__in=agent_ids, date__in=week_dates):
+        if coding.is_admin_coding != (coding.agent_id in admin_ids):
+            continue   # this coding belongs to the other path for this person — skip it
         coded_hrs_map[coding.agent_id] = coded_hrs_map.get(coding.agent_id, Decimal('0')) + Decimal(str(coding.total_hours()))
 
     # ── Adherence bonus (already tracked in adherence tab) ────────────────

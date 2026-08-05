@@ -50,6 +50,39 @@ def _status(agent, week_day, status):
     return AdherenceRecord.objects.create(agent=agent, date=_WEEK[week_day], status=status)
 
 
+class CodingPartitionTests(TestCase):
+    """The billing engine counts each person's coded time from exactly ONE place: official
+    admins from ADMIN codings, everyone else from REGULAR codings — never both. Summing
+    both double-counts anyone with entries in both tabs (e.g. an admin whose time was also
+    coded on the regular Codings tab), which inflated hours in the billing report + Nómina."""
+
+    def setUp(self):
+        self.s = _settings(nr_cap_regular_hours=Decimal('99'), nr_ratio=Decimal('0.125'),
+                           nr_ratio_max_hours=Decimal('200'))
+
+    def _coded(self, agent):
+        from finance.views import _get_billable_weekly_data
+        return _get_billable_weekly_data([agent], _WEEK, self.s)[agent.pk]['coded_hrs']
+
+    def test_official_admin_counts_admin_codings_only(self):
+        admin = _make_agent('part_admin', role='admin', role_type='supervisor')
+        admin.is_official_admin = True
+        admin.save()
+        Coding.objects.create(agent=admin, date=_WEEK_START, start_time=time(8, 0),
+                              end_time=time(13, 0), is_admin_coding=True)    # 5h admin
+        Coding.objects.create(agent=admin, date=_WEEK_START, start_time=time(14, 0),
+                              end_time=time(17, 0), is_admin_coding=False)   # 3h regular — phantom
+        self.assertEqual(self._coded(admin), Decimal('5'))    # admin only, NOT 8
+
+    def test_regular_agent_counts_regular_codings_only(self):
+        ag = _make_agent('part_agent')     # not an official admin
+        Coding.objects.create(agent=ag, date=_WEEK_START, start_time=time(8, 0),
+                              end_time=time(12, 0), is_admin_coding=False)   # 4h regular
+        Coding.objects.create(agent=ag, date=_WEEK_START, start_time=time(13, 0),
+                              end_time=time(15, 0), is_admin_coding=True)    # 2h admin — excluded
+        self.assertEqual(self._coded(ag), Decimal('4'))       # regular only, NOT 6
+
+
 class NRCapCheck1Tests(TestCase):
     """check1: deduct NR hours above the absolute weekly cap."""
 
