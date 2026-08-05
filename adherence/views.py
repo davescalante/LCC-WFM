@@ -465,6 +465,61 @@ def _compute_shift_hours(agent_pk, week_dates, shift_map, ot_map, extra_hrs_map,
     return shift_hours_total
 
 
+def _compute_effective_scheduled_hours(agent_pk, week_dates, shift_map, ot_map, extra_hrs_map,
+                                       tmpl_by_agent_dow, record_map):
+    """Weekly EFFECTIVE scheduled hours — the same value as _build_rows' sched_hours (the
+    "Scheduled Hours" shown on the Adherence page). Unlike _compute_shift_hours (raw regular
+    schedule, no OT, never zeroed), this INCLUDES overtime (cal_sched = evening + OT +
+    overnight spillover) and is adjusted by status: VTO/LOA/V/Holiday zero the day, and
+    P+VTO/T+VTO cut it to the hours actually worked. Mirrors the per-day effective_sched
+    computation in _build_rows so other reports (Billing v2) can show the same number without
+    _build_rows' bonus/NR-cap/variance math. Kept in lockstep with _build_rows (guarded by a
+    test that both produce the identical value)."""
+    week_dates_set = set(week_dates)
+    total = Decimal('0')
+
+    for day_date in week_dates:
+        shift = shift_map.get((agent_pk, day_date))
+        is_off = shift.is_off if shift else False
+        has_shift = shift is not None
+
+        extra_block_hrs = (extra_hrs_map or {}).get((agent_pk, day_date), Decimal('0'))
+        sched_hrs = _hours_evening(shift) + extra_block_hrs
+        ot_shifts = (ot_map or {}).get((agent_pk, day_date)) or []
+        ot_hrs = sum(_hours_evening(s) for s in ot_shifts)
+
+        prev_date = day_date - timedelta(days=1)
+        if prev_date in week_dates_set:
+            prev_shift = shift_map.get((agent_pk, prev_date))
+            prev_ot_shifts = (ot_map or {}).get((agent_pk, prev_date)) or []
+        else:
+            prev_shift = _effective_template(tmpl_by_agent_dow, agent_pk, prev_date)
+            prev_ot_shifts = []
+        prev_not_off = prev_shift is not None and not getattr(prev_shift, 'is_off', False)
+        spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
+        spill_hrs += sum(_hours_morning(s) for s in prev_ot_shifts)
+        has_spillover = spill_hrs > 0
+
+        cal_sched = sched_hrs + ot_hrs + spill_hrs
+        is_scheduled_day = (has_shift and not is_off) or bool(ot_shifts) or has_spillover
+        if not is_scheduled_day:
+            continue
+
+        record = (record_map or {}).get((agent_pk, day_date))
+        status = record.status if record else ''
+        actual_hrs = record.actual_hours if record else None
+
+        if status in SCHED_HOURS_ZEROING_STATUSES:
+            eff = Decimal('0')                                   # VTO / LOA / V / Holiday cut the day
+        elif status in ('P+VTO', 'T+VTO') and actual_hrs is not None:
+            eff = min(actual_hrs, cal_sched)                     # partial VTO — down to hours worked
+        else:
+            eff = cal_sched                                      # regular schedule + OT
+        total += eff
+
+    return total
+
+
 def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None, billing_settings=None):
     """
     Build the per-agent display rows for the adherence dashboard week view.

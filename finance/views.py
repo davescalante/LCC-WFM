@@ -234,22 +234,16 @@ def _get_billable_weekly_data(agents, week_dates, settings):
         coded_hrs = coded_hrs_map.get(aid, Decimal('0'))
         pre_total = raw_login_hrs + coded_hrs
 
-        # Weekly NR deduction — apply the larger of two checks, never both.
-        # Any VTO-type status this week forces the flat cap (skips the ratio
-        # check entirely, same as the existing >48h ceiling).
+        # Weekly Not-Ready allowance = 12.5% of CONNECTED time (login + coded), capped at the
+        # weekly cap (6h regular / 7h Kill Team). A VTO/P+VTO/T+VTO day that week grants the
+        # flat cap instead of the ratio. Anything above the allowance is deducted — one rule,
+        # no competing checks.
         total_nr_hrs = Decimal(str(nr_secs_map.get(aid, 0))) / Decimal('3600')
         nr_cap = settings.nr_cap_kill_team_hours if agent.role_type == 'kill_team' else settings.nr_cap_regular_hours
         has_vto = aid in vto_week_agents
-        check1_ded = max(Decimal('0'), total_nr_hrs - nr_cap)
-        if has_vto or pre_total > settings.nr_ratio_max_hours:
-            check2_ded = Decimal('0')
-        else:
-            check2_ded = max(Decimal('0'), total_nr_hrs - raw_login_hrs * settings.nr_ratio)
-        nr_deduction = max(check1_ded, check2_ded)
+        nr_allowed_hrs = nr_cap if has_vto else min(nr_cap, pre_total * settings.nr_ratio)
+        nr_deduction = max(Decimal('0'), total_nr_hrs - nr_allowed_hrs)
         final_hrs = max(Decimal('0'), pre_total - nr_deduction)
-        nr_allowed_hrs = nr_cap if has_vto else (
-            min(nr_cap, raw_login_hrs * settings.nr_ratio) if pre_total <= settings.nr_ratio_max_hours else nr_cap
-        )
 
         # OT
         ot_reg = ot_regular_map.get(aid, Decimal('0'))
@@ -782,7 +776,6 @@ def finance_settings(request):
                 'adherence_bonus_max_mxn':Decimal(request.POST.get('adherence_bonus_max_mxn', str(singleton.adherence_bonus_max_mxn))),
                 'adherence_bonus_full_hours': Decimal(request.POST.get('adherence_bonus_full_hours', str(singleton.adherence_bonus_full_hours))),
                 'nr_ratio':               Decimal(request.POST.get('nr_ratio', str(singleton.nr_ratio))),
-                'nr_ratio_max_hours':     Decimal(request.POST.get('nr_ratio_max_hours', str(singleton.nr_ratio_max_hours))),
                 'default_tardy_hours':    Decimal(request.POST.get('default_tardy_hours', str(singleton.default_tardy_hours))),
             }
 
@@ -1023,7 +1016,7 @@ def billing_export_v2(request):
     import openpyxl
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
-    from adherence.views import _build_maps, _compute_shift_hours
+    from adherence.views import _build_maps, _compute_shift_hours, _compute_effective_scheduled_hours
 
     week_start = _get_week_start(request)
     settings = BillingSettings.get_for_week(week_start)
@@ -1047,7 +1040,7 @@ def billing_export_v2(request):
     # Shift Hours: schedule-only data via _build_maps (pure data gathering, no bonus/
     # NR-cap/variance math) + the shared _compute_shift_hours calculation — the same
     # single source of truth the combined Adherence export's Shift Hours column uses.
-    shift_map, _, _, ot_map, extra_hrs_map, _, tmpl_by_agent_dow = _build_maps(list(agents), week_dates)
+    shift_map, record_map, _, ot_map, extra_hrs_map, _, tmpl_by_agent_dow = _build_maps(list(agents), week_dates)
 
     primary_map = {}
     for p in Five9Profile.objects.filter(
@@ -1069,9 +1062,10 @@ def billing_export_v2(request):
         'Allowed Not Ready', 'Time that should be deducted for going over NR Allowed',
         'Total work time after deduction of Not Ready in Decimal',
         'Total work time after deduction of Not Ready',
+        'Scheduled Hours',
     ]
     ws.append(headers)
-    for col in range(2, 13):  # B-L bold, A left default
+    for col in range(2, 14):  # B-M bold, A left default
         ws.cell(row=1, column=col).font = header_font
 
     for agent in agents_sorted:
@@ -1079,6 +1073,9 @@ def billing_export_v2(request):
         first, last = _split_agent_display_name(agent.agent_name)
 
         shift_hrs = _compute_shift_hours(agent.pk, week_dates, shift_map, ot_map, extra_hrs_map, tmpl_by_agent_dow)
+        # "Scheduled Hours" — the adherence-page value: regular schedule + OT, cut by VTO.
+        sched_hrs_eff = _compute_effective_scheduled_hours(
+            agent.pk, week_dates, shift_map, ot_map, extra_hrs_map, tmpl_by_agent_dow, record_map)
         login_hrs = d.get('actual_hrs', Decimal('0'))
         nr_hrs = d.get('total_nr_hrs', Decimal('0'))
         coded_hrs = d.get('coded_hrs', Decimal('0'))
@@ -1103,6 +1100,7 @@ def billing_export_v2(request):
             _secs(deduction_hrs),
             round(float(final_hrs), 2),
             _secs(final_hrs),
+            _secs(sched_hrs_eff),
         ]
         ws.append(row)
         r = ws.max_row
@@ -1115,8 +1113,9 @@ def billing_export_v2(request):
         ws.cell(row=r, column=10).number_format = '[h]:mm:ss'
         ws.cell(row=r, column=11).number_format = '0.00'
         ws.cell(row=r, column=12).number_format = '[h]:mm:ss'
+        ws.cell(row=r, column=13).number_format = '[h]:mm:ss'
 
-    col_widths = {1: 22, 2: 20, 3: 19, 4: 14, 5: 12, 6: 17, 7: 12, 8: 21, 9: 19, 10: 55, 11: 56, 12: 44}
+    col_widths = {1: 22, 2: 20, 3: 19, 4: 14, 5: 12, 6: 17, 7: 12, 8: 21, 9: 19, 10: 55, 11: 56, 12: 44, 13: 16}
     for col, w in col_widths.items():
         ws.column_dimensions[get_column_letter(col)].width = w
 

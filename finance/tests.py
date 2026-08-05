@@ -57,8 +57,7 @@ class CodingPartitionTests(TestCase):
     coded on the regular Codings tab), which inflated hours in the billing report + Nómina."""
 
     def setUp(self):
-        self.s = _settings(nr_cap_regular_hours=Decimal('99'), nr_ratio=Decimal('0.125'),
-                           nr_ratio_max_hours=Decimal('200'))
+        self.s = _settings(nr_cap_regular_hours=Decimal('99'), nr_ratio=Decimal('0.125'))
 
     def _coded(self, agent):
         from finance.views import _get_billable_weekly_data
@@ -88,12 +87,9 @@ class NRCapCheck1Tests(TestCase):
 
     def setUp(self):
         self.agent = _make_agent('check1_agent')
-        # nr_ratio_max_hours=200 ensures check2 is disabled (pre_total always < 200)
-        # Actually set it low so check2 doesn't trigger when login >> 48
         self.s = _settings(
             nr_cap_regular_hours=Decimal('6.00'),
             nr_ratio=Decimal('0.1250'),
-            nr_ratio_max_hours=Decimal('200.00'),
         )
 
     def _call(self):
@@ -113,16 +109,15 @@ class NRCapCheck1Tests(TestCase):
         self.assertAlmostEqual(float(result['final_hrs']), 100.0, places=2)
 
 
-class NRCapCheck2Tests(TestCase):
-    """check2: deduct NR hours above 12.5% of login time."""
+class NRCapRatioTests(TestCase):
+    """Deduct Not-Ready above 12.5% of connected time, when the ratio is below the cap."""
 
     def setUp(self):
         self.agent = _make_agent('check2_agent')
-        # cap=99 so check1 never triggers; ratio=0.125; max_hours=48
+        # cap=99 so the cap never binds — isolates the 12.5% ratio
         self.s = _settings(
             nr_cap_regular_hours=Decimal('99.00'),
             nr_ratio=Decimal('0.1250'),
-            nr_ratio_max_hours=Decimal('48.00'),
         )
 
     def _call(self):
@@ -142,41 +137,28 @@ class NRCapCheck2Tests(TestCase):
         result = self._call()[self.agent.pk]
         self.assertAlmostEqual(float(result['final_hrs']), 40.0, places=2)
 
-    def test_check2_disabled_above_max_hours(self):
-        # login=50 h (above nr_ratio_max_hours=48) → check2 disabled
-        # cap=99 so check1 also won't fire → no deduction at all
-        _add_hours(self.agent, 50 * 3600, 10 * 3600)
-        result = self._call()[self.agent.pk]
-        self.assertAlmostEqual(float(result['final_hrs']), 50.0, places=2)
-
-
-class NRCapMaxOfTwoTests(TestCase):
-    """The larger of check1 and check2 is applied, never both."""
+class NRAllowanceMinTests(TestCase):
+    """Allowed = min(cap, 12.5% of connected) — whichever is tighter binds."""
 
     def setUp(self):
         self.agent = _make_agent('max_test')
         self.s = _settings(
             nr_cap_regular_hours=Decimal('6.00'),
             nr_ratio=Decimal('0.1250'),
-            nr_ratio_max_hours=Decimal('48.00'),
         )
 
     def _call(self):
         from finance.views import _get_billable_weekly_data
         return _get_billable_weekly_data([self.agent], _WEEK, self.s)
 
-    def test_check2_wins_when_login_low(self):
-        # 20 h login, 8 h NR
-        # check1 = max(0, 8-6) = 2
-        # check2 = max(0, 8 - 20*0.125) = max(0, 8-2.5) = 5.5
-        # max = 5.5 → final = 20 - 5.5 = 14.5
+    def test_ratio_binds_when_connected_low(self):
+        # 20 h connected, 8 h NR → allowed = min(6, 20*0.125=2.5) = 2.5 → deduct 5.5 → final 14.5
         _add_hours(self.agent, 20 * 3600, 8 * 3600)
         result = self._call()[self.agent.pk]
         self.assertAlmostEqual(float(result['final_hrs']), 14.5, places=2)
 
-    def test_check1_wins_when_login_high(self):
-        # 100 h login (above max_hours=48 → check2 disabled), 8 h NR
-        # check1 = 2, check2 = 0 (disabled) → final = 100 - 2 = 98
+    def test_cap_binds_when_connected_high(self):
+        # 100 h connected, 8 h NR → allowed = min(6, 100*0.125=12.5) = 6 → deduct 2 → final 98
         _add_hours(self.agent, 100 * 3600, 8 * 3600)
         result = self._call()[self.agent.pk]
         self.assertAlmostEqual(float(result['final_hrs']), 98.0, places=2)
@@ -188,6 +170,69 @@ class NRCapMaxOfTwoTests(TestCase):
         self.assertGreaterEqual(float(result['final_hrs']), 0.0)
 
 
+class NRConnectedRatioTests(TestCase):
+    """The corrected rule: the Not-Ready allowance is 12.5% of CONNECTED time (login + coded),
+    capped at 6h (regular) / 7h (Kill Team). Coded hours count toward the base — the old code
+    used login only, which over-deducted anyone with coded time (e.g. Ralph)."""
+
+    def setUp(self):
+        self.s = _settings(nr_cap_regular_hours=Decimal('6.00'),
+                           nr_cap_kill_team_hours=Decimal('7.00'), nr_ratio=Decimal('0.1250'))
+
+    def _data(self, agent):
+        from finance.views import _get_billable_weekly_data
+        return _get_billable_weekly_data([agent], _WEEK, self.s)[agent.pk]
+
+    def _add_coded(self, agent, hours):
+        total = int(round(float(hours) * 3600))
+        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(0, 0),
+                              end_time=time(total // 3600, (total % 3600) // 60, total % 60),
+                              is_admin_coding=False)
+
+    def test_coded_hours_count_toward_allowance(self):
+        # login 20 + coded 20 = connected 40 → allowed min(6, 5) = 5; NR 4 → NO deduction.
+        # (Old login-only base = 20*0.125 = 2.5 would have wrongly deducted 1.5h.)
+        agent = _make_agent('nr_coded')
+        _add_hours(agent, 20 * 3600, 4 * 3600)
+        self._add_coded(agent, 20)
+        d = self._data(agent)
+        self.assertAlmostEqual(float(d['nr_allowed_hrs']), 5.0, places=2)
+        self.assertAlmostEqual(float(d['nr_deduction']), 0.0, places=2)
+
+    def test_ralph_kill_team_no_deduction(self):
+        # KT, login 25.32 + coded 18.99 = connected 44.31, NR 4.985 →
+        # allowed = min(7, 44.31*0.125 = 5.539) = 5.539 → NR under it → no deduction.
+        agent = _make_agent('nr_ralph', role_type='kill_team')
+        _add_hours(agent, int(25.32 * 3600), int(4.985 * 3600))
+        self._add_coded(agent, Decimal('18.99'))
+        d = self._data(agent)
+        self.assertAlmostEqual(float(d['nr_allowed_hrs']), 5.5388, places=2)
+        self.assertAlmostEqual(float(d['nr_deduction']), 0.0, places=2)
+
+    def test_regular_allowance_capped_at_6(self):
+        # connected 64 → 12.5% = 8, capped at 6.
+        agent = _make_agent('nr_reg_cap')
+        _add_hours(agent, 48 * 3600, 0)
+        self._add_coded(agent, 16)
+        self.assertAlmostEqual(float(self._data(agent)['nr_allowed_hrs']), 6.0, places=2)
+
+    def test_kill_team_allowance_capped_at_7(self):
+        # connected 64 → 12.5% = 8, capped at 7 (Kill Team).
+        agent = _make_agent('nr_kt_cap', role_type='kill_team')
+        _add_hours(agent, 48 * 3600, 0)
+        self._add_coded(agent, 16)
+        self.assertAlmostEqual(float(self._data(agent)['nr_allowed_hrs']), 7.0, places=2)
+
+    def test_vto_kill_team_stays_at_7(self):
+        # Kill Team + VTO → flat 7h (not dropped to 6); NR 6.5 < 7 → no deduction.
+        agent = _make_agent('nr_kt_vto', role_type='kill_team')
+        _add_hours(agent, 20 * 3600, int(6.5 * 3600))
+        _status(agent, 0, 'VTO')
+        d = self._data(agent)
+        self.assertAlmostEqual(float(d['nr_allowed_hrs']), 7.0, places=2)
+        self.assertAlmostEqual(float(d['nr_deduction']), 0.0, places=2)
+
+
 class VTOWeeklyAllowanceTests(TestCase):
     """Any VTO-type status (VTO/P+VTO/T+VTO) in the week raises the weekly
     NR allowance to the flat cap and skips the 12.5% ratio check entirely."""
@@ -197,7 +242,6 @@ class VTOWeeklyAllowanceTests(TestCase):
             nr_cap_regular_hours=Decimal('6.00'),
             nr_cap_kill_team_hours=Decimal('7.00'),
             nr_ratio=Decimal('0.1250'),
-            nr_ratio_max_hours=Decimal('48.00'),
         )
 
     def _call(self, agent):
@@ -486,6 +530,7 @@ V2_HEADERS = [
     'Allowed Not Ready', 'Time that should be deducted for going over NR Allowed',
     'Total work time after deduction of Not Ready in Decimal',
     'Total work time after deduction of Not Ready',
+    'Scheduled Hours',
 ]
 
 
@@ -514,7 +559,6 @@ class BillingV2ExportTests(TestCase):
             nr_cap_regular_hours=Decimal('6.00'),
             nr_cap_kill_team_hours=Decimal('7.00'),
             nr_ratio=Decimal('0.1250'),
-            nr_ratio_max_hours=Decimal('48.00'),
         )
 
     def _export_ws(self, week_start=_WEEK_START):
@@ -540,9 +584,9 @@ class BillingV2ExportTests(TestCase):
     def test_header_row(self):
         ws = self._export_ws()
         self.assertEqual(self._rows(ws)[0], V2_HEADERS)
-        # A not bold, B-L bold
+        # A not bold, B-M bold
         self.assertFalse(ws.cell(row=1, column=1).font.bold)
-        for col in range(2, 13):
+        for col in range(2, 14):
             self.assertTrue(ws.cell(row=1, column=col).font.bold)
 
     def test_filename_and_content_type(self):
@@ -551,10 +595,11 @@ class BillingV2ExportTests(TestCase):
         self.assertIn(f'billing_v2_{_WEEK_START.isoformat()}.xlsx', resp['Content-Disposition'])
 
     def test_g_k_j_identities_for_real_hours(self):
-        # 44h login, 3h coded, 7h NR, regular agent -> matches the worked example.
+        # 44h login + 4h coded = 48h connected, 7h NR, regular → allowed min(6, 48*.125=6) = 6,
+        # deduction 1, final 47.
         agent = _make_agent('identity1')
         _add_hours(agent, 44 * 3600, 7 * 3600)
-        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(12, 0))
+        Coding.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(13, 0))
         row = self._row_for(self._export_ws(), agent)
         d = _as_timedelta(row[4])
         f = _as_timedelta(row[6])
@@ -565,10 +610,11 @@ class BillingV2ExportTests(TestCase):
         self.assertEqual(g, d + f)
         self.assertEqual(k, g - i)
         self.assertAlmostEqual(j, k.total_seconds() / 3600, places=2)
-        self.assertAlmostEqual(k.total_seconds() / 3600, 45.5, places=2)
+        self.assertAlmostEqual(k.total_seconds() / 3600, 47.0, places=2)
 
     def test_allowed_nr_regular_vs_kill_team_cap(self):
-        # pre_total=50h (>48h ratio ceiling) -> H collapses to the absolute cap exactly.
+        # connected=50h → 12.5% = 6.25h. Regular caps at 6 (min(6, 6.25)); Kill Team stays on the
+        # ratio 6.25 (under its 7h cap). No >48h shortcut — the cap alone bounds the allowance.
         regular = _make_agent('capregular', role_type='regular_agent')
         kill = _make_agent('capkill', role_type='kill_team')
         _add_hours(regular, 50 * 3600, 10 * 3600)
@@ -576,12 +622,12 @@ class BillingV2ExportTests(TestCase):
         ws = self._export_ws()
         row_r = self._row_for(ws, regular)
         row_k = self._row_for(ws, kill)
-        self.assertEqual(_as_timedelta(row_r[8]), timedelta(hours=6))   # Allowed NR
-        self.assertEqual(_as_timedelta(row_k[8]), timedelta(hours=7))   # kill team +1h
-        self.assertEqual(_as_timedelta(row_r[9]), timedelta(hours=4))   # deduction 10-6
-        self.assertEqual(_as_timedelta(row_k[9]), timedelta(hours=3))   # deduction 10-7
+        self.assertEqual(_as_timedelta(row_r[8]), timedelta(hours=6))       # regular: capped at 6
+        self.assertEqual(_as_timedelta(row_k[8]), timedelta(hours=6.25))    # kill team: 12.5% (under 7)
+        self.assertEqual(_as_timedelta(row_r[9]), timedelta(hours=4))       # deduction 10-6
+        self.assertEqual(_as_timedelta(row_k[9]), timedelta(hours=3.75))    # deduction 10-6.25
         self.assertEqual(_as_timedelta(row_r[11]), timedelta(hours=46))
-        self.assertEqual(_as_timedelta(row_k[11]), timedelta(hours=47))
+        self.assertEqual(_as_timedelta(row_k[11]), timedelta(hours=46.25))
 
     def test_nr_under_allowance_zero_deduction(self):
         agent = _make_agent('underallow1')
@@ -791,6 +837,53 @@ class BillingV2ExportTests(TestCase):
         # (d) Only now assert the two exports actually agree.
         self.assertEqual(v2_shift_hours, adh_shift_hours)
         self.assertEqual(v2_shift_hours, timedelta(hours=16))  # VTO counted, OT excluded
+
+    # ── Scheduled Hours column (effective: VTO cuts, OT adds) ──────────────────
+    def test_scheduled_hours_reflects_schedule(self):
+        agent = _make_agent('v2sched1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[12]), timedelta(hours=16))   # full schedule, no VTO/OT
+
+    def test_scheduled_hours_cut_by_vto(self):
+        agent = _make_agent('v2sched2')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), status='VTO', actual_hours=None)
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[12]), timedelta(hours=8))    # VTO zeroes day 2
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=16))    # contrast: raw Shift Hours still 16
+
+    def test_scheduled_hours_includes_overtime(self):
+        agent = _make_agent('v2sched3')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        OvertimeShift.objects.create(
+            agent=agent, date=_WEEK_START + timedelta(days=2), start_time=time(18, 0), end_time=time(22, 0))
+        row = self._row_for(self._export_ws(), agent)
+        self.assertEqual(_as_timedelta(row[12]), timedelta(hours=12))   # 8 schedule + 4 OT
+        self.assertEqual(_as_timedelta(row[3]), timedelta(hours=8))     # contrast: raw Shift Hours excludes OT
+
+    def test_scheduled_hours_matches_build_rows_exactly(self):
+        """Anti-drift guard: the Billing v2 Scheduled Hours column equals _build_rows'
+        sched_hours (the Adherence-page value) for a fixture mixing VTO (cuts) and OT (adds)."""
+        from adherence.views import _build_maps, _build_rows
+        cache.clear()
+        agent = _make_agent('v2scheddrift1')
+        Shift.objects.create(agent=agent, date=_WEEK_START, start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), start_time=time(9, 0), end_time=time(17, 0))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START, status='P', actual_hours=Decimal('8'))
+        AdherenceRecord.objects.create(agent=agent, date=_WEEK_START + timedelta(days=1), status='VTO', actual_hours=None)
+        OvertimeShift.objects.create(
+            agent=agent, date=_WEEK_START + timedelta(days=2), start_time=time(18, 0), end_time=time(22, 0))
+        v2 = _as_timedelta(self._row_for(self._export_ws(), agent)[12])
+        week = [_WEEK_START + timedelta(days=i) for i in range(7)]
+        sm, rm, cm, om, em, sl, tw = _build_maps([agent], week)
+        rows = _build_rows([agent], week, sm, rm, cm, ot_map=om, extra_hrs_map=em,
+                           split_labels_map=sl, tmpl_by_agent_dow=tw, billing_settings=_settings())
+        self.assertEqual(v2, timedelta(seconds=round(float(rows[0]['sched_hours']) * 3600)))
+        self.assertEqual(v2, timedelta(hours=12))                       # 8 (day1) + 0 (VTO) + 4 (OT)
+        self.assertNotEqual(v2, timedelta(0))
 
 
 class AdminTabsAccessTests(TestCase):
