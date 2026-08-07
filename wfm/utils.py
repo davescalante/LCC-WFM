@@ -37,6 +37,18 @@ def parse_week_param(raw):
         return None
 
 
+def get_monday_choices(weeks_back=4, weeks_forward=8):
+    """(iso_string, label) pairs for Mondays from `weeks_back` weeks ago through
+    `weeks_forward` weeks ahead, relative to today's week. For populating a
+    plain server-rendered week-picker <select> — e.g. "Week of Aug 10"."""
+    this_monday = get_week_start()
+    choices = []
+    for i in range(-weeks_back, weeks_forward + 1):
+        d = this_monday + timedelta(weeks=i)
+        choices.append((d.isoformat(), f"Week of {d.strftime('%b')} {d.day}"))
+    return choices
+
+
 def get_billable_username_map(agent_ids):
     """
     Return (billable_map, primary_billable_map) for a list/queryset of agent PKs.

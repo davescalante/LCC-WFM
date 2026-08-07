@@ -1024,6 +1024,111 @@ class AgentAdherenceStartDateValidationTests(TestCase):
         self.assertIsNone(target.adherence_start_date)
 
 
+class AgentSeparationMondayValidationTests(TestCase):
+    """remove_from_adherence_date must be a Monday, enforced server-side in
+    process_separation and update_separation (both hand-parse request.POST —
+    there's no Form for AgentSeparation — so each needs its own check, added
+    right after each view's existing date.fromisoformat parse)."""
+
+    MONDAY = date(2025, 1, 6)
+    TUESDAY = date(2025, 1, 7)
+    LAST_DAY = date(2025, 1, 2)
+
+    def setUp(self):
+        self.admin = _make_agent('sepvalidator', role_type='supervisor')
+        self.client.login(username='sepvalidator', password='pw')
+
+    def test_process_separation_accepts_monday(self):
+        target = _make_agent('sepokmon', role='agent', role_type='regular_agent')
+        resp = self.client.post(reverse('process_separation', args=[target.pk]), {
+            'separation_status': 'finalized',
+            'separation_type': 'quit',
+            'last_day_worked': self.LAST_DAY.isoformat(),
+            'remove_from_adherence_date': self.MONDAY.isoformat(),
+            'confirm': 'on',
+        })
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        sep = AgentSeparation.objects.get(agent=target)
+        self.assertEqual(sep.status, 'finalized')
+        self.assertEqual(sep.remove_from_adherence_date, self.MONDAY)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')
+
+    def test_process_separation_rejects_non_monday(self):
+        target = _make_agent('sepbadtue', role='agent', role_type='regular_agent')
+        resp = self.client.post(reverse('process_separation', args=[target.pk]), {
+            'separation_status': 'finalized',
+            'separation_type': 'quit',
+            'last_day_worked': self.LAST_DAY.isoformat(),
+            'remove_from_adherence_date': self.TUESDAY.isoformat(),
+            'confirm': 'on',
+        }, follow=True)
+        self.assertContains(resp, 'must be a Monday')
+        self.assertFalse(AgentSeparation.objects.filter(agent=target).exists())
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'active')
+
+    def test_update_separation_finalize_rejects_non_monday(self):
+        target = _make_agent('sepupdbad', role='agent', role_type='regular_agent')
+        sep = AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY, processed_by=self.admin.user,
+        )
+        resp = self.client.post(reverse('update_separation', args=[target.pk]), {
+            'action': 'finalize',
+            'remove_from_adherence_date': self.TUESDAY.isoformat(),
+            'confirm': 'on',
+        }, follow=True)
+        self.assertContains(resp, 'must be a Monday')
+        sep.refresh_from_db()
+        self.assertEqual(sep.status, 'in_progress')
+        self.assertIsNone(sep.remove_from_adherence_date)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'active')
+
+    def test_update_separation_finalize_accepts_monday(self):
+        target = _make_agent('sepupdok', role='agent', role_type='regular_agent')
+        sep = AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY, processed_by=self.admin.user,
+        )
+        resp = self.client.post(reverse('update_separation', args=[target.pk]), {
+            'action': 'finalize',
+            'remove_from_adherence_date': self.MONDAY.isoformat(),
+            'confirm': 'on',
+        })
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        sep.refresh_from_db()
+        self.assertEqual(sep.status, 'finalized')
+        self.assertEqual(sep.remove_from_adherence_date, self.MONDAY)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')
+
+    def test_legacy_non_monday_separation_untouched_by_cancel(self):
+        """A pre-existing in_progress separation with a legacy non-Monday date
+        (created directly via the ORM, as production rows already are) must still
+        load and be actionable. There's no re-finalize/re-submit path that would
+        replay that stored value through the new check, so the closest reachable
+        proof is: the page still renders, and the 'cancel' action — which never
+        touches remove_from_adherence_date — still works and leaves it untouched."""
+        target = _make_agent('seplegacy', role='agent', role_type='regular_agent')
+        sep = AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY, remove_from_adherence_date=self.TUESDAY,
+            processed_by=self.admin.user,
+        )
+        resp = self.client.get(reverse('agent_detail', args=[target.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.post(reverse('update_separation', args=[target.pk]), {
+            'action': 'cancel',
+        })
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        sep.refresh_from_db()
+        self.assertEqual(sep.status, 'cancelled')
+        self.assertEqual(sep.remove_from_adherence_date, self.TUESDAY)
+
+
 class AgentFormFinanceGatingTests(TestCase):
     """The Finance fields (pay/billing rate, admin bonus) and the Super Admin flag are
     stripped from the user form server-side for non-super-admins — not merely hidden."""

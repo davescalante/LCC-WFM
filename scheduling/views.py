@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, OpenOTShift, OTShiftClaimRequest, OTCancellationRequest, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm
+from wfm.utils import get_monday_choices
 
 
 _ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'tester', 'sms_email', 'coordinator', 'trainer'}
@@ -441,6 +442,7 @@ def agent_detail(request, pk):
         'day_choices': ShiftTemplate.DAY_CHOICES,
         'supervisors': supervisors,
         'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
+        'monday_choices': get_monday_choices(),
         'tracker_data': tracker_data,
     })
 
@@ -3830,6 +3832,9 @@ def process_separation(request, pk):
             remove_date = date.fromisoformat(remove_str)
         except ValueError:
             errors.append("Invalid Remove from Adherence date.")
+        else:
+            if remove_date.weekday() != 0:
+                errors.append("Remove from Adherence date must be a Monday.")
 
     if errors:
         for e in errors:
@@ -3908,6 +3913,9 @@ def update_separation(request, pk):
                 remove_date = date.fromisoformat(remove_str)
             except ValueError:
                 errors.append("Invalid date.")
+            else:
+                if remove_date.weekday() != 0:
+                    errors.append("Remove from Adherence date must be a Monday.")
 
         if errors:
             for e in errors:
