@@ -601,7 +601,9 @@ def payroll_report(request):
     week_end = week_dates[-1]
 
     agents = Agent.objects.filter(
-        Q(track_attendance=True) | Q(five9_profiles__billable=True),
+        Q(track_attendance=True) | Q(five9_profiles__billable=True) |
+        Q(status='inactive', separations__status='finalized',
+          separations__remove_from_adherence_date__gt=week_start),
     ).exclude(
         Q(status='inactive') &
         Q(separations__status='finalized') &
@@ -662,7 +664,9 @@ def payroll_export(request):
     week_end = week_dates[-1]
 
     agents = Agent.objects.filter(
-        Q(track_attendance=True) | Q(five9_profiles__billable=True),
+        Q(track_attendance=True) | Q(five9_profiles__billable=True) |
+        Q(status='inactive', separations__status='finalized',
+          separations__remove_from_adherence_date__gt=week_start),
     ).exclude(
         Q(status='inactive') &
         Q(separations__status='finalized') &

@@ -602,8 +602,25 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
     # Their hourly rate is left intact, so manual Extra Hours / vacation / holiday pay
     # still compute. Tracked agents and anyone with a billable profile are untouched, so
     # no previously-paid agent's numbers change.
+    from scheduling.models import Agent
+    from adherence.models import Coding
+    # Separated agents still inside their pay window keep their real pay for weeks
+    # they actually worked — the non-billable-overpay guard above must not zero them.
+    # Deliberately only the inactive-separated half of _pay_window(): that helper's
+    # Q(status='active') branch would also spare the active untracked sales agents
+    # this guard exists to protect.
+    separated_in_window_pks = set(Agent.objects.filter(
+        pk__in=[a.pk for a in agents],
+        status='inactive', separations__status='finalized',
+        separations__remove_from_adherence_date__gt=week_start,
+    ).values_list('pk', flat=True).distinct())
+    coded_this_week_pks = set(Coding.objects.filter(
+        agent__in=agents, date__in=week_dates, is_admin_coding=False
+    ).values_list('agent_id', flat=True))
     for a in agents:
-        if not a.track_attendance and not any(p.billable for p in a.five9_profiles.all()):
+        separated_with_codings = a.pk in separated_in_window_pks and a.pk in coded_this_week_pks
+        if not a.track_attendance and not any(p.billable for p in a.five9_profiles.all()) \
+                and not separated_with_codings:
             d = data.get(a.pk)
             if d:
                 d['base_pay_mxn'] = Decimal('0')

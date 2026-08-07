@@ -524,6 +524,62 @@ class CodingsExportTests(TestCase):
         self._row_index_for(ws, infinity_agent)  # still present
 
 
+class PayrollReportSeparatedAgentTests(TestCase):
+    """A separated agent with no billable Five9 profile and track_attendance=False
+    (the state _finalize_separation leaves them in) must still appear in the
+    payroll report/export for any week inside their pay window, and disappear
+    once remove_from_adherence_date arrives. payroll_report and payroll_export
+    share the same base filter and must stay in sync."""
+
+    def setUp(self):
+        self.boss = _make_agent('payrollboss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+        self.client.login(username='payrollboss', password='x')
+
+    def _make_separated(self, username, remove_from_adherence_date):
+        agent = _make_agent(username)
+        agent.status = 'inactive'
+        agent.track_attendance = False
+        agent.save()
+        AgentSeparation.objects.create(
+            agent=agent, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=3),
+            remove_from_adherence_date=remove_from_adherence_date,
+        )
+        return agent
+
+    def test_report_includes_agent_before_removal_date(self):
+        agent = self._make_separated('seprep1', _WEEK_START + timedelta(days=1))
+        resp = self.client.get(reverse('payroll_report') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        pks = [r['agent'].pk for r in resp.context['infinity_rows']]
+        self.assertIn(agent.pk, pks)
+
+    def test_report_excludes_agent_on_removal_date(self):
+        agent = self._make_separated('seprep2', _WEEK_START)
+        resp = self.client.get(reverse('payroll_report') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        pks = [r['agent'].pk for r in resp.context['infinity_rows']]
+        self.assertNotIn(agent.pk, pks)
+
+    def test_export_includes_agent_before_removal_date(self):
+        agent = self._make_separated('sepexp1', _WEEK_START + timedelta(days=1))
+        resp = self.client.get(reverse('payroll_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        names = [row[0] for row in ws.iter_rows(min_row=4, values_only=True)]
+        self.assertIn(str(agent), names)
+
+    def test_export_excludes_agent_on_removal_date(self):
+        agent = self._make_separated('sepexp2', _WEEK_START)
+        resp = self.client.get(reverse('payroll_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        names = [row[0] for row in ws.iter_rows(min_row=4, values_only=True)]
+        self.assertNotIn(str(agent), names)
+
+
 V2_HEADERS = [
     'AGENT/ADMIN user name', 'AGENT FIRST NAME', 'AGENT LAST NAME', 'Shift Hours',
     'LOGIN TIME', 'NOT READY TIME', 'Coded time', 'Total connected time',
