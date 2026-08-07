@@ -1245,7 +1245,13 @@ def codings_week(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
-    agents = Agent.objects.filter(status='active', is_official_admin=False).select_related('user', 'supervisor__user').order_by(
+    agent_pks = set(Agent.objects.filter(
+        Q(status='active', is_official_admin=False) |
+        Q(status='inactive', is_official_admin=False,
+          separations__status='finalized',
+          separations__remove_from_adherence_date__gt=week_start)
+    ).values_list('pk', flat=True).distinct())
+    agents = Agent.objects.filter(pk__in=agent_pks).select_related('user', 'supervisor__user').order_by(
         'supervisor__user__last_name', 'supervisor__user__first_name',
         'user__last_name', 'user__first_name'
     )

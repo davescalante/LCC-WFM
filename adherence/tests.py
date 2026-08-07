@@ -7,7 +7,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import User
 
-from scheduling.models import Agent, Five9Profile, Shift, ShiftTemplate
+from scheduling.models import Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
 from adherence.views import _get_adherence_agent_pks
 from finance.models import BillingSettings
@@ -256,6 +256,40 @@ class CodingsRosterExcludesOfficialAdminsTests(TestCase):
         regular_row = next(r for r in rows if r['agent'].pk == self.regular.pk)
         # 2h coding, in seconds — unaffected by the official admin's exclusion.
         self.assertEqual(regular_row['total_seconds'], 2 * 3600)
+
+
+class CodingsRosterIncludesRecentlySeparatedAgentsTests(TestCase):
+    """A finalized separation must not erase an agent from past weeks' Codings roster."""
+
+    def setUp(self):
+        staff_user = User.objects.create_user('codingssepviewer', password='x')
+        Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='Codings Viewer', status='active',
+        )
+        self.client.login(username='codingssepviewer', password='x')
+
+        sep_user = User.objects.create_user('separatedagent', password='x')
+        self.separated = Agent.objects.create(
+            user=sep_user, role='agent', role_type='regular_agent',
+            agent_name='Separated Agent', status='inactive', track_attendance=True,
+        )
+        AgentSeparation.objects.create(
+            agent=self.separated, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=1),
+            remove_from_adherence_date=_WEEK_START + timedelta(days=7),
+        )
+
+    def _pks_for(self, week_start):
+        resp = self.client.get(reverse('codings_week') + f'?week_start={week_start.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        return [row['agent'].pk for row in resp.context['rows']]
+
+    def test_present_in_week_before_removal_date(self):
+        self.assertIn(self.separated.pk, self._pks_for(_WEEK_START))
+
+    def test_absent_in_week_of_removal_date(self):
+        self.assertNotIn(self.separated.pk, self._pks_for(_WEEK_START + timedelta(days=7)))
 
 
 class AdherenceStartDateFloorTests(TestCase):
