@@ -1030,7 +1030,10 @@ def shift_week(request):
 
     if request.method == 'POST' and selected_agent_id:
         agent = get_object_or_404(Agent, pk=selected_agent_id)
-        edit_type = request.POST.get('edit_type', 'permanent')
+        edit_type = request.POST.get('edit_type', '')
+        if edit_type not in ('permanent', 'one_time', 'date_range'):
+            messages.error(request, "Please choose how to apply this change (Permanent, One-time, or Date range) before saving.")
+            return redirect(f"{reverse('shift_week')}?agent={selected_agent_id}&week_start={week_start.isoformat()}")
 
         def _day_configs():
             for i, day_date in enumerate(week_dates):
@@ -1066,7 +1069,19 @@ def shift_week(request):
                     partial_days.append(DAYS[i])
             if partial_days:
                 messages.warning(request, f"⚠ {', '.join(partial_days)} not saved — both a start and end time are required. Please re-enter those days.")
-            log_action(request.user, 'Saved recurring schedule', f'Permanent schedule for {agent} week of {week_start}', agent=agent)
+
+            # The new recurring schedule must actually show up starting eff_date. Clear any
+            # one-time Shift overrides sitting in its way, but ONLY within the week on screen
+            # (never touch another week) and only from eff_date forward.
+            _deleted_count, _deleted_detail = Shift.objects.filter(
+                agent=agent, date__in=week_dates, date__gte=eff_date,
+            ).delete()
+            overrides_replaced = _deleted_detail.get('scheduling.Shift', 0)
+
+            log_note = f'Permanent schedule for {agent} week of {week_start}'
+            if overrides_replaced:
+                log_note += f' — {overrides_replaced} one-time override(s) replaced'
+            log_action(request.user, 'Saved recurring schedule', log_note, agent=agent)
             messages.success(request, f"Recurring schedule saved for {agent}. This schedule will appear every week.")
 
         elif edit_type == 'one_time':
@@ -1150,6 +1165,42 @@ def shift_week(request):
     # ── GET: pre-fill from overrides first, then templates ───────────────────
     overrides = {}
     templates = {}
+    # Whether this agent has a recurring schedule AT ALL (any week, past or future) —
+    # drives which "How should this change be applied?" option defaults to checked.
+    # Distinct from has_any_template below, which is scoped to the week on screen.
+    agent_has_recurring = bool(
+        selected_agent_id and ShiftTemplate.objects.filter(agent_id=selected_agent_id).exists()
+    )
+
+    # Approved day-off requests a Permanent save could silently wipe — either the one-time
+    # Shift override the delete above removes, or a future recurring day-off ShiftTemplate
+    # that _save_shift_template's existing "supersede everything after this date" behavior
+    # would remove (pre-existing behavior, not introduced by the override delete). Rendered
+    # here so the JS confirm dialog can warn without a second round-trip to the server.
+    day_off_warnings = []
+    selected_agent_name = ''
+    if selected_agent_id:
+        _selected_agent = Agent.objects.select_related('user').filter(pk=selected_agent_id).first()
+        selected_agent_name = str(_selected_agent) if _selected_agent else ''
+        for r in AgentRequest.objects.filter(
+            agent_id=selected_agent_id, request_type='day_off_change',
+            day_off_type='one_time', status='approved', effective_date__in=week_dates,
+        ):
+            day_off_warnings.append({
+                'trigger_date': r.effective_date.isoformat(),
+                'label': f"{DAYS[r.effective_date.weekday()]}, {r.effective_date.strftime('%b %d')} — one-time",
+            })
+        for r in AgentRequest.objects.filter(
+            agent_id=selected_agent_id, request_type='day_off_change',
+            day_off_type='permanent', status='approved',
+            requested_day_off__isnull=False, effective_date__gte=week_start,
+        ):
+            eff_mon = r.effective_date - timedelta(days=r.effective_date.weekday())
+            day_off_warnings.append({
+                'trigger_date': eff_mon.isoformat(),
+                'label': f"{DAYS[r.requested_day_off]}s off, starting {eff_mon.strftime('%b %d')} — recurring",
+            })
+
     if selected_agent_id:
         for s in Shift.objects.filter(agent_id=selected_agent_id, date__in=week_dates):
             overrides[s.date] = s
@@ -1215,9 +1266,13 @@ def shift_week(request):
         'week_end': week_dates[-1],
         'days': days,
         'has_any_template': has_any_template,
+        'agent_has_recurring': agent_has_recurring,
+        'selected_agent_name': selected_agent_name,
+        'day_off_warnings': day_off_warnings,
         'week_start_iso': week_start.isoformat(),
         'today': today,
         'today_iso': today.isoformat(),
+        'current_week_start_iso': default_week_start.isoformat(),
     })
 
 
