@@ -45,8 +45,8 @@
         {% if ar.request_type == 'coding' %}
             <div style="font-size:13px;color:#555;line-height:2;">
                 <div><strong>Date:</strong> {{ ar.coding_date }}</div>
-                <div><strong>Start Time:</strong> {{ ar.coding_start_time }}</div>
-                <div><strong>End Time:</strong> {{ ar.coding_end_time }}</div>
+                <div><strong>Start Time:</strong> {{ ar.coding_start_time|time:"H:i:s" }}</div>
+                <div><strong>End Time:</strong> {{ ar.coding_end_time|time:"H:i:s" }}</div>
             </div>
         {% elif ar.request_type == 'vacation' %}
             <div style="font-size:13px;color:#555;line-height:2;">

@@ -144,6 +144,44 @@ class StaffRequestTests(TestCase):
         self.assertEqual(ar.status, 'done')
         self.assertEqual(Coding.objects.count(), 0)
 
+    def test_coding_request_preserves_seconds(self):
+        self._login(self.coordinator)
+        self.client.post(reverse('staff_my_requests'), {
+            'request_type': 'coding',
+            'coding_date': date.today().isoformat(),
+            'coding_start_time': '09:00:00',
+            'coding_end_time': '11:30:45',
+        })
+        ar = AgentRequest.objects.get(agent=self.coordinator, request_type='coding')
+        self.assertEqual(ar.coding_start_time, time(9, 0, 0))
+        self.assertEqual(ar.coding_end_time, time(11, 30, 45))
+
+    def test_coding_request_seconds_optional_defaults_to_zero(self):
+        self._login(self.coordinator)
+        self.client.post(reverse('staff_my_requests'), {
+            'request_type': 'coding',
+            'coding_date': date.today().isoformat(),
+            'coding_start_time': '09:00',
+            'coding_end_time': '11:30',
+        })
+        ar = AgentRequest.objects.get(agent=self.coordinator, request_type='coding')
+        self.assertEqual(ar.coding_start_time, time(9, 0, 0))
+        self.assertEqual(ar.coding_end_time, time(11, 30, 0))
+
+    def test_coding_request_invalid_time_rejected_server_side(self):
+        """Out-of-range hour/minute always fails, regardless of Python version
+        (unlike a padding-only issue, whose acceptance can vary by version)."""
+        self._login(self.coordinator)
+        self.client.post(reverse('staff_my_requests'), {
+            'request_type': 'coding',
+            'coding_date': date.today().isoformat(),
+            'coding_start_time': '25:99:00',
+            'coding_end_time': '11:30',
+        })
+        self.assertFalse(
+            AgentRequest.objects.filter(agent=self.coordinator, request_type='coding').exists()
+        )
+
     def test_list_view_only_clears_badge_for_assigned_supervisor(self):
         ar = self._submit_vacation(self.coordinator)
 

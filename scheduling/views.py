@@ -3268,14 +3268,35 @@ def _fill_request_from_post(ar, request):
 
     Returns an error message to show the user, or None on success.
     """
-    from django.utils.dateparse import parse_time
-
     req_type = ar.request_type
     if req_type == 'coding':
-        # Parse to time objects so summary()/strftime work on the fresh instance
+        # Same typed-HH:MM:SS parsing/validation as the Codings tab
+        # (adherence.views.add_coding_ajax/edit_coding_ajax): zero-pad the
+        # hour, seconds optional, end must be after start.
+        from datetime import time as time_cls
+
         ar.coding_date = request.POST.get('coding_date') or None
-        ar.coding_start_time = parse_time(request.POST.get('coding_start_time') or '')
-        ar.coding_end_time = parse_time(request.POST.get('coding_end_time') or '')
+        start_raw = (request.POST.get('coding_start_time') or '').strip()
+        end_raw = (request.POST.get('coding_end_time') or '').strip()
+
+        def _pad_time(s):
+            parts = s.split(':')
+            if parts:
+                parts[0] = parts[0].zfill(2)
+            return ':'.join(parts)
+
+        try:
+            start_t = time_cls.fromisoformat(_pad_time(start_raw)) if start_raw else None
+            end_t = time_cls.fromisoformat(_pad_time(end_raw)) if end_raw else None
+        except ValueError:
+            return "Invalid time format. Use H:MM:SS or HH:MM (e.g. 14:30 or 14:30:45)."
+
+        if start_t and end_t and end_t <= start_t:
+            return ("End time must be after start time. If the shift crossed "
+                    "midnight, submit it as two separate requests.")
+
+        ar.coding_start_time = start_t
+        ar.coding_end_time = end_t
     elif req_type == 'vacation':
         ar.vacation_start = request.POST.get('vacation_start') or None
         ar.vacation_end = request.POST.get('vacation_end') or request.POST.get('vacation_start') or None
