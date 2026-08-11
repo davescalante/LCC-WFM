@@ -3576,6 +3576,64 @@ def request_detail(request, pk):
     })
 
 
+def _auto_code_approved_request(request, ar, agent):
+    """Enter the coding for an approved coding request from a flagged agent.
+
+    Called after the shared approval bookkeeping has already run, so `ar` is
+    'approved' by the time we get here and the approval stands on its own.
+    Returns the message to show the approver, or None when no coding was
+    created (the approval is still valid either way).
+    """
+    from django.db import transaction
+    from adherence.views import create_coding
+
+    if not (ar.coding_date and ar.coding_start_time and ar.coding_end_time):
+        messages.warning(
+            request,
+            "Request approved, but the coding could not be created automatically — "
+            "this request is missing a date or a time. Please enter the coding "
+            "manually on the Codings tab."
+        )
+        return None
+
+    approver = request.user.get_full_name() or request.user.username
+
+    with transaction.atomic():
+        # A concurrent approval that already auto-coded leaves done_at set; the
+        # pending-status guard in request_approve blocks the sequential case.
+        locked = AgentRequest.objects.select_for_update().get(pk=ar.pk)
+        if locked.done_at is not None:
+            return None
+
+        coding = create_coding(
+            agent_id=agent.pk,
+            coding_date=ar.coding_date,
+            start_time=ar.coding_start_time,
+            end_time=ar.coding_end_time,
+            notes=f"Auto-coded from approved Coding Request #{ar.pk} — approved by {approver}",
+            is_admin_coding=agent.is_official_admin,
+        )
+
+        tab = 'Admin Codings' if coding.is_admin_coding else 'Codings'
+        times = (f'{coding.start_time.strftime("%H:%M:%S")}–'
+                 f'{coding.end_time.strftime("%H:%M:%S")}')
+        ar.status = 'done'
+        ar.done_by = request.user
+        ar.done_at = timezone.now()
+        ar.auto_action_log = (
+            f"Created coding on {tab}: {coding.date} {times}\n"
+            f"Marked Done automatically by the system — the coding was entered "
+            f"for this request, not manually confirmed by a supervisor."
+        )
+        ar.save(update_fields=['status', 'done_by', 'done_at', 'auto_action_log'])
+
+    log_action(request.user, 'Auto-coded approved coding request',
+               f'{agent} — {coding.date}: {times} ({tab})', agent=agent)
+
+    return (f"Request approved — the coding was created automatically on {tab} "
+            f"and the request is now Done.")
+
+
 @login_required
 def request_approve(request, pk):
     if request.method != 'POST':
@@ -3732,8 +3790,16 @@ def request_approve(request, pk):
     log_action(request.user, f'Approved {kind} request: {ar.get_request_type_display()}',
                ar.summary(), agent=agent)
 
+    # Agents flagged with can_auto_code_requests get their coding entered for
+    # them instead of a supervisor retyping it on the Codings tab.
+    auto_msg = None
+    if ar.request_type == 'coding' and agent.can_auto_code_requests:
+        auto_msg = _auto_code_approved_request(request, ar, agent)
+
     if ar.request_type == 'schedule_change' and 'Manual action required' in ar.auto_action_log:
         messages.warning(request, "Request approved. Manual update required — please update the agent's schedule.")
+    elif auto_msg:
+        messages.success(request, auto_msg)
     else:
         messages.success(request, "Request approved.")
     return redirect('request_detail', pk=pk)

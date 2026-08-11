@@ -119,8 +119,10 @@ class StaffRequestTests(TestCase):
             self.client.logout()
 
     def test_coding_request_approval_creates_no_coding(self):
-        """Coding requests are status-only: supervisors enter the exact coded
-        time manually, so neither approval nor mark-as-done creates a Coding."""
+        """Without can_auto_code_requests (the default), coding requests stay
+        status-only: supervisors enter the exact coded time manually, so neither
+        approval nor mark-as-done creates a Coding. The flagged case — where
+        approval does auto-create it — is covered by AutoCodeApprovalTests."""
         admin = _make_agent('offadmin', role_type='qa', supervisor=self.boss, official=True)
         self._login(admin)
         self.client.post(reverse('staff_my_requests'), {
@@ -1679,3 +1681,163 @@ class ShiftSaveTests(TestCase):
         )
         self.assertLess(resp.context['week_start_iso'], resp.context['current_week_start_iso'])
         self.assertEqual(len(resp.context['day_off_warnings']), 1)
+
+
+from django.contrib.messages import get_messages
+
+from adherence.models import DailyUpload, DailyAgentHours
+from finance.models import BillingSettings
+
+
+class AutoCodeApprovalTests(TestCase):
+    """Approving a coding request from an agent with can_auto_code_requests=True
+    creates the Coding through the shared adherence.views.create_coding path and
+    marks the request Done. Agents without the flag are unaffected — that case is
+    pinned by StaffRequestTests.test_coding_request_approval_creates_no_coding."""
+
+    CODING_DATE = date(2025, 1, 6)   # a fixed Monday, keeps the NR math deterministic
+
+    def setUp(self):
+        self.boss = _make_agent('autoboss', role_type='supervisor')
+        BillingSettings.objects.get_or_create(pk=1)   # nr_ratio defaults to 0.1250
+
+    def _flagged_agent(self, username, official=False):
+        agent = _make_agent(username, role_type='qa' if official else 'coordinator',
+                            supervisor=self.boss, official=official)
+        agent.can_auto_code_requests = True
+        agent.save(update_fields=['can_auto_code_requests'])
+        return agent
+
+    def _request(self, agent, start=time(9, 0), end=time(11, 0), coding_date=None):
+        return AgentRequest.objects.create(
+            agent=agent, request_type='coding', is_staff_request=True,
+            assigned_supervisor=self.boss,
+            coding_date=self.CODING_DATE if coding_date is None else coding_date,
+            coding_start_time=start, coding_end_time=end,
+        )
+
+    def _approve(self, ar):
+        self.client.login(username='autoboss', password='pw')
+        return self.client.post(reverse('request_approve', kwargs={'pk': ar.pk}))
+
+    def test_flagged_agent_approval_creates_regular_coding(self):
+        agent = self._flagged_agent('autoreg')
+        ar = self._request(agent)
+        self._approve(ar)
+
+        coding = Coding.objects.get(agent=agent)
+        self.assertFalse(coding.is_admin_coding)
+        self.assertEqual(coding.date, self.CODING_DATE)
+        self.assertEqual(coding.start_time, time(9, 0))
+        self.assertEqual(coding.end_time, time(11, 0))
+        self.assertIn(f'Coding Request #{ar.pk}', coding.notes)
+        self.assertIn('autoboss', coding.notes)   # approver recorded
+
+    def test_flagged_agent_request_is_marked_done_as_system_completed(self):
+        agent = self._flagged_agent('autodone')
+        ar = self._request(agent)
+        self._approve(ar)
+
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'done')
+        self.assertEqual(ar.reviewed_by.username, 'autoboss')   # shared tail still ran
+        self.assertIsNotNone(ar.reviewed_at)
+        self.assertFalse(ar.agent_read)                          # requester badge, from the tail
+        self.assertEqual(ar.done_by.username, 'autoboss')
+        self.assertIsNotNone(ar.done_at)
+        self.assertIn('automatically', ar.auto_action_log)
+        self.assertIn('not manually confirmed', ar.auto_action_log)
+
+    def test_auto_code_triggers_the_real_actual_hours_recompute(self):
+        """The coding must go through create_coding so _refresh_actual_hours runs.
+
+        login 8h, not-ready 2h. Without the 2h coding: allowance = 12.5% of 8h =
+        1h, excess NR = 1h, actual = 7.0h. With it: allowance = 12.5% of 10h =
+        1.25h, excess NR = 0.75h, actual = 7.25h. Only a recompute that includes
+        the new coding can produce 7.25 — a bare Coding.objects.create() leaves 7.0.
+        """
+        agent = self._flagged_agent('autohours')
+        Five9Profile.objects.create(agent=agent, five9_username='autohours.acct',
+                                    billable=True, is_primary=True)
+        upload = DailyUpload.objects.create(date=self.CODING_DATE, row_count=1)
+        DailyAgentHours.objects.create(
+            upload=upload, agent=agent, five9_username='autohours.acct',
+            login_seconds=28800, not_ready_seconds=7200,
+        )
+
+        self._approve(self._request(agent))
+
+        record = AdherenceRecord.objects.get(agent=agent, date=self.CODING_DATE)
+        self.assertEqual(record.actual_hours, Decimal('7.25'))
+
+    def test_official_admin_auto_codes_into_admin_codings(self):
+        agent = self._flagged_agent('autoadmin', official=True)
+        self._approve(self._request(agent))
+
+        coding = Coding.objects.get(agent=agent)
+        self.assertTrue(coding.is_admin_coding)   # hard partition respected
+
+    def test_auto_created_admin_coding_matches_admin_codings_tab_row(self):
+        """An auto-created admin Coding must be indistinguishable from one entered
+        on the Admin Codings tab, except for the provenance text in notes."""
+        agent = self._flagged_agent('autoadmincmp', official=True)
+        self._approve(self._request(agent))
+        auto = Coding.objects.get(agent=agent)
+
+        # Exactly how finance.views.add_admin_coding_ajax creates its row.
+        manual = Coding.objects.create(
+            agent_id=agent.pk, date=self.CODING_DATE.isoformat(),
+            start_time='09:00:00', end_time='11:00:00',
+            notes='', is_admin_coding=True,
+        )
+        manual.refresh_from_db()
+
+        for field in ('agent_id', 'date', 'start_time', 'end_time', 'is_admin_coding'):
+            self.assertEqual(getattr(auto, field), getattr(manual, field), field)
+        self.assertEqual(auto.total_hhmmss(), manual.total_hhmmss())
+        self.assertNotEqual(auto.notes, manual.notes)   # only notes differs, by design
+
+    def test_approving_twice_creates_only_one_coding(self):
+        agent = self._flagged_agent('autoidem')
+        ar = self._request(agent)
+        self._approve(ar)
+        self._approve(ar)   # second POST: request is no longer pending
+
+        self.assertEqual(Coding.objects.filter(agent=agent).count(), 1)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'done')
+
+    def test_missing_time_approves_without_coding_and_warns(self):
+        agent = self._flagged_agent('autopartial')
+        ar = self._request(agent, start=None, end=None)
+        resp = self._approve(ar)
+
+        self.assertEqual(Coding.objects.count(), 0)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'approved')   # approval still stands
+        self.assertIsNone(ar.done_at)
+        msgs = [str(m) for m in list(get_messages(resp.wsgi_request))]
+        self.assertTrue(any('manually on the Codings tab' in m for m in msgs), msgs)
+
+    def test_non_flagged_agent_creates_no_coding(self):
+        agent = _make_agent('autounflagged', role_type='coordinator', supervisor=self.boss)
+        self.assertFalse(agent.can_auto_code_requests)
+        ar = self._request(agent)
+        self._approve(ar)
+
+        self.assertEqual(Coding.objects.count(), 0)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'approved')
+
+    def test_detail_page_indicator_only_shows_for_flagged_agents(self):
+        flagged = self._flagged_agent('autobadge')
+        plain = _make_agent('autonobadge', role_type='coordinator', supervisor=self.boss)
+        self.client.login(username='autoboss', password='pw')
+
+        resp = self.client.get(reverse('request_detail',
+                                       kwargs={'pk': self._request(flagged).pk}))
+        self.assertContains(resp, 'Auto-codes on approval')
+
+        resp = self.client.get(reverse('request_detail',
+                                       kwargs={'pk': self._request(plain).pk}))
+        self.assertNotContains(resp, 'Auto-codes on approval')

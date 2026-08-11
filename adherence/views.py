@@ -63,6 +63,29 @@ def _refresh_actual_hours(agent_id, coding_date):
     )
 
 
+def create_coding(agent_id, coding_date, start_time, end_time, notes='', is_admin_coding=False):
+    """Create a Coding and re-apply the daily NR deduction. The one creation path.
+
+    Regular codings feed AdherenceRecord.actual_hours, so they trigger
+    _refresh_actual_hours. Admin codings deliberately do not: _refresh_actual_hours
+    counts only is_admin_coding=False rows, and Official Admins don't appear on the
+    regular Adherence tab at all — which is why finance.views.add_admin_coding_ajax
+    never refreshes either.
+    """
+    coding = Coding.objects.create(
+        agent_id=agent_id,
+        date=coding_date,
+        start_time=start_time,
+        end_time=end_time,
+        notes=notes,
+        is_admin_coding=is_admin_coding,
+    )
+    coding.refresh_from_db()  # SQLite returns raw strings; refresh to get proper time objects
+    if not is_admin_coding:
+        _refresh_actual_hours(agent_id, coding.date)
+    return coding
+
+
 BONUS_QUALIFYING = _BONUS_QUALIFYING
 BONUS_DISQUALIFYING = _BONUS_DISQUALIFYING
 VTO_STATUSES = {'VTO', 'P+VTO', 'T+VTO', 'LOA'}
@@ -981,19 +1004,16 @@ def add_coding_ajax(request):
         return JsonResponse({'ok': False, 'error': 'End time must be after start time. If the shift crossed midnight, split it into two entries.'}, status=400)
 
     try:
-        coding = Coding.objects.create(
+        coding = create_coding(
             agent_id=agent_id,
-            date=date_str,
+            coding_date=date_str,
             start_time=start_time,
             end_time=end_time,
             notes=notes,
             is_admin_coding=False,
         )
-        coding.refresh_from_db()  # SQLite returns raw strings; refresh to get proper time objects
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=400)
-
-    _refresh_actual_hours(agent_id, coding.date)
 
     agent = get_object_or_404(Agent, pk=agent_id)
     log_action(request.user, 'Added coding',
