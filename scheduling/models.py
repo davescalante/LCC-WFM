@@ -70,6 +70,7 @@ class Agent(models.Model):
     is_super_admin = models.BooleanField(default=False, help_text="Super admin — full access to Finance section; can grant super admin to others")
     can_access_admin_tabs = models.BooleanField(default=False, help_text="Access to Admin Codings and Admin Adherence — supervisors see & code their own team of Official Admins; super admins see everyone")
     can_manage_loans = models.BooleanField(default=False, help_text="Access to the Nómina Loans module — add loans and mark repayments; super admins always have access")
+    can_auto_code_requests = models.BooleanField(default=False, help_text="Approving this agent's coding request automatically creates the coding — bypasses manual entry on the Codings tab")
     notes = models.TextField(blank=True)
 
     @property

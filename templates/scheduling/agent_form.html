@@ -75,6 +75,11 @@
                 <label for="{{ agent_form.can_manage_loans.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Manage Loans</label>
                 <span style="font-size:11px;color:#888;">Can open the Nómina Loans module to add loans &amp; mark repayments</span>
             </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                {{ agent_form.can_auto_code_requests }}
+                <label for="{{ agent_form.can_auto_code_requests.id_for_label }}" style="margin:0;font-weight:600;font-size:13px;color:#555;cursor:pointer;">Auto-code Approved Coding Requests</label>
+                <span style="font-size:11px;color:#888;">Approving this agent's coding request will create the coding automatically</span>
+            </div>
             {% endif %}
             {% endif %}
         </div>

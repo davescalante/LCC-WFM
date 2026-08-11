@@ -1194,6 +1194,85 @@ class AgentFormFinanceGatingTests(TestCase):
         self.assertNotIn('is_super_admin', f.fields)
 
 
+class AgentFormAutoCodeGatingTests(TestCase):
+    """can_auto_code_requests is gated the same way as can_manage_loans /
+    can_access_admin_tabs: popped from the form entirely for non-super-admins,
+    so a crafted POST can't set it, and — because the field is simply absent
+    rather than rendered-and-unchecked — an already-True value survives an
+    edit by a non-super-admin instead of being reset to False."""
+
+    def setUp(self):
+        self.non_super = _make_agent('gatestaff', role_type='supervisor')
+        self.super_admin = _make_agent('gatesuper', role_type='supervisor')
+        self.super_admin.is_super_admin = True
+        self.super_admin.save(update_fields=['is_super_admin'])
+
+    def _agent_payload(self, username, agent_name=None, **overrides):
+        payload = {
+            'username': username,
+            'email': f'{username}@example.com',
+            'legal_name': agent_name or 'Test Agent',
+            'password': '',
+            'agent_name': agent_name or 'Test Agent',
+            'employee_id': '',
+            'role': 'agent',
+            'role_type': 'regular_agent',
+            'status': 'active',
+            'employer': 'Infinity',
+            'billing_status': 'Not Billed',
+            'phone_country_code': '+1',
+            'phone_number': '',
+            'teams_password': '',
+            'hourly_rate': '62.50',
+            'billing_rate_usd': '',
+            'admin_bonus_mxn': '',
+            'notes': '',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_non_super_create_discards_auto_code_flag(self):
+        self.client.login(username='gatestaff', password='pw')
+        payload = self._agent_payload('autocodecreate1', can_auto_code_requests='on')
+        resp = self.client.post(reverse('agent_create'), payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        agent = Agent.objects.get(user__username='autocodecreate1')
+        self.assertFalse(agent.can_auto_code_requests)
+
+    def test_non_super_edit_preserves_existing_auto_code_flag(self):
+        target = _make_agent('autocodeedit1', role='agent', role_type='regular_agent')
+        target.can_auto_code_requests = True
+        target.save(update_fields=['can_auto_code_requests'])
+
+        self.client.login(username='gatestaff', password='pw')
+        # A non-super-admin's rendered form has no checkbox for this field at
+        # all, so a real submission from them omits the key entirely — this
+        # must leave the existing True value untouched, not reset it to False.
+        payload = self._agent_payload('autocodeedit1', agent_name=target.agent_name)
+        resp = self.client.post(reverse('agent_edit', args=[target.pk]), payload)
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        target.refresh_from_db()
+        self.assertTrue(target.can_auto_code_requests)
+
+    def test_super_admin_can_set_auto_code_flag_on_create_and_edit(self):
+        self.client.login(username='gatesuper', password='pw')
+
+        create_payload = self._agent_payload('autocodecreate2', can_auto_code_requests='on')
+        resp = self.client.post(reverse('agent_create'), create_payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        created = Agent.objects.get(user__username='autocodecreate2')
+        self.assertTrue(created.can_auto_code_requests)
+
+        target = _make_agent('autocodeedit2', role='agent', role_type='regular_agent')
+        self.assertFalse(target.can_auto_code_requests)
+        edit_payload = self._agent_payload(
+            'autocodeedit2', agent_name=target.agent_name, can_auto_code_requests='on')
+        resp = self.client.post(reverse('agent_edit', args=[target.pk]), edit_payload)
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        target.refresh_from_db()
+        self.assertTrue(target.can_auto_code_requests)
+
+
 class ShiftSaveTests(TestCase):
     """Shifts tab save path (shift_week: Permanent / One-time / Specific Date). Covers the
     retroactive-recurring-save bug (a stale Shift override shadowed the new template so the
