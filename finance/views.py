@@ -259,10 +259,14 @@ def _get_billable_weekly_data(agents, week_dates, settings):
 
         is_official_admin = getattr(agent, 'is_official_admin', False)
         bonus_qualifies = (not is_official_admin) and bonus_map.get(aid) is True and aid in has_status
+        # Per-agent adherence-bonus cap overrides the global default when set (e.g. a
+        # higher individual cap). Proration below the full-hours threshold is unchanged.
+        adherence_cap = (agent.adherence_bonus_max_mxn if agent.adherence_bonus_max_mxn is not None
+                         else settings.adherence_bonus_max_mxn)
         if bonus_qualifies and settings.adherence_bonus_full_hours > 0:
             bonus_mxn = min(
-                settings.adherence_bonus_max_mxn,
-                (final_hrs / settings.adherence_bonus_full_hours * settings.adherence_bonus_max_mxn)
+                adherence_cap,
+                (final_hrs / settings.adherence_bonus_full_hours * adherence_cap)
             ).quantize(Decimal('0.01'), ROUND_HALF_UP)
         else:
             bonus_mxn = Decimal('0')

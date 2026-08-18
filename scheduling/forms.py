@@ -51,6 +51,7 @@ class AgentForm(forms.ModelForm):
             self.fields.pop('hourly_rate', None)
             self.fields.pop('billing_rate_usd', None)
             self.fields.pop('admin_bonus_mxn', None)
+            self.fields.pop('adherence_bonus_max_mxn', None)
             self.fields.pop('is_super_admin', None)
 
     class Meta:
@@ -60,7 +61,7 @@ class AgentForm(forms.ModelForm):
             'employer', 'billing_status', 'track_attendance',
             'phone_country_code', 'phone_number',
             'teams_password', 'hourly_rate', 'billing_rate_usd',
-            'is_official_admin', 'admin_bonus_mxn', 'is_super_admin',
+            'is_official_admin', 'admin_bonus_mxn', 'adherence_bonus_max_mxn', 'is_super_admin',
             'can_access_admin_tabs', 'can_manage_loans', 'adherence_start_date', 'notes',
         ]
         widgets = {

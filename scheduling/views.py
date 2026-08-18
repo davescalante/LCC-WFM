@@ -527,6 +527,7 @@ def agent_create(request):
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'is_own_profile': False,
         'default_admin_bonus_mxn': str(_BS.get().default_admin_bonus_mxn),
+        'default_adherence_bonus_max_mxn': str(_BS.get().adherence_bonus_max_mxn),
     })
 
 
@@ -674,6 +675,7 @@ def agent_edit(request, pk):
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'is_own_profile': (agent.user == request.user),
         'default_admin_bonus_mxn': str(_BS.get().default_admin_bonus_mxn),
+        'default_adherence_bonus_max_mxn': str(_BS.get().adherence_bonus_max_mxn),
     })
 
 
