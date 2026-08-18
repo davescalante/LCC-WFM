@@ -22,13 +22,24 @@
 <div class="grid-2">
     <div class="card">
         <h2>Log an incident</h2>
-        <form method="post">
+        <form method="post" id="baForm">
             {% csrf_token %}
             <label>Agent</label>
-            <select name="agent" required>
-                <option value="">— select —</option>
-                {% for a in agents %}<option value="{{ a.pk }}">{{ a }} · {{ a.user.username }}</option>{% endfor %}
-            </select>
+            <div style="position:relative;">
+                <input type="text" id="agentSearch" autocomplete="off" placeholder="Type a name to search…"
+                       style="width:100%;box-sizing:border-box;">
+                <input type="hidden" name="agent" id="agentPk">
+                <ul id="agentList" style="display:none;position:absolute;z-index:30;left:0;right:0;
+                    max-height:240px;overflow:auto;margin:2px 0 0;padding:0;list-style:none;background:#fff;
+                    border:1px solid #ccc;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.12);">
+                    {% for a in agents %}
+                    <li data-pk="{{ a.pk }}" data-label="{{ a }} · {{ a.user.username }}"
+                        style="padding:7px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f2f2f2;">
+                        <span style="font-weight:600;">{{ a }}</span> <span style="color:#999;">· {{ a.user.username }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
             <label>Date</label>
             <input type="date" name="date" value="{{ week_start|date:'Y-m-d' }}" required>
             <label>Note (optional)</label>
@@ -62,5 +73,77 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+(function () {
+    var search = document.getElementById('agentSearch');
+    var pk = document.getElementById('agentPk');
+    var list = document.getElementById('agentList');
+    var form = document.getElementById('baForm');
+    if (!search || !pk || !list) return;
+    var items = Array.prototype.slice.call(list.querySelectorAll('li'));
+    var active = -1;
+
+    function openList() { list.style.display = 'block'; }
+    function closeList() { list.style.display = 'none'; active = -1; }
+    function visible() { return items.filter(function (li) { return li.style.display !== 'none'; }); }
+    function highlight(vis) {
+        vis.forEach(function (li, i) { li.style.background = (i === active) ? '#eef2ff' : ''; });
+        if (active >= 0 && vis[active]) vis[active].scrollIntoView({ block: 'nearest' });
+    }
+    function filter() {
+        var q = search.value.trim().toLowerCase();
+        pk.value = '';                       // editing the text invalidates any prior pick
+        search.setCustomValidity('');
+        items.forEach(function (li) {
+            var hay = li.getAttribute('data-label').toLowerCase();
+            li.style.display = (!q || hay.indexOf(q) !== -1) ? '' : 'none';
+            li.style.background = '';
+        });
+        active = -1;
+        openList();
+    }
+    function pick(li) {
+        pk.value = li.getAttribute('data-pk');
+        search.value = li.getAttribute('data-label');
+        search.setCustomValidity('');
+        closeList();
+    }
+
+    search.addEventListener('input', filter);
+    search.addEventListener('focus', function () { if (!pk.value) filter(); });
+    items.forEach(function (li) {
+        li.addEventListener('mousedown', function (e) { e.preventDefault(); pick(li); });
+    });
+    search.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (list.style.display !== 'block') { filter(); return; }
+            var vis = visible();
+            active = e.key === 'ArrowDown' ? Math.min(active + 1, vis.length - 1) : Math.max(active - 1, 0);
+            highlight(vis);
+        } else if (e.key === 'Enter') {
+            var vis2 = visible();
+            if (list.style.display === 'block' && active >= 0 && vis2[active]) { e.preventDefault(); pick(vis2[active]); }
+        } else if (e.key === 'Escape') {
+            closeList();
+        }
+    });
+    document.addEventListener('click', function (e) {
+        if (e.target !== search && !list.contains(e.target)) closeList();
+    });
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            if (pk.value) return;                        // a valid agent is already selected
+            var typed = search.value.trim().toLowerCase();
+            var match = items.filter(function (li) { return li.getAttribute('data-label').toLowerCase() === typed; })[0];
+            if (match) { pk.value = match.getAttribute('data-pk'); return; }
+            e.preventDefault();
+            search.setCustomValidity('Pick an agent from the list.');
+            search.reportValidity();
+        });
+    }
+})();
+</script>
 
 {% endblock %}
