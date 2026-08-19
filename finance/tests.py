@@ -82,6 +82,44 @@ class CodingPartitionTests(TestCase):
         self.assertEqual(self._coded(ag), Decimal('4'))       # regular only, NOT 6
 
 
+class PerAgentAdherenceCapTests(TestCase):
+    """A per-agent adherence_bonus_max_mxn overrides the global adherence-bonus cap; the
+    proration-below-threshold rule is unchanged, and a blank override uses the global cap."""
+
+    def setUp(self):
+        # NR cap high so it never binds; global adherence cap 400 MXN at 40 h full.
+        self.s = _settings(
+            nr_cap_regular_hours=Decimal('99'), nr_ratio=Decimal('0.125'),
+            adherence_bonus_max_mxn=Decimal('400'), adherence_bonus_full_hours=Decimal('40'),
+        )
+
+    def _bonus(self, agent):
+        from finance.views import _get_billable_weekly_data
+        return _get_billable_weekly_data([agent], _WEEK, self.s)[agent.pk]['bonus_mxn']
+
+    def test_blank_override_uses_global_cap(self):
+        ag = _make_agent('cap_default')
+        _add_hours(ag, 40 * 3600, 0)            # 40 h worked → full bonus
+        _status(ag, 0, 'P')                     # qualifying status
+        self.assertEqual(self._bonus(ag), Decimal('400.00'))     # global cap
+
+    def test_agent_override_raises_cap(self):
+        ag = _make_agent('cap_1000')
+        ag.adherence_bonus_max_mxn = Decimal('1000')
+        ag.save()
+        _add_hours(ag, 40 * 3600, 0)            # 40 h → full bonus at the higher cap
+        _status(ag, 0, 'P')
+        self.assertEqual(self._bonus(ag), Decimal('1000.00'))    # per-agent cap
+
+    def test_override_still_prorates_below_threshold(self):
+        ag = _make_agent('cap_prorate')
+        ag.adherence_bonus_max_mxn = Decimal('1000')
+        ag.save()
+        _add_hours(ag, 20 * 3600, 0)            # 20/40 h → half of the 1000 cap
+        _status(ag, 0, 'P')
+        self.assertEqual(self._bonus(ag), Decimal('500.00'))     # same proration rule
+
+
 class NRCapCheck1Tests(TestCase):
     """check1: deduct NR hours above the absolute weekly cap."""
 

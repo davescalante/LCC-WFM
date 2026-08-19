@@ -117,6 +117,11 @@
                 {{ agent_form.admin_bonus_mxn }}
                 <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:0;">Leave blank to use global default (${{ default_admin_bonus_mxn }} MXN)</p>
             </div>
+            <div id="adherence-cap-row" style="margin-bottom:14px;{% if agent.is_official_admin %}display:none;{% endif %}">
+                <label>Adherence Bonus Cap (MXN)</label>
+                {{ agent_form.adherence_bonus_max_mxn }}
+                <p style="font-size:12px;color:#888;margin-top:-10px;margin-bottom:0;">Leave blank to use global default (${{ default_adherence_bonus_max_mxn }} MXN). Same proration rule; applies to regular (non-admin) agents.</p>
+            </div>
             {% endif %}
         </div>
         {% endif %}
