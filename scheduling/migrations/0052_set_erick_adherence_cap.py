@@ -27,7 +27,7 @@ def unset_erick_cap(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("scheduling", "0050_agent_adherence_bonus_max_mxn"),
+        ("scheduling", "0051_agent_adherence_bonus_max_mxn"),
     ]
 
     operations = [

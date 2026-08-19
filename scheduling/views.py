@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, OpenOTShift, OTShiftClaimRequest, OTCancellationRequest, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm
+from wfm.utils import get_monday_choices
 
 
 _ADMIN_ROLE_TYPES = {'supervisor', 'qa', 'cs', 'tester', 'sms_email', 'coordinator', 'trainer'}
@@ -441,6 +442,7 @@ def agent_detail(request, pk):
         'day_choices': ShiftTemplate.DAY_CHOICES,
         'supervisors': supervisors,
         'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
+        'monday_choices': get_monday_choices(),
         'tracker_data': tracker_data,
     })
 
@@ -1030,7 +1032,10 @@ def shift_week(request):
 
     if request.method == 'POST' and selected_agent_id:
         agent = get_object_or_404(Agent, pk=selected_agent_id)
-        edit_type = request.POST.get('edit_type', 'permanent')
+        edit_type = request.POST.get('edit_type', '')
+        if edit_type not in ('permanent', 'one_time', 'date_range'):
+            messages.error(request, "Please choose how to apply this change (Permanent, One-time, or Date range) before saving.")
+            return redirect(f"{reverse('shift_week')}?agent={selected_agent_id}&week_start={week_start.isoformat()}")
 
         def _day_configs():
             for i, day_date in enumerate(week_dates):
@@ -1066,7 +1071,19 @@ def shift_week(request):
                     partial_days.append(DAYS[i])
             if partial_days:
                 messages.warning(request, f"⚠ {', '.join(partial_days)} not saved — both a start and end time are required. Please re-enter those days.")
-            log_action(request.user, 'Saved recurring schedule', f'Permanent schedule for {agent} week of {week_start}', agent=agent)
+
+            # The new recurring schedule must actually show up starting eff_date. Clear any
+            # one-time Shift overrides sitting in its way, but ONLY within the week on screen
+            # (never touch another week) and only from eff_date forward.
+            _deleted_count, _deleted_detail = Shift.objects.filter(
+                agent=agent, date__in=week_dates, date__gte=eff_date,
+            ).delete()
+            overrides_replaced = _deleted_detail.get('scheduling.Shift', 0)
+
+            log_note = f'Permanent schedule for {agent} week of {week_start}'
+            if overrides_replaced:
+                log_note += f' — {overrides_replaced} one-time override(s) replaced'
+            log_action(request.user, 'Saved recurring schedule', log_note, agent=agent)
             messages.success(request, f"Recurring schedule saved for {agent}. This schedule will appear every week.")
 
         elif edit_type == 'one_time':
@@ -1150,6 +1167,42 @@ def shift_week(request):
     # ── GET: pre-fill from overrides first, then templates ───────────────────
     overrides = {}
     templates = {}
+    # Whether this agent has a recurring schedule AT ALL (any week, past or future) —
+    # drives which "How should this change be applied?" option defaults to checked.
+    # Distinct from has_any_template below, which is scoped to the week on screen.
+    agent_has_recurring = bool(
+        selected_agent_id and ShiftTemplate.objects.filter(agent_id=selected_agent_id).exists()
+    )
+
+    # Approved day-off requests a Permanent save could silently wipe — either the one-time
+    # Shift override the delete above removes, or a future recurring day-off ShiftTemplate
+    # that _save_shift_template's existing "supersede everything after this date" behavior
+    # would remove (pre-existing behavior, not introduced by the override delete). Rendered
+    # here so the JS confirm dialog can warn without a second round-trip to the server.
+    day_off_warnings = []
+    selected_agent_name = ''
+    if selected_agent_id:
+        _selected_agent = Agent.objects.select_related('user').filter(pk=selected_agent_id).first()
+        selected_agent_name = str(_selected_agent) if _selected_agent else ''
+        for r in AgentRequest.objects.filter(
+            agent_id=selected_agent_id, request_type='day_off_change',
+            day_off_type='one_time', status='approved', effective_date__in=week_dates,
+        ):
+            day_off_warnings.append({
+                'trigger_date': r.effective_date.isoformat(),
+                'label': f"{DAYS[r.effective_date.weekday()]}, {r.effective_date.strftime('%b %d')} — one-time",
+            })
+        for r in AgentRequest.objects.filter(
+            agent_id=selected_agent_id, request_type='day_off_change',
+            day_off_type='permanent', status='approved',
+            requested_day_off__isnull=False, effective_date__gte=week_start,
+        ):
+            eff_mon = r.effective_date - timedelta(days=r.effective_date.weekday())
+            day_off_warnings.append({
+                'trigger_date': eff_mon.isoformat(),
+                'label': f"{DAYS[r.requested_day_off]}s off, starting {eff_mon.strftime('%b %d')} — recurring",
+            })
+
     if selected_agent_id:
         for s in Shift.objects.filter(agent_id=selected_agent_id, date__in=week_dates):
             overrides[s.date] = s
@@ -1215,9 +1268,13 @@ def shift_week(request):
         'week_end': week_dates[-1],
         'days': days,
         'has_any_template': has_any_template,
+        'agent_has_recurring': agent_has_recurring,
+        'selected_agent_name': selected_agent_name,
+        'day_off_warnings': day_off_warnings,
         'week_start_iso': week_start.isoformat(),
         'today': today,
         'today_iso': today.isoformat(),
+        'current_week_start_iso': default_week_start.isoformat(),
     })
 
 
@@ -3213,14 +3270,35 @@ def _fill_request_from_post(ar, request):
 
     Returns an error message to show the user, or None on success.
     """
-    from django.utils.dateparse import parse_time
-
     req_type = ar.request_type
     if req_type == 'coding':
-        # Parse to time objects so summary()/strftime work on the fresh instance
+        # Same typed-HH:MM:SS parsing/validation as the Codings tab
+        # (adherence.views.add_coding_ajax/edit_coding_ajax): zero-pad the
+        # hour, seconds optional, end must be after start.
+        from datetime import time as time_cls
+
         ar.coding_date = request.POST.get('coding_date') or None
-        ar.coding_start_time = parse_time(request.POST.get('coding_start_time') or '')
-        ar.coding_end_time = parse_time(request.POST.get('coding_end_time') or '')
+        start_raw = (request.POST.get('coding_start_time') or '').strip()
+        end_raw = (request.POST.get('coding_end_time') or '').strip()
+
+        def _pad_time(s):
+            parts = s.split(':')
+            if parts:
+                parts[0] = parts[0].zfill(2)
+            return ':'.join(parts)
+
+        try:
+            start_t = time_cls.fromisoformat(_pad_time(start_raw)) if start_raw else None
+            end_t = time_cls.fromisoformat(_pad_time(end_raw)) if end_raw else None
+        except ValueError:
+            return "Invalid time format. Use H:MM:SS or HH:MM (e.g. 14:30 or 14:30:45)."
+
+        if start_t and end_t and end_t <= start_t:
+            return ("End time must be after start time. If the shift crossed "
+                    "midnight, submit it as two separate requests.")
+
+        ar.coding_start_time = start_t
+        ar.coding_end_time = end_t
     elif req_type == 'vacation':
         ar.vacation_start = request.POST.get('vacation_start') or None
         ar.vacation_end = request.POST.get('vacation_end') or request.POST.get('vacation_start') or None
@@ -3500,6 +3578,64 @@ def request_detail(request, pk):
     })
 
 
+def _auto_code_approved_request(request, ar, agent):
+    """Enter the coding for an approved coding request from a flagged agent.
+
+    Called after the shared approval bookkeeping has already run, so `ar` is
+    'approved' by the time we get here and the approval stands on its own.
+    Returns the message to show the approver, or None when no coding was
+    created (the approval is still valid either way).
+    """
+    from django.db import transaction
+    from adherence.views import create_coding
+
+    if not (ar.coding_date and ar.coding_start_time and ar.coding_end_time):
+        messages.warning(
+            request,
+            "Request approved, but the coding could not be created automatically — "
+            "this request is missing a date or a time. Please enter the coding "
+            "manually on the Codings tab."
+        )
+        return None
+
+    approver = request.user.get_full_name() or request.user.username
+
+    with transaction.atomic():
+        # A concurrent approval that already auto-coded leaves done_at set; the
+        # pending-status guard in request_approve blocks the sequential case.
+        locked = AgentRequest.objects.select_for_update().get(pk=ar.pk)
+        if locked.done_at is not None:
+            return None
+
+        coding = create_coding(
+            agent_id=agent.pk,
+            coding_date=ar.coding_date,
+            start_time=ar.coding_start_time,
+            end_time=ar.coding_end_time,
+            notes=f"Auto-coded from approved Coding Request #{ar.pk} — approved by {approver}",
+            is_admin_coding=agent.is_official_admin,
+        )
+
+        tab = 'Admin Codings' if coding.is_admin_coding else 'Codings'
+        times = (f'{coding.start_time.strftime("%H:%M:%S")}–'
+                 f'{coding.end_time.strftime("%H:%M:%S")}')
+        ar.status = 'done'
+        ar.done_by = request.user
+        ar.done_at = timezone.now()
+        ar.auto_action_log = (
+            f"Created coding on {tab}: {coding.date} {times}\n"
+            f"Marked Done automatically by the system — the coding was entered "
+            f"for this request, not manually confirmed by a supervisor."
+        )
+        ar.save(update_fields=['status', 'done_by', 'done_at', 'auto_action_log'])
+
+    log_action(request.user, 'Auto-coded approved coding request',
+               f'{agent} — {coding.date}: {times} ({tab})', agent=agent)
+
+    return (f"Request approved — the coding was created automatically on {tab} "
+            f"and the request is now Done.")
+
+
 @login_required
 def request_approve(request, pk):
     if request.method != 'POST':
@@ -3656,8 +3792,16 @@ def request_approve(request, pk):
     log_action(request.user, f'Approved {kind} request: {ar.get_request_type_display()}',
                ar.summary(), agent=agent)
 
+    # Agents flagged with can_auto_code_requests get their coding entered for
+    # them instead of a supervisor retyping it on the Codings tab.
+    auto_msg = None
+    if ar.request_type == 'coding' and agent.can_auto_code_requests:
+        auto_msg = _auto_code_approved_request(request, ar, agent)
+
     if ar.request_type == 'schedule_change' and 'Manual action required' in ar.auto_action_log:
         messages.warning(request, "Request approved. Manual update required — please update the agent's schedule.")
+    elif auto_msg:
+        messages.success(request, auto_msg)
     else:
         messages.success(request, "Request approved.")
     return redirect('request_detail', pk=pk)
@@ -3832,6 +3976,9 @@ def process_separation(request, pk):
             remove_date = date.fromisoformat(remove_str)
         except ValueError:
             errors.append("Invalid Remove from Adherence date.")
+        else:
+            if remove_date.weekday() != 0:
+                errors.append("Remove from Adherence date must be a Monday.")
 
     if errors:
         for e in errors:
@@ -3910,6 +4057,9 @@ def update_separation(request, pk):
                 remove_date = date.fromisoformat(remove_str)
             except ValueError:
                 errors.append("Invalid date.")
+            else:
+                if remove_date.weekday() != 0:
+                    errors.append("Remove from Adherence date must be a Monday.")
 
         if errors:
             for e in errors:

@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('scheduling', '0049_agent_adherence_start_date'),
+        ('scheduling', '0050_agent_can_auto_code_requests'),
     ]
 
     operations = [

@@ -1,4 +1,5 @@
 from datetime import date, time, timedelta
+from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -8,6 +9,7 @@ from adherence.models import AdherenceRecord, Coding
 from .models import (
     Agent, AgentRequest, OvertimeShift,
     OpenOTShift, OTShiftClaimRequest, OTCancellationRequest,
+    Shift, ShiftTemplate,
 )
 
 
@@ -117,8 +119,10 @@ class StaffRequestTests(TestCase):
             self.client.logout()
 
     def test_coding_request_approval_creates_no_coding(self):
-        """Coding requests are status-only: supervisors enter the exact coded
-        time manually, so neither approval nor mark-as-done creates a Coding."""
+        """Without can_auto_code_requests (the default), coding requests stay
+        status-only: supervisors enter the exact coded time manually, so neither
+        approval nor mark-as-done creates a Coding. The flagged case — where
+        approval does auto-create it — is covered by AutoCodeApprovalTests."""
         admin = _make_agent('offadmin', role_type='qa', supervisor=self.boss, official=True)
         self._login(admin)
         self.client.post(reverse('staff_my_requests'), {
@@ -141,6 +145,44 @@ class StaffRequestTests(TestCase):
         ar.refresh_from_db()
         self.assertEqual(ar.status, 'done')
         self.assertEqual(Coding.objects.count(), 0)
+
+    def test_coding_request_preserves_seconds(self):
+        self._login(self.coordinator)
+        self.client.post(reverse('staff_my_requests'), {
+            'request_type': 'coding',
+            'coding_date': date.today().isoformat(),
+            'coding_start_time': '09:00:00',
+            'coding_end_time': '11:30:45',
+        })
+        ar = AgentRequest.objects.get(agent=self.coordinator, request_type='coding')
+        self.assertEqual(ar.coding_start_time, time(9, 0, 0))
+        self.assertEqual(ar.coding_end_time, time(11, 30, 45))
+
+    def test_coding_request_seconds_optional_defaults_to_zero(self):
+        self._login(self.coordinator)
+        self.client.post(reverse('staff_my_requests'), {
+            'request_type': 'coding',
+            'coding_date': date.today().isoformat(),
+            'coding_start_time': '09:00',
+            'coding_end_time': '11:30',
+        })
+        ar = AgentRequest.objects.get(agent=self.coordinator, request_type='coding')
+        self.assertEqual(ar.coding_start_time, time(9, 0, 0))
+        self.assertEqual(ar.coding_end_time, time(11, 30, 0))
+
+    def test_coding_request_invalid_time_rejected_server_side(self):
+        """Out-of-range hour/minute always fails, regardless of Python version
+        (unlike a padding-only issue, whose acceptance can vary by version)."""
+        self._login(self.coordinator)
+        self.client.post(reverse('staff_my_requests'), {
+            'request_type': 'coding',
+            'coding_date': date.today().isoformat(),
+            'coding_start_time': '25:99:00',
+            'coding_end_time': '11:30',
+        })
+        self.assertFalse(
+            AgentRequest.objects.filter(agent=self.coordinator, request_type='coding').exists()
+        )
 
     def test_list_view_only_clears_badge_for_assigned_supervisor(self):
         ar = self._submit_vacation(self.coordinator)
@@ -1024,6 +1066,111 @@ class AgentAdherenceStartDateValidationTests(TestCase):
         self.assertIsNone(target.adherence_start_date)
 
 
+class AgentSeparationMondayValidationTests(TestCase):
+    """remove_from_adherence_date must be a Monday, enforced server-side in
+    process_separation and update_separation (both hand-parse request.POST —
+    there's no Form for AgentSeparation — so each needs its own check, added
+    right after each view's existing date.fromisoformat parse)."""
+
+    MONDAY = date(2025, 1, 6)
+    TUESDAY = date(2025, 1, 7)
+    LAST_DAY = date(2025, 1, 2)
+
+    def setUp(self):
+        self.admin = _make_agent('sepvalidator', role_type='supervisor')
+        self.client.login(username='sepvalidator', password='pw')
+
+    def test_process_separation_accepts_monday(self):
+        target = _make_agent('sepokmon', role='agent', role_type='regular_agent')
+        resp = self.client.post(reverse('process_separation', args=[target.pk]), {
+            'separation_status': 'finalized',
+            'separation_type': 'quit',
+            'last_day_worked': self.LAST_DAY.isoformat(),
+            'remove_from_adherence_date': self.MONDAY.isoformat(),
+            'confirm': 'on',
+        })
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        sep = AgentSeparation.objects.get(agent=target)
+        self.assertEqual(sep.status, 'finalized')
+        self.assertEqual(sep.remove_from_adherence_date, self.MONDAY)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')
+
+    def test_process_separation_rejects_non_monday(self):
+        target = _make_agent('sepbadtue', role='agent', role_type='regular_agent')
+        resp = self.client.post(reverse('process_separation', args=[target.pk]), {
+            'separation_status': 'finalized',
+            'separation_type': 'quit',
+            'last_day_worked': self.LAST_DAY.isoformat(),
+            'remove_from_adherence_date': self.TUESDAY.isoformat(),
+            'confirm': 'on',
+        }, follow=True)
+        self.assertContains(resp, 'must be a Monday')
+        self.assertFalse(AgentSeparation.objects.filter(agent=target).exists())
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'active')
+
+    def test_update_separation_finalize_rejects_non_monday(self):
+        target = _make_agent('sepupdbad', role='agent', role_type='regular_agent')
+        sep = AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY, processed_by=self.admin.user,
+        )
+        resp = self.client.post(reverse('update_separation', args=[target.pk]), {
+            'action': 'finalize',
+            'remove_from_adherence_date': self.TUESDAY.isoformat(),
+            'confirm': 'on',
+        }, follow=True)
+        self.assertContains(resp, 'must be a Monday')
+        sep.refresh_from_db()
+        self.assertEqual(sep.status, 'in_progress')
+        self.assertIsNone(sep.remove_from_adherence_date)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'active')
+
+    def test_update_separation_finalize_accepts_monday(self):
+        target = _make_agent('sepupdok', role='agent', role_type='regular_agent')
+        sep = AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY, processed_by=self.admin.user,
+        )
+        resp = self.client.post(reverse('update_separation', args=[target.pk]), {
+            'action': 'finalize',
+            'remove_from_adherence_date': self.MONDAY.isoformat(),
+            'confirm': 'on',
+        })
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        sep.refresh_from_db()
+        self.assertEqual(sep.status, 'finalized')
+        self.assertEqual(sep.remove_from_adherence_date, self.MONDAY)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')
+
+    def test_legacy_non_monday_separation_untouched_by_cancel(self):
+        """A pre-existing in_progress separation with a legacy non-Monday date
+        (created directly via the ORM, as production rows already are) must still
+        load and be actionable. There's no re-finalize/re-submit path that would
+        replay that stored value through the new check, so the closest reachable
+        proof is: the page still renders, and the 'cancel' action — which never
+        touches remove_from_adherence_date — still works and leaves it untouched."""
+        target = _make_agent('seplegacy', role='agent', role_type='regular_agent')
+        sep = AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY, remove_from_adherence_date=self.TUESDAY,
+            processed_by=self.admin.user,
+        )
+        resp = self.client.get(reverse('agent_detail', args=[target.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.post(reverse('update_separation', args=[target.pk]), {
+            'action': 'cancel',
+        })
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        sep.refresh_from_db()
+        self.assertEqual(sep.status, 'cancelled')
+        self.assertEqual(sep.remove_from_adherence_date, self.TUESDAY)
+
+
 class AgentFormFinanceGatingTests(TestCase):
     """The Finance fields (pay/billing rate, admin bonus) and the Super Admin flag are
     stripped from the user form server-side for non-super-admins — not merely hidden."""
@@ -1047,3 +1194,650 @@ class AgentFormFinanceGatingTests(TestCase):
         f = AgentForm(data={'hourly_rate': '999', 'is_super_admin': 'on'}, can_grant_admin_tabs=False)
         self.assertNotIn('hourly_rate', f.fields)
         self.assertNotIn('is_super_admin', f.fields)
+
+
+class AgentFormAutoCodeGatingTests(TestCase):
+    """can_auto_code_requests is gated the same way as can_manage_loans /
+    can_access_admin_tabs: popped from the form entirely for non-super-admins,
+    so a crafted POST can't set it, and — because the field is simply absent
+    rather than rendered-and-unchecked — an already-True value survives an
+    edit by a non-super-admin instead of being reset to False."""
+
+    def setUp(self):
+        self.non_super = _make_agent('gatestaff', role_type='supervisor')
+        self.super_admin = _make_agent('gatesuper', role_type='supervisor')
+        self.super_admin.is_super_admin = True
+        self.super_admin.save(update_fields=['is_super_admin'])
+
+    def _agent_payload(self, username, agent_name=None, **overrides):
+        payload = {
+            'username': username,
+            'email': f'{username}@example.com',
+            'legal_name': agent_name or 'Test Agent',
+            'password': '',
+            'agent_name': agent_name or 'Test Agent',
+            'employee_id': '',
+            'role': 'agent',
+            'role_type': 'regular_agent',
+            'status': 'active',
+            'employer': 'Infinity',
+            'billing_status': 'Not Billed',
+            'phone_country_code': '+1',
+            'phone_number': '',
+            'teams_password': '',
+            'hourly_rate': '62.50',
+            'billing_rate_usd': '',
+            'admin_bonus_mxn': '',
+            'notes': '',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_non_super_create_discards_auto_code_flag(self):
+        self.client.login(username='gatestaff', password='pw')
+        payload = self._agent_payload('autocodecreate1', can_auto_code_requests='on')
+        resp = self.client.post(reverse('agent_create'), payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        agent = Agent.objects.get(user__username='autocodecreate1')
+        self.assertFalse(agent.can_auto_code_requests)
+
+    def test_non_super_edit_preserves_existing_auto_code_flag(self):
+        target = _make_agent('autocodeedit1', role='agent', role_type='regular_agent')
+        target.can_auto_code_requests = True
+        target.save(update_fields=['can_auto_code_requests'])
+
+        self.client.login(username='gatestaff', password='pw')
+        # A non-super-admin's rendered form has no checkbox for this field at
+        # all, so a real submission from them omits the key entirely — this
+        # must leave the existing True value untouched, not reset it to False.
+        payload = self._agent_payload('autocodeedit1', agent_name=target.agent_name)
+        resp = self.client.post(reverse('agent_edit', args=[target.pk]), payload)
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        target.refresh_from_db()
+        self.assertTrue(target.can_auto_code_requests)
+
+    def test_super_admin_can_set_auto_code_flag_on_create_and_edit(self):
+        self.client.login(username='gatesuper', password='pw')
+
+        create_payload = self._agent_payload('autocodecreate2', can_auto_code_requests='on')
+        resp = self.client.post(reverse('agent_create'), create_payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        created = Agent.objects.get(user__username='autocodecreate2')
+        self.assertTrue(created.can_auto_code_requests)
+
+        target = _make_agent('autocodeedit2', role='agent', role_type='regular_agent')
+        self.assertFalse(target.can_auto_code_requests)
+        edit_payload = self._agent_payload(
+            'autocodeedit2', agent_name=target.agent_name, can_auto_code_requests='on')
+        resp = self.client.post(reverse('agent_edit', args=[target.pk]), edit_payload)
+        self.assertRedirects(resp, reverse('agent_detail', args=[target.pk]))
+        target.refresh_from_db()
+        self.assertTrue(target.can_auto_code_requests)
+
+
+class ShiftSaveTests(TestCase):
+    """Shifts tab save path (shift_week: Permanent / One-time / Specific Date). Covers the
+    retroactive-recurring-save bug (a stale Shift override shadowed the new template so the
+    week being edited never visibly changed), the past-week Permanent-mode default bug, and
+    the Phase 2 approved-day-off warning data. All week math is relative to date.today() since
+    the view itself resolves "today" at request time — there is no fixed historical week that
+    would exercise the past/current/future branches correctly."""
+
+    def setUp(self):
+        self.boss = _make_agent('shiftboss', role_type='supervisor')
+        self.agent = _make_agent('shiftagent', role='agent', role_type='regular_agent')
+        self.client.login(username='shiftboss', password='pw')
+        self.today = date.today()
+        self.week = self.today - timedelta(days=self.today.weekday())
+        self.prev_week = self.week - timedelta(days=7)
+        self.next_week = self.week + timedelta(days=7)
+
+    # ---------- helpers ----------
+
+    def _seed_recurring(self, agent, eff_from, off_days, start='06:00', end='14:00'):
+        for dow in range(7):
+            ShiftTemplate.objects.create(
+                agent=agent, day_of_week=dow,
+                start_time=None if dow in off_days else start,
+                end_time=None if dow in off_days else end,
+                is_off=dow in off_days, effective_from=eff_from,
+            )
+
+    def _day_payload(self, off_days, start='06:00', end='14:00'):
+        payload = {}
+        for i in range(7):
+            if i in off_days:
+                payload[f'day_{i}_off'] = 'on'
+                payload[f'day_{i}_start'] = ''
+                payload[f'day_{i}_end'] = ''
+            else:
+                payload[f'day_{i}_start'] = start
+                payload[f'day_{i}_end'] = end
+            payload[f'day_{i}_notes'] = ''
+        return payload
+
+    def _post(self, agent, week_start, edit_type, **extra):
+        body = {'agent': agent.pk, 'week_start': week_start.isoformat(), 'edit_type': edit_type}
+        body.update(extra)
+        return self.client.post(reverse('shift_week'), body)
+
+    def _week_cells(self, agent, week_start):
+        """[(kind, is_off, start_time, end_time), ...] for the 7 days of week_start, read
+        straight from the Shifts grid's own context — the same resolution the grid renders."""
+        resp = self.client.get(reverse('shift_list') + f'?week_start={week_start.isoformat()}')
+        row = next(r for r in resp.context['rows'] if r['agent'].pk == agent.pk)
+        out = []
+        for cell in row['cells']:
+            if cell['shift']:
+                s = cell['shift']
+                out.append(('override', s.is_off, s.start_time, s.end_time))
+            elif cell['template']:
+                t = cell['template']
+                out.append(('template', t.is_off, t.start_time, t.end_time))
+            else:
+                out.append(('empty', None, None, None))
+        return out
+
+    def _template_snapshot(self, agent):
+        return sorted(
+            (t.day_of_week, t.is_off, t.start_time, t.end_time, t.effective_from, t.effective_until)
+            for t in ShiftTemplate.objects.filter(agent=agent)
+        )
+
+    # ---------- the core scenario ----------
+
+    def test_recurring_save_flips_current_week_all_seven_days(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})  # Sat+Sun off
+        self._post(self.agent, self.week, 'permanent',
+                   effective_date=self.week.isoformat(), **self._day_payload({1, 6}))  # Tue+Sun off
+
+        current = self._week_cells(self.agent, self.week)
+        expected_off = [False, True, False, False, False, False, True]  # Mon..Sun, Tue+Sun off
+        self.assertEqual([c[1] for c in current], expected_off)
+        for kind, is_off, start, end in current:
+            self.assertEqual(kind, 'template')
+            if not is_off:
+                self.assertEqual((start, end), (time(6, 0), time(14, 0)))
+
+        prior = self._week_cells(self.agent, self.prev_week)
+        old_expected_off = [False, False, False, False, False, True, True]  # Sat+Sun off
+        self.assertEqual([c[1] for c in prior], old_expected_off)
+        for kind, is_off, start, end in prior:
+            self.assertEqual(kind, 'template')
+            if not is_off:
+                self.assertEqual((start, end), (time(6, 0), time(14, 0)))
+
+        following = self._week_cells(self.agent, self.next_week)
+        self.assertEqual([c[1] for c in following], expected_off)
+
+    # ---------- the production shape (Daniela) ----------
+
+    def test_recurring_save_overrides_stale_shift_rows_in_current_week(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        # Stale one-time overrides across the whole current week, still carrying the OLD
+        # schedule — exactly the shape left behind by Copy-week / quick-edit / a prior save.
+        for i in range(7):
+            Shift.objects.create(
+                agent=self.agent, date=self.week + timedelta(days=i),
+                start_time=time(6, 0), end_time=time(14, 0), is_off=i in (5, 6),
+            )
+
+        self._post(self.agent, self.week, 'permanent',
+                   effective_date=self.week.isoformat(), **self._day_payload({1, 6}))
+
+        current = self._week_cells(self.agent, self.week)
+        self.assertEqual([c[1] for c in current], [False, True, False, False, False, False, True])
+        for kind, is_off, start, end in current:
+            self.assertEqual(kind, 'template', "a stale override is still shadowing the new schedule")
+
+    # ---------- later-week override survives ----------
+
+    def test_later_week_one_time_override_survives_recurring_save(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        survivor_date = self.next_week + timedelta(days=2)
+        Shift.objects.create(agent=self.agent, date=survivor_date,
+                             start_time=time(10, 0), end_time=time(18, 0), is_off=False)
+
+        self._post(self.agent, self.week, 'permanent',
+                   effective_date=self.week.isoformat(), **self._day_payload({1, 6}))
+
+        survivor = Shift.objects.get(agent=self.agent, date=survivor_date)
+        self.assertEqual((survivor.start_time, survivor.end_time), (time(10, 0), time(18, 0)))
+        following = self._week_cells(self.agent, self.next_week)
+        self.assertEqual(following[2], ('override', False, time(10, 0), time(18, 0)))
+
+    # ---------- effective date = today pins existing partial-week behavior ----------
+
+    def test_recurring_effective_today_leaves_earlier_days_on_old_schedule(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        self._post(self.agent, self.week, 'permanent',
+                   effective_date=self.today.isoformat(), **self._day_payload({1, 6}))
+
+        cells = self._week_cells(self.agent, self.week)
+        week_dates = [self.week + timedelta(days=i) for i in range(7)]
+        for day_date, (kind, is_off, start, end) in zip(week_dates, cells):
+            self.assertEqual(kind, 'template')
+            if day_date < self.today:
+                self.assertEqual(is_off, day_date.weekday() in (5, 6))       # old: Sat+Sun off
+            else:
+                self.assertEqual(is_off, day_date.weekday() in (1, 6))       # new: Tue+Sun off
+
+    # ---------- one-time leaves templates untouched ----------
+
+    def test_one_time_save_leaves_templates_untouched(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        before = self._template_snapshot(self.agent)
+
+        self._post(self.agent, self.week, 'one_time', **self._day_payload({1, 6}))
+
+        self.assertEqual(self._template_snapshot(self.agent), before)
+        prior = self._week_cells(self.agent, self.prev_week)
+        self.assertEqual([c[1] for c in prior], [False, False, False, False, False, True, True])
+        following = self._week_cells(self.agent, self.next_week)
+        self.assertEqual([c[1] for c in following], [False, False, False, False, False, True, True])
+        current = self._week_cells(self.agent, self.week)
+        self.assertEqual([c[1] for c in current], [False, True, False, False, False, False, True])
+        self.assertTrue(all(kind == 'override' for kind, *_ in current))
+
+    def test_one_time_on_past_week_writes_only_that_week_no_templates(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        before_count = ShiftTemplate.objects.filter(agent=self.agent).count()
+
+        self._post(self.agent, self.prev_week, 'one_time', **self._day_payload({1, 6}))
+
+        self.assertEqual(ShiftTemplate.objects.filter(agent=self.agent).count(), before_count)
+        self.assertEqual(
+            Shift.objects.filter(agent=self.agent,
+                                 date__range=(self.prev_week, self.prev_week + timedelta(days=6))).count(),
+            7,
+        )
+        self.assertFalse(Shift.objects.filter(agent=self.agent, date__gte=self.week).exists())
+
+    # ---------- specific date (range) ----------
+
+    def test_date_range_applies_to_every_week_then_falls_back(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        before = self._template_snapshot(self.agent)
+
+        self._post(self.agent, self.week, 'date_range',
+                   range_start=self.week.isoformat(), range_end=self.next_week.isoformat(),
+                   **self._day_payload({1, 6}))
+
+        self.assertEqual(self._template_snapshot(self.agent), before)
+        for wk in (self.week, self.next_week):
+            cells = self._week_cells(self.agent, wk)
+            self.assertEqual([c[1] for c in cells], [False, True, False, False, False, False, True])
+            self.assertTrue(all(kind == 'override' for kind, *_ in cells))
+
+        after_range = self._week_cells(self.agent, self.next_week + timedelta(days=7))
+        self.assertEqual([c[1] for c in after_range], [False, False, False, False, False, True, True])
+        self.assertTrue(all(kind == 'template' for kind, *_ in after_range))
+
+    def test_date_range_leaves_earlier_weeks_untouched(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+
+        self._post(self.agent, self.week, 'date_range',
+                   range_start=self.week.isoformat(), range_end=self.next_week.isoformat(),
+                   **self._day_payload({1, 6}))
+
+        prior = self._week_cells(self.agent, self.prev_week)
+        self.assertEqual([c[1] for c in prior], [False, False, False, False, False, True, True])
+        self.assertTrue(all(kind == 'template' for kind, *_ in prior))
+        self.assertFalse(Shift.objects.filter(
+            agent=self.agent, date__range=(self.prev_week, self.prev_week + timedelta(days=6))
+        ).exists())
+
+    # ---------- Bug 2a regression: past-week radio default ----------
+
+    def test_opening_past_week_defaults_to_one_time_not_permanent(self):
+        self._seed_recurring(self.agent, self.week, off_days={5, 6})  # schedule starts THIS week
+        resp = self.client.get(
+            reverse('shift_week') + f'?agent={self.agent.pk}&week_start={self.prev_week.isoformat()}'
+        )
+        html = resp.content.decode()
+        self.assertTrue(resp.context['agent_has_recurring'])
+        self.assertIn('value="one_time"\n                    checked', html)
+        self.assertNotIn('value="permanent"\n                    checked', html)
+
+    def test_new_agent_with_no_schedule_defaults_to_permanent(self):
+        blank_agent = _make_agent('blankagent', role='agent', role_type='regular_agent')
+        resp = self.client.get(
+            reverse('shift_week') + f'?agent={blank_agent.pk}&week_start={self.week.isoformat()}'
+        )
+        html = resp.content.decode()
+        self.assertFalse(resp.context['agent_has_recurring'])
+        self.assertIn('value="permanent"\n                    checked', html)
+        self.assertNotIn('value="one_time"\n                    checked', html)
+
+    # ---------- Bug 2b regression: server-side edit_type validation ----------
+
+    def test_missing_edit_type_writes_nothing(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        before_count = ShiftTemplate.objects.filter(agent=self.agent).count()
+        body = {'agent': self.agent.pk, 'week_start': self.week.isoformat(),
+               'effective_date': self.week.isoformat(), **self._day_payload({1, 6})}
+        resp = self.client.post(reverse('shift_week'), body, follow=True)
+        self.assertEqual(ShiftTemplate.objects.filter(agent=self.agent).count(), before_count)
+        self.assertTrue(any('choose how to apply' in str(m).lower() for m in resp.context['messages']))
+
+    def test_garbage_edit_type_writes_nothing(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        before_count = ShiftTemplate.objects.filter(agent=self.agent).count()
+        resp = self.client.post(reverse('shift_week'), {
+            'agent': self.agent.pk, 'week_start': self.week.isoformat(), 'edit_type': 'sometotallybadvalue',
+            'effective_date': self.week.isoformat(), **self._day_payload({1, 6}),
+        }, follow=True)
+        self.assertEqual(ShiftTemplate.objects.filter(agent=self.agent).count(), before_count)
+        self.assertTrue(any('choose how to apply' in str(m).lower() for m in resp.context['messages']))
+
+    # ---------- ripple guard: the Adherence engine sees the same schedule ----------
+
+    def test_build_maps_resolves_new_schedule_after_recurring_save(self):
+        from adherence.views import _build_maps
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        self._post(self.agent, self.week, 'permanent',
+                  effective_date=self.week.isoformat(), **self._day_payload({1, 6}))
+
+        week_dates = [self.week + timedelta(days=i) for i in range(7)]
+        shift_map = _build_maps([self.agent], week_dates)[0]
+        tuesday = self.week + timedelta(days=1)
+        saturday = self.week + timedelta(days=5)
+        tue_shift = shift_map.get((self.agent.pk, tuesday))
+        sat_shift = shift_map.get((self.agent.pk, saturday))
+        self.assertIsNotNone(tue_shift)
+        self.assertTrue(tue_shift.is_off, "Adherence engine still sees the OLD schedule on Tuesday")
+        self.assertIsNotNone(sat_shift)
+        self.assertFalse(sat_shift.is_off, "Adherence engine still sees the OLD schedule on Saturday")
+
+    # ---------- adherence bonus invariance ----------
+
+    def test_adherence_bonus_unaffected_by_schedule_change(self):
+        from adherence.views import _build_maps, _build_rows
+        from finance.models import BillingSettings
+
+        for i in range(5):
+            AdherenceRecord.objects.create(
+                agent=self.agent, date=self.week + timedelta(days=i),
+                status='P', actual_hours=Decimal('7.5'),
+            )
+        settings = BillingSettings.get()
+        week_dates = [self.week + timedelta(days=i) for i in range(7)]
+
+        def snapshot():
+            maps = _build_maps([self.agent], week_dates)
+            row = _build_rows([self.agent], week_dates, *maps, settings)[0]
+            return row['bonus_mxn'], row['final_adjusted']
+
+        self._seed_recurring(self.agent, self.week - timedelta(days=28), off_days={5, 6})
+        before = snapshot()
+
+        ShiftTemplate.objects.filter(agent=self.agent).delete()
+        self._seed_recurring(self.agent, self.week - timedelta(days=28), off_days={1, 6})
+        after = snapshot()
+
+        self.assertEqual(before, after)
+
+    # ---------- nomina admin-bonus proration ----------
+
+    def test_admin_bonus_prorate_is_one_without_vacation_regardless_of_schedule(self):
+        from nomina.views import _admin_bonus_factors
+        admin = _make_agent('nominaadmin', role='admin', role_type='supervisor', official=True)
+        week_dates = [self.week + timedelta(days=i) for i in range(7)]
+
+        self._seed_recurring(admin, self.week - timedelta(days=28), off_days={5, 6})
+        sched, worked = _admin_bonus_factors([admin], week_dates)[admin.pk]
+        self.assertEqual(sched, worked)
+        self.assertEqual(Decimal(worked) / Decimal(sched), Decimal('1'))
+
+        ShiftTemplate.objects.filter(agent=admin).delete()
+        self._seed_recurring(admin, self.week - timedelta(days=28), off_days={1, 3, 5, 6})
+        sched2, worked2 = _admin_bonus_factors([admin], week_dates)[admin.pk]
+        self.assertEqual(sched2, worked2)
+        self.assertEqual(Decimal(worked2) / Decimal(sched2), Decimal('1'))
+
+    # ---------- Phase 2: override delete is scoped to the week on screen ----------
+
+    def test_override_delete_scoped_to_week_on_screen_only(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        for i in range(7):
+            Shift.objects.create(agent=self.agent, date=self.week + timedelta(days=i),
+                                 start_time=time(6, 0), end_time=time(14, 0), is_off=i in (5, 6))
+        outside = Shift.objects.create(agent=self.agent, date=self.next_week + timedelta(days=2),
+                                       start_time=time(10, 0), end_time=time(18, 0))
+
+        self._post(self.agent, self.week, 'permanent',
+                  effective_date=self.week.isoformat(), **self._day_payload({1, 6}))
+
+        self.assertEqual(
+            Shift.objects.filter(agent=self.agent,
+                                 date__range=(self.week, self.week + timedelta(days=6))).count(),
+            0,
+        )
+        self.assertTrue(Shift.objects.filter(pk=outside.pk).exists())
+
+    # ---------- Phase 2: approved day-off warning data ----------
+
+    def test_day_off_warnings_includes_approved_one_time_in_week(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        off_date = self.week + timedelta(days=1)
+        AgentRequest.objects.create(
+            agent=self.agent, request_type='day_off_change', status='approved',
+            day_off_type='one_time', effective_date=off_date,
+        )
+        resp = self.client.get(
+            reverse('shift_week') + f'?agent={self.agent.pk}&week_start={self.week.isoformat()}'
+        )
+        warnings = resp.context['day_off_warnings']
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]['trigger_date'], off_date.isoformat())
+
+    def test_day_off_warnings_includes_future_recurring_request(self):
+        self._seed_recurring(self.agent, self.week - timedelta(days=56), off_days={5, 6})
+        future_eff = self.week + timedelta(days=21)
+        AgentRequest.objects.create(
+            agent=self.agent, request_type='day_off_change', status='approved',
+            day_off_type='permanent', effective_date=future_eff, requested_day_off=3,
+        )
+        resp = self.client.get(
+            reverse('shift_week') + f'?agent={self.agent.pk}&week_start={self.week.isoformat()}'
+        )
+        warnings = resp.context['day_off_warnings']
+        self.assertEqual(len(warnings), 1)
+        eff_mon = future_eff - timedelta(days=future_eff.weekday())
+        self.assertEqual(warnings[0]['trigger_date'], eff_mon.isoformat())
+
+    def test_day_off_warnings_excludes_pending_and_rejected(self):
+        off_date = self.week + timedelta(days=1)
+        AgentRequest.objects.create(
+            agent=self.agent, request_type='day_off_change', status='pending',
+            day_off_type='one_time', effective_date=off_date,
+        )
+        AgentRequest.objects.create(
+            agent=self.agent, request_type='day_off_change', status='rejected',
+            day_off_type='one_time', effective_date=off_date + timedelta(days=1),
+        )
+        resp = self.client.get(
+            reverse('shift_week') + f'?agent={self.agent.pk}&week_start={self.week.isoformat()}'
+        )
+        self.assertEqual(resp.context['day_off_warnings'], [])
+
+    def test_both_warning_triggers_can_be_present_together_independently(self):
+        """The past-dated trigger and the approved-day-off trigger fire independently in the
+        page's own JS, gated on separate data. This exercises the server side of that: a past
+        week (whose week_start_iso sorts before current_week_start_iso, so a default Permanent
+        save on it is past-dated) that ALSO has an approved day-off in range — both pieces of
+        data must be present at once, neither suppressing the other. The JS trigger logic
+        itself isn't exercised here (no JS test runner in this project); this confirms the data
+        both triggers read is assembled together rather than one crowding out the other."""
+        past_week = self.week - timedelta(days=56)
+        self._seed_recurring(self.agent, past_week - timedelta(days=28), off_days={5, 6})
+        off_date = past_week + timedelta(days=1)
+        AgentRequest.objects.create(
+            agent=self.agent, request_type='day_off_change', status='approved',
+            day_off_type='one_time', effective_date=off_date,
+        )
+        resp = self.client.get(
+            reverse('shift_week') + f'?agent={self.agent.pk}&week_start={past_week.isoformat()}'
+        )
+        self.assertLess(resp.context['week_start_iso'], resp.context['current_week_start_iso'])
+        self.assertEqual(len(resp.context['day_off_warnings']), 1)
+
+
+from django.contrib.messages import get_messages
+
+from adherence.models import DailyUpload, DailyAgentHours
+from finance.models import BillingSettings
+
+
+class AutoCodeApprovalTests(TestCase):
+    """Approving a coding request from an agent with can_auto_code_requests=True
+    creates the Coding through the shared adherence.views.create_coding path and
+    marks the request Done. Agents without the flag are unaffected — that case is
+    pinned by StaffRequestTests.test_coding_request_approval_creates_no_coding."""
+
+    CODING_DATE = date(2025, 1, 6)   # a fixed Monday, keeps the NR math deterministic
+
+    def setUp(self):
+        self.boss = _make_agent('autoboss', role_type='supervisor')
+        BillingSettings.objects.get_or_create(pk=1)   # nr_ratio defaults to 0.1250
+
+    def _flagged_agent(self, username, official=False):
+        agent = _make_agent(username, role_type='qa' if official else 'coordinator',
+                            supervisor=self.boss, official=official)
+        agent.can_auto_code_requests = True
+        agent.save(update_fields=['can_auto_code_requests'])
+        return agent
+
+    def _request(self, agent, start=time(9, 0), end=time(11, 0), coding_date=None):
+        return AgentRequest.objects.create(
+            agent=agent, request_type='coding', is_staff_request=True,
+            assigned_supervisor=self.boss,
+            coding_date=self.CODING_DATE if coding_date is None else coding_date,
+            coding_start_time=start, coding_end_time=end,
+        )
+
+    def _approve(self, ar):
+        self.client.login(username='autoboss', password='pw')
+        return self.client.post(reverse('request_approve', kwargs={'pk': ar.pk}))
+
+    def test_flagged_agent_approval_creates_regular_coding(self):
+        agent = self._flagged_agent('autoreg')
+        ar = self._request(agent)
+        self._approve(ar)
+
+        coding = Coding.objects.get(agent=agent)
+        self.assertFalse(coding.is_admin_coding)
+        self.assertEqual(coding.date, self.CODING_DATE)
+        self.assertEqual(coding.start_time, time(9, 0))
+        self.assertEqual(coding.end_time, time(11, 0))
+        self.assertIn(f'Coding Request #{ar.pk}', coding.notes)
+        self.assertIn('autoboss', coding.notes)   # approver recorded
+
+    def test_flagged_agent_request_is_marked_done_as_system_completed(self):
+        agent = self._flagged_agent('autodone')
+        ar = self._request(agent)
+        self._approve(ar)
+
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'done')
+        self.assertEqual(ar.reviewed_by.username, 'autoboss')   # shared tail still ran
+        self.assertIsNotNone(ar.reviewed_at)
+        self.assertFalse(ar.agent_read)                          # requester badge, from the tail
+        self.assertEqual(ar.done_by.username, 'autoboss')
+        self.assertIsNotNone(ar.done_at)
+        self.assertIn('automatically', ar.auto_action_log)
+        self.assertIn('not manually confirmed', ar.auto_action_log)
+
+    def test_auto_code_triggers_the_real_actual_hours_recompute(self):
+        """The coding must go through create_coding so _refresh_actual_hours runs.
+
+        login 8h, not-ready 2h. Without the 2h coding: allowance = 12.5% of 8h =
+        1h, excess NR = 1h, actual = 7.0h. With it: allowance = 12.5% of 10h =
+        1.25h, excess NR = 0.75h, actual = 7.25h. Only a recompute that includes
+        the new coding can produce 7.25 — a bare Coding.objects.create() leaves 7.0.
+        """
+        agent = self._flagged_agent('autohours')
+        Five9Profile.objects.create(agent=agent, five9_username='autohours.acct',
+                                    billable=True, is_primary=True)
+        upload = DailyUpload.objects.create(date=self.CODING_DATE, row_count=1)
+        DailyAgentHours.objects.create(
+            upload=upload, agent=agent, five9_username='autohours.acct',
+            login_seconds=28800, not_ready_seconds=7200,
+        )
+
+        self._approve(self._request(agent))
+
+        record = AdherenceRecord.objects.get(agent=agent, date=self.CODING_DATE)
+        self.assertEqual(record.actual_hours, Decimal('7.25'))
+
+    def test_official_admin_auto_codes_into_admin_codings(self):
+        agent = self._flagged_agent('autoadmin', official=True)
+        self._approve(self._request(agent))
+
+        coding = Coding.objects.get(agent=agent)
+        self.assertTrue(coding.is_admin_coding)   # hard partition respected
+
+    def test_auto_created_admin_coding_matches_admin_codings_tab_row(self):
+        """An auto-created admin Coding must be indistinguishable from one entered
+        on the Admin Codings tab, except for the provenance text in notes."""
+        agent = self._flagged_agent('autoadmincmp', official=True)
+        self._approve(self._request(agent))
+        auto = Coding.objects.get(agent=agent)
+
+        # Exactly how finance.views.add_admin_coding_ajax creates its row.
+        manual = Coding.objects.create(
+            agent_id=agent.pk, date=self.CODING_DATE.isoformat(),
+            start_time='09:00:00', end_time='11:00:00',
+            notes='', is_admin_coding=True,
+        )
+        manual.refresh_from_db()
+
+        for field in ('agent_id', 'date', 'start_time', 'end_time', 'is_admin_coding'):
+            self.assertEqual(getattr(auto, field), getattr(manual, field), field)
+        self.assertEqual(auto.total_hhmmss(), manual.total_hhmmss())
+        self.assertNotEqual(auto.notes, manual.notes)   # only notes differs, by design
+
+    def test_approving_twice_creates_only_one_coding(self):
+        agent = self._flagged_agent('autoidem')
+        ar = self._request(agent)
+        self._approve(ar)
+        self._approve(ar)   # second POST: request is no longer pending
+
+        self.assertEqual(Coding.objects.filter(agent=agent).count(), 1)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'done')
+
+    def test_missing_time_approves_without_coding_and_warns(self):
+        agent = self._flagged_agent('autopartial')
+        ar = self._request(agent, start=None, end=None)
+        resp = self._approve(ar)
+
+        self.assertEqual(Coding.objects.count(), 0)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'approved')   # approval still stands
+        self.assertIsNone(ar.done_at)
+        msgs = [str(m) for m in list(get_messages(resp.wsgi_request))]
+        self.assertTrue(any('manually on the Codings tab' in m for m in msgs), msgs)
+
+    def test_non_flagged_agent_creates_no_coding(self):
+        agent = _make_agent('autounflagged', role_type='coordinator', supervisor=self.boss)
+        self.assertFalse(agent.can_auto_code_requests)
+        ar = self._request(agent)
+        self._approve(ar)
+
+        self.assertEqual(Coding.objects.count(), 0)
+        ar.refresh_from_db()
+        self.assertEqual(ar.status, 'approved')
+
+    def test_detail_page_indicator_only_shows_for_flagged_agents(self):
+        flagged = self._flagged_agent('autobadge')
+        plain = _make_agent('autonobadge', role_type='coordinator', supervisor=self.boss)
+        self.client.login(username='autoboss', password='pw')
+
+        resp = self.client.get(reverse('request_detail',
+                                       kwargs={'pk': self._request(flagged).pk}))
+        self.assertContains(resp, 'Auto-codes on approval')
+
+        resp = self.client.get(reverse('request_detail',
+                                       kwargs={'pk': self._request(plain).pk}))
+        self.assertNotContains(resp, 'Auto-codes on approval')

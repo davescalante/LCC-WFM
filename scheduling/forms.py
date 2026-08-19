@@ -45,6 +45,7 @@ class AgentForm(forms.ModelForm):
         if not can_grant_admin_tabs:
             self.fields.pop('can_access_admin_tabs', None)
             self.fields.pop('can_manage_loans', None)
+            self.fields.pop('can_auto_code_requests', None)
             # The Finance section (pay/billing rates, admin bonus) and the Super Admin
             # flag are super-admin-only. Strip them server-side so a non-super-admin can
             # neither see nor set them — not merely hidden (matches USER_EXPORT_FINANCIAL).
@@ -62,7 +63,8 @@ class AgentForm(forms.ModelForm):
             'phone_country_code', 'phone_number',
             'teams_password', 'hourly_rate', 'billing_rate_usd',
             'is_official_admin', 'admin_bonus_mxn', 'adherence_bonus_max_mxn', 'is_super_admin',
-            'can_access_admin_tabs', 'can_manage_loans', 'adherence_start_date', 'notes',
+            'can_access_admin_tabs', 'can_manage_loans', 'can_auto_code_requests',
+            'adherence_start_date', 'notes',
         ]
         widgets = {
             'teams_password': forms.PasswordInput(render_value=True),

@@ -355,6 +355,94 @@ class NominaNonBillableNoOverpayTests(TestCase):
         self.assertGreater(n['hours'], Decimal('0'))
 
 
+class NominaSeparatedAgentPayWindowTests(TestCase):
+    """A separated agent inside their pay window (remove_from_adherence_date >
+    week_start) must still be paid for a week they actually worked, even though
+    _finalize_separation set track_attendance=False and they have no billable
+    Five9 profile — the exact shape NominaNonBillableNoOverpayTests otherwise
+    zeroes out. The carve-out requires Coding rows for the week as proof of real
+    work, and must never spare an active untracked sales agent."""
+
+    def _week(self):
+        import datetime
+        ws = get_week_start()
+        return ws, [ws + datetime.timedelta(days=i) for i in range(7)]
+
+    def _make_separated_untracked(self, username, employee_id, ws):
+        import datetime
+        from scheduling.models import Five9Profile, AgentSeparation
+        agent = _make_infinity(username, employee_id)
+        agent.status = 'inactive'
+        agent.track_attendance = False
+        agent.hourly_rate = Decimal('62.50')
+        agent.save()
+        AgentSeparation.objects.create(
+            agent=agent, status='finalized', separation_type='quit',
+            last_day_worked=ws - datetime.timedelta(days=3),
+            remove_from_adherence_date=ws + datetime.timedelta(days=1),
+        )
+        Five9Profile.objects.create(agent=agent, five9_username=f'{username}.f9',
+                                    billable=False, is_primary=True)
+        return agent
+
+    def test_separated_agent_in_window_with_codings_is_not_zeroed(self):
+        import datetime
+        from adherence.models import DailyUpload, DailyAgentHours, Coding
+        from nomina.views import _agent_nomina_data
+        ws, week = self._week()
+        day = week[1]
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+
+        agent = self._make_separated_untracked('sepworked', '4101', ws)
+        DailyAgentHours.objects.create(upload=up, agent=agent,
+            five9_username='sepworked.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+        Coding.objects.create(agent=agent, date=day, start_time=datetime.time(9, 0),
+                               end_time=datetime.time(17, 0), is_admin_coding=False)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(row for row in rows if row['agent'].pk == agent.pk)
+        self.assertGreater(r['base_pay'], Decimal('0'))
+        self.assertGreater(r['hours'], Decimal('0'))
+
+    def test_separated_agent_in_window_without_codings_is_still_zeroed(self):
+        from adherence.models import DailyUpload, DailyAgentHours
+        from nomina.views import _agent_nomina_data
+        ws, week = self._week()
+        day = week[1]
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+
+        agent = self._make_separated_untracked('sepnowork', '4102', ws)
+        DailyAgentHours.objects.create(upload=up, agent=agent,
+            five9_username='sepnowork.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(row for row in rows if row['agent'].pk == agent.pk)
+        self.assertEqual(r['base_pay'], Decimal('0'))
+        self.assertEqual(r['hours'], Decimal('0'))
+
+    def test_active_untracked_agent_is_still_zeroed(self):
+        from scheduling.models import Five9Profile
+        from adherence.models import DailyUpload, DailyAgentHours
+        from nomina.views import _agent_nomina_data
+        ws, week = self._week()
+        day = week[1]
+        up, _ = DailyUpload.objects.get_or_create(date=day)
+
+        sales = _make_infinity('activesales', '4103')
+        sales.track_attendance = False
+        sales.hourly_rate = Decimal('62.50')
+        sales.save()
+        Five9Profile.objects.create(agent=sales, five9_username='activesales.f9',
+                                    billable=False, is_primary=True)
+        DailyAgentHours.objects.create(upload=up, agent=sales,
+            five9_username='activesales.f9', login_seconds=40 * 3600, not_ready_seconds=0)
+
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(row for row in rows if row['agent'].pk == sales.pk)
+        self.assertEqual(r['base_pay'], Decimal('0'))
+        self.assertEqual(r['hours'], Decimal('0'))
+
+
 class NominaLoanPickerTests(TestCase):
     """Loans page: the agent picker is A–Z by agent name, and the Active-loans panel
     totals the installments actually deducted THIS week (not every loan's weekly amount)."""
