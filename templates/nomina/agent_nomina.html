@@ -35,8 +35,13 @@
 
 {% if totals.on_vacation %}
 <div class="card" style="padding:10px 16px;margin-bottom:16px;background:#ecfeff;border-left:4px solid #06b6d4;">
-    <p style="margin:0;font-size:13px;color:#0e7490;">&#127958; <strong>{{ totals.on_vacation }}</strong> {% if totals.on_vacation == 1 %}person{% else %}people{% endif %} on vacation this week
-    — <strong>{{ totals.vac_hrs|floatformat:0 }}</strong> paid vacation hours folded into their pay.</p>
+    <p style="margin:0 0 6px;font-size:13px;color:#0e7490;">&#127958; <strong>{{ totals.on_vacation }}</strong> {% if totals.on_vacation == 1 %}person{% else %}people{% endif %} on vacation this week
+    — <strong>{{ totals.vac_hrs|floatformat:0 }}</strong> paid vacation hours folded into their pay:</p>
+    <ul style="margin:0;padding-left:20px;font-size:13px;color:#0e7490;line-height:1.7;">
+        {% for r in rows %}{% if r.vac_hrs > 0 %}
+        <li><strong style="color:#155e63;">{{ r.legal_name }}</strong> — {{ r.vac_hrs|floatformat:"-2" }} h{% if r.vac_days %} <span style="color:#5b8a90;">({{ r.vac_days }} day{{ r.vac_days|pluralize }})</span>{% endif %}</li>
+        {% endif %}{% endfor %}
+    </ul>
 </div>
 {% endif %}
 

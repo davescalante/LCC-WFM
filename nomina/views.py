@@ -944,8 +944,10 @@ def break_abuse(request):
 
     incidents = list(BreakAbuseIncident.objects.filter(
         date__in=week_dates).select_related('agent__user').order_by('date'))
-    agents = Agent.objects.filter(status='active').select_related('user').order_by(
-        'user__last_name', 'user__first_name')
+    # Alphabetical by the name shown in the picker (Agent.__str__ = agent_name or
+    # full name), matching exactly what each <li> displays. Small roster → sort in Python.
+    agents = sorted(Agent.objects.filter(status='active').select_related('user'),
+                    key=lambda a: str(a).lower())
 
     ctx = _nav(week_start, week_dates)
     ctx.update({'incidents': incidents, 'agents': agents, 'week_dates': week_dates})
