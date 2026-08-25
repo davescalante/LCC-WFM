@@ -3527,13 +3527,15 @@ def requests_list(request):
     rows = list(qs)
     pending  = [r for r in rows if r.status == 'pending']
     approved = [r for r in rows if r.status == 'approved']
-    rejected = [r for r in rows if r.status == 'rejected']
+    rejected = [r for r in rows if r.status == 'rejected' and not r.archived]
+    archived = [r for r in rows if r.status == 'rejected' and r.archived]
     done     = [r for r in rows if r.status == 'done']
 
     return render(request, 'scheduling/requests_list.html', {
         'pending': pending,
         'approved': approved,
         'rejected': rejected,
+        'archived': archived,
         'done': done,
         'type_choices': AgentRequest.REQUEST_TYPE_CHOICES,
         'status_choices': AgentRequest.STATUS_CHOICES,
@@ -3877,6 +3879,49 @@ def request_mark_done(request, pk):
                ar.summary(), agent=ar.agent)
     messages.success(request, "Request marked as done.")
     return redirect('request_detail', pk=pk)
+
+
+@login_required
+def request_archive(request, pk):
+    if request.method != 'POST':
+        return redirect('requests_list')
+    ar = get_object_or_404(AgentRequest, pk=pk)
+    try:
+        if request.user.agent.role == 'agent':
+            return redirect('agent_my_requests')
+    except Exception:
+        pass
+    if ar.status != 'rejected':
+        messages.error(request, "Only rejected requests can be archived.")
+        return redirect('requests_list')
+    ar.archived = True
+    ar.archived_at = timezone.now()
+    ar.archived_by = request.user
+    ar.save(update_fields=['archived', 'archived_at', 'archived_by'])
+    log_action(request.user, f'Archived request: {ar.get_request_type_display()}',
+               ar.summary(), agent=ar.agent)
+    messages.success(request, "Request archived.")
+    return redirect('requests_list')
+
+
+@login_required
+def request_unarchive(request, pk):
+    if request.method != 'POST':
+        return redirect('requests_list')
+    ar = get_object_or_404(AgentRequest, pk=pk)
+    try:
+        if request.user.agent.role == 'agent':
+            return redirect('agent_my_requests')
+    except Exception:
+        pass
+    ar.archived = False
+    ar.archived_at = None
+    ar.archived_by = None
+    ar.save(update_fields=['archived', 'archived_at', 'archived_by'])
+    log_action(request.user, f'Unarchived request: {ar.get_request_type_display()}',
+               ar.summary(), agent=ar.agent)
+    messages.success(request, "Request unarchived.")
+    return redirect('requests_list')
 
 
 # ── Agent Separation ──────────────────────────────────────────────────────────

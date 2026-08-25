@@ -121,7 +121,10 @@
             <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ req.submitted_at|date:"M j, Y" }}</td>
             <td style="font-size:13px;">{{ req.summary }}</td>
             <td style="font-size:12px;color:#6b7280;">{{ req.rejection_reason|truncatechars:50 }}</td>
-            <td><a href="{% url 'request_detail' pk=req.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#e2e8f0;color:#374151;">View</a></td>
+            <td style="white-space:nowrap;">
+                <a href="{% url 'request_detail' pk=req.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#e2e8f0;color:#374151;">View</a>
+                <form method="post" action="{% url 'request_archive' pk=req.pk %}" style="display:inline;margin:0;">{% csrf_token %}<button type="submit" class="btn" style="padding:4px 12px;font-size:12px;background:#fee2e2;color:#9f1239;" title="Hide this rejected request">Archive</button></form>
+            </td>
         </tr>
         {% endfor %}
         </tbody>
@@ -129,12 +132,46 @@
 </div>
 {% endif %}
 
+{% if archived %}
+<div class="card" style="padding:0;margin-bottom:12px;">
+    <div onclick="toggleSection('archived-body','archived-arrow')" style="padding:10px 16px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+        <span id="archived-arrow" style="color:#64748b;font-size:11px;width:12px;">▶</span>
+        <span style="font-weight:600;color:#475569;font-size:13px;">ARCHIVED</span>
+        <span style="color:#6b7280;font-size:12px;">{{ archived|length }}</span>
+        <span style="color:#9ca3af;font-size:11px;margin-left:auto;">rejected &amp; hidden — click to show</span>
+    </div>
+    <div id="archived-body" style="display:none;">
+    <table>
+        <thead><tr><th>Agent</th><th>Type</th><th>Submitted</th><th>Details</th><th>Reason</th><th></th></tr></thead>
+        <tbody>
+        {% for req in archived %}
+        <tr>
+            <td style="font-weight:600;">{{ req.agent }}{% if req.is_staff_request %} <span class="badge" style="background:#ede9fe;color:#5b21b6;font-size:10px;vertical-align:middle;" title="Staff request — only {{ req.assigned_supervisor|default:'the assigned supervisor' }} can action it">Staff</span>{% endif %}</td>
+            <td style="font-size:13px;white-space:nowrap;">{{ req.get_request_type_display }}</td>
+            <td style="color:#6b7280;font-size:13px;white-space:nowrap;">{{ req.submitted_at|date:"M j, Y" }}</td>
+            <td style="font-size:13px;">{{ req.summary }}</td>
+            <td style="font-size:12px;color:#6b7280;">{{ req.rejection_reason|truncatechars:50 }}</td>
+            <td style="white-space:nowrap;">
+                <a href="{% url 'request_detail' pk=req.pk %}" class="btn" style="padding:4px 12px;font-size:12px;background:#e2e8f0;color:#374151;">View</a>
+                <form method="post" action="{% url 'request_unarchive' pk=req.pk %}" style="display:inline;margin:0;">{% csrf_token %}<button type="submit" class="btn" style="padding:4px 12px;font-size:12px;background:#e2e8f0;color:#374151;" title="Move back to the Rejected list">Unarchive</button></form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
 {% if done %}
 <div class="card" style="padding:0;margin-bottom:12px;">
-    <div style="padding:10px 16px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:10px;">
+    <div onclick="toggleSection('done-body','done-arrow')" style="padding:10px 16px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+        <span id="done-arrow" style="color:#1e40af;font-size:11px;width:12px;">▶</span>
         <span style="font-weight:600;color:#1e40af;font-size:13px;">DONE</span>
         <span style="color:#6b7280;font-size:12px;">{{ done|length }}</span>
+        <span style="color:#9ca3af;font-size:11px;margin-left:auto;">click to show</span>
     </div>
+    <div id="done-body" style="display:none;">
     <table>
         <thead><tr><th>Agent</th><th>Type</th><th>Submitted</th><th>Details</th><th></th></tr></thead>
         <tbody>
@@ -149,13 +186,29 @@
         {% endfor %}
         </tbody>
     </table>
+    </div>
 </div>
 {% endif %}
 
-{% if not pending and not approved and not rejected and not done %}
+{% if not pending and not approved and not rejected and not archived and not done %}
 <div class="card" style="text-align:center;padding:48px;color:#9ca3af;font-size:14px;">
     No requests found.
 </div>
 {% endif %}
+
+<script>
+function toggleSection(bodyId, arrowId) {
+    var body = document.getElementById(bodyId);
+    var arrow = document.getElementById(arrowId);
+    if (!body) return;
+    if (body.style.display === 'none') {
+        body.style.display = '';
+        if (arrow) arrow.textContent = '▼';
+    } else {
+        body.style.display = 'none';
+        if (arrow) arrow.textContent = '▶';
+    }
+}
+</script>
 
 {% endblock %}
