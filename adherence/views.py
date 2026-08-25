@@ -194,6 +194,75 @@ def _hours_morning(shift):
     return Decimal('0')
 
 
+def _net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_shifts=()):
+    """Calendar-day OT hours counting each clock-minute at most once. Overlapping OT slots
+    are UNIONED (not summed), and any OT time already covered by the regular shift or by the
+    previous day's overnight spillover is dropped (so OT inside the regular schedule doesn't
+    double-count). Minutes-since-midnight on the calendar day; overnight shifts contribute
+    only their pre-midnight portion, matching _hours_evening. (Split-block schedule intervals
+    aren't subtracted — a rare case where OT overlaps a split block would still add.)"""
+    def _mins(t):
+        return t.hour * 60 + t.minute + t.second / 60.0
+
+    def _evening(s):
+        start = _mins(s.start_time)
+        end = _mins(s.end_time) if s.end_time > s.start_time else 1440.0
+        return (start, end)
+
+    def _morning(s):
+        # post-midnight portion of an overnight shift — lands 00:00–end on this calendar day
+        return (0.0, _mins(s.end_time)) if s.end_time < s.start_time else None
+
+    ot_intervals = [_evening(s) for s in ot_shifts]
+    if not ot_intervals:
+        return Decimal('0')
+
+    covered = []
+    if shift is not None and not getattr(shift, 'is_off', False):
+        covered.append(_evening(shift))
+    if prev_not_off and prev_shift is not None:
+        m = _morning(prev_shift)
+        if m:
+            covered.append(m)
+    for o in prev_ot_shifts:
+        m = _morning(o)
+        if m:
+            covered.append(m)
+
+    # Subtract every covered interval from each OT interval.
+    segments = []
+    for (a, b) in ot_intervals:
+        pieces = [(a, b)]
+        for (ca, cb) in covered:
+            nxt = []
+            for (pa, pb) in pieces:
+                if cb <= pa or ca >= pb:
+                    nxt.append((pa, pb))
+                    continue
+                if pa < ca:
+                    nxt.append((pa, ca))
+                if cb < pb:
+                    nxt.append((cb, pb))
+            pieces = nxt
+        segments.extend(pieces)
+
+    # Union the remaining segments and total their length.
+    segments.sort()
+    total = 0.0
+    cur_a = cur_b = None
+    for (a, b) in segments:
+        if cur_b is None:
+            cur_a, cur_b = a, b
+        elif a <= cur_b:
+            cur_b = max(cur_b, b)
+        else:
+            total += cur_b - cur_a
+            cur_a, cur_b = a, b
+    if cur_b is not None:
+        total += cur_b - cur_a
+    return Decimal(str(round(total / 60.0, 6)))
+
+
 def _block_hours(start_time, end_time):
     """Total hours for a time block; handles overnight."""
     s = start_time.hour * 3600 + start_time.minute * 60 + start_time.second
@@ -509,7 +578,6 @@ def _compute_effective_scheduled_hours(agent_pk, week_dates, shift_map, ot_map, 
         extra_block_hrs = (extra_hrs_map or {}).get((agent_pk, day_date), Decimal('0'))
         sched_hrs = _hours_evening(shift) + extra_block_hrs
         ot_shifts = (ot_map or {}).get((agent_pk, day_date)) or []
-        ot_hrs = sum(_hours_evening(s) for s in ot_shifts)
 
         prev_date = day_date - timedelta(days=1)
         if prev_date in week_dates_set:
@@ -522,6 +590,10 @@ def _compute_effective_scheduled_hours(agent_pk, week_dates, shift_map, ot_map, 
         spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
         spill_hrs += sum(_hours_morning(s) for s in prev_ot_shifts)
         has_spillover = spill_hrs > 0
+
+        # OT net of overlap: union overlapping OT and drop OT time already inside the
+        # regular shift or the prev-day overnight spillover (no double-count).
+        ot_hrs = _net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_shifts)
 
         cal_sched = sched_hrs + ot_hrs + spill_hrs
         is_scheduled_day = (has_shift and not is_off) or bool(ot_shifts) or has_spillover
@@ -611,7 +683,6 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             extra_block_hrs = (extra_hrs_map or {}).get((agent.pk, day_date), Decimal('0'))
             sched_hrs = _hours_evening(shift) + extra_block_hrs
             ot_shifts = (ot_map or {}).get((agent.pk, day_date)) or []
-            ot_hrs = sum(_hours_evening(s) for s in ot_shifts)
 
             # Previous calendar day: spillover from overnight shifts starting yesterday
             prev_date = day_date - timedelta(days=1)
@@ -625,6 +696,10 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
             spill_hrs = _hours_morning(prev_shift) if prev_not_off else Decimal('0')
             spill_hrs += sum(_hours_morning(s) for s in prev_ot_shifts)
             has_spillover = spill_hrs > 0
+
+            # OT net of overlap: union overlapping OT and drop OT time already inside the
+            # regular shift or the prev-day overnight spillover (no double-count).
+            ot_hrs = _net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_shifts)
 
             # Calendar-day scheduled hours = this evening + yesterday's post-midnight continuation
             cal_sched = sched_hrs + ot_hrs + spill_hrs
