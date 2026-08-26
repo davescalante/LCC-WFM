@@ -1062,6 +1062,13 @@ def welcome(request):
     enrolls = list(WelcomeBonusEnrollment.objects.select_related('agent__user').all())
     for e in enrolls:
         e.weeks_in = e.covers_week(week_start)
+        elapsed = (week_start - e.start_week).days // 7
+        if week_start < e.start_week:
+            e.weeks_left = e.num_weeks              # term hasn't started yet
+        elif elapsed >= e.num_weeks:
+            e.weeks_left = 0                         # lapsed
+        else:
+            e.weeks_left = e.num_weeks - elapsed     # weeks remaining, including this week
     agents = Agent.objects.filter(status='active').select_related('user').order_by(
         'user__last_name', 'user__first_name')
     ctx = _nav(week_start, week_dates)

@@ -27,6 +27,43 @@ def _make_infinity(username, employee_id):
     )
 
 
+class WelcomeWeeksLeftTests(TestCase):
+    """The Welcome Bonus table shows weeks-left per enrollment: the full term at the start
+    week, counting down (1 = the final eligible week), and 0 ('lapsed') after the term."""
+
+    def setUp(self):
+        from datetime import date
+        from nomina.models import WelcomeBonusEnrollment
+        _make_agent('wk_super', is_super_admin=True)
+        self.client.login(username='wk_super', password='x')
+        self.agent = _make_agent('wk_agent', role='agent', role_type='regular_agent')
+        self.start = date(2026, 8, 3)   # a Monday
+        self.enr = WelcomeBonusEnrollment.objects.create(
+            agent=self.agent, amount=Decimal('1000'), num_weeks=4, start_week=self.start)
+
+    def _weeks_left_at(self, week_start):
+        url = reverse('nomina:welcome') + f'?week_start={week_start.isoformat()}'
+        resp = self.client.get(url)
+        enr = next(e for e in resp.context['enrolls'] if e.pk == self.enr.pk)
+        return enr.weeks_left
+
+    def test_full_term_at_start(self):
+        self.assertEqual(self._weeks_left_at(self.start), 4)
+
+    def test_counts_down_to_last_week(self):
+        from datetime import timedelta
+        self.assertEqual(self._weeks_left_at(self.start + timedelta(weeks=1)), 3)
+        self.assertEqual(self._weeks_left_at(self.start + timedelta(weeks=3)), 1)   # final week
+
+    def test_lapsed_after_term(self):
+        from datetime import timedelta
+        self.assertEqual(self._weeks_left_at(self.start + timedelta(weeks=4)), 0)
+
+    def test_before_start_shows_full_term(self):
+        from datetime import timedelta
+        self.assertEqual(self._weeks_left_at(self.start - timedelta(weeks=1)), 4)
+
+
 class NominaAccessTests(TestCase):
     """The Nómina landing is super-admin only (mirrors Finance gating)."""
 
