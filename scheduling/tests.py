@@ -22,6 +22,65 @@ def _make_agent(username, role='admin', role_type='supervisor', supervisor=None,
     )
 
 
+class RequestArchiveTests(TestCase):
+    """Rejected requests can be archived (hidden from the active REJECTED list) and
+    unarchived; only rejected requests are archivable. DONE renders collapsed."""
+
+    def setUp(self):
+        self.sup = _make_agent('arch_sup')                       # role=admin supervisor
+        self.agent = _make_agent('arch_agent', role='agent', role_type='regular_agent')
+
+    def _login(self):
+        self.client.login(username=self.sup.user.username, password='pw')
+
+    def _rejected(self):
+        return AgentRequest.objects.create(
+            agent=self.agent, request_type='coding', status='rejected',
+            coding_date=date.today(), coding_start_time=time(9, 0),
+            coding_end_time=time(11, 0), rejection_reason='not allowed')
+
+    def test_rejected_row_has_archive_button(self):
+        ar = self._rejected()
+        self._login()
+        resp = self.client.get(reverse('requests_list'))
+        self.assertIn(ar, resp.context['rejected'])
+        self.assertEqual(list(resp.context['archived']), [])
+        self.assertContains(resp, reverse('request_archive', kwargs={'pk': ar.pk}))
+
+    def test_archive_hides_from_rejected(self):
+        ar = self._rejected()
+        self._login()
+        resp = self.client.post(reverse('request_archive', kwargs={'pk': ar.pk}), follow=True)
+        ar.refresh_from_db()
+        self.assertTrue(ar.archived)
+        self.assertNotIn(ar, resp.context['rejected'])
+        self.assertIn(ar, resp.context['archived'])
+
+    def test_unarchive_restores_to_rejected(self):
+        ar = self._rejected()
+        ar.archived = True
+        ar.save()
+        self._login()
+        resp = self.client.post(reverse('request_unarchive', kwargs={'pk': ar.pk}), follow=True)
+        ar.refresh_from_db()
+        self.assertFalse(ar.archived)
+        self.assertIn(ar, resp.context['rejected'])
+
+    def test_only_rejected_can_be_archived(self):
+        ar = AgentRequest.objects.create(agent=self.agent, request_type='coding', status='pending')
+        self._login()
+        self.client.post(reverse('request_archive', kwargs={'pk': ar.pk}))
+        ar.refresh_from_db()
+        self.assertFalse(ar.archived)
+
+    def test_done_section_renders_collapsed(self):
+        AgentRequest.objects.create(agent=self.agent, request_type='coding', status='done')
+        self._login()
+        resp = self.client.get(reverse('requests_list'))
+        self.assertContains(resp, "toggleSection('done-body'")
+        self.assertContains(resp, 'id="done-body" style="display:none;"')
+
+
 class StaffRequestTests(TestCase):
     def setUp(self):
         self.boss = _make_agent('boss', role_type='supervisor')

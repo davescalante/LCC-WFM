@@ -603,6 +603,14 @@ class AgentRequest(models.Model):
     supervisor_read = models.BooleanField(default=False)  # False when newly submitted
     agent_read = models.BooleanField(default=True)        # False when supervisor responds
 
+    # Archive: hide a rejected request from the active REJECTED list without deleting it.
+    archived = models.BooleanField(default=False)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_by = models.ForeignKey(
+        'auth.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='archived_agent_requests'
+    )
+
     class Meta:
         ordering = ['-submitted_at']
 
