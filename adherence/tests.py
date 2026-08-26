@@ -9,8 +9,42 @@ from django.contrib.auth.models import User
 
 from scheduling.models import Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
-from adherence.views import _get_adherence_agent_pks
+from adherence.views import _get_adherence_agent_pks, _net_ot_evening_hours
 from finance.models import BillingSettings
+from types import SimpleNamespace
+from django.test import SimpleTestCase
+
+
+def _ot(sh, sm, eh, em):
+    return SimpleNamespace(start_time=time(sh, sm), end_time=time(eh, em), is_off=False)
+
+
+class NetOtEveningHoursTests(SimpleTestCase):
+    """A day's OT hours count each clock-minute once: overlapping OT slots are unioned (not
+    summed), and OT time already inside the regular shift doesn't double-count. These are the
+    Scheduled-Hours cases reported on the Adherence tab."""
+
+    def test_disjoint_ot_sums(self):
+        ots = [_ot(9, 0, 11, 0), _ot(13, 0, 15, 0)]          # 2h + 2h, no overlap
+        self.assertEqual(_net_ot_evening_hours(ots, None, None, False), Decimal('4'))
+
+    def test_overlapping_ot_is_unioned(self):
+        # 09:00–11:00 (2h) + 10:00–13:00 (3h) → union 09:00–13:00 = 4h, not 5h
+        ots = [_ot(9, 0, 11, 0), _ot(10, 0, 13, 0)]
+        self.assertEqual(_net_ot_evening_hours(ots, None, None, False), Decimal('4'))
+
+    def test_ot_clipped_to_before_regular_shift(self):
+        # regular shift starts 13:00; OT 10:00–14:00 → only 10:00–13:00 = 3h is new
+        shift = SimpleNamespace(start_time=time(13, 0), end_time=time(21, 0), is_off=False)
+        self.assertEqual(_net_ot_evening_hours([_ot(10, 0, 14, 0)], shift, None, False), Decimal('3'))
+
+    def test_ot_fully_inside_shift_adds_nothing(self):
+        shift = SimpleNamespace(start_time=time(13, 0), end_time=time(21, 0), is_off=False)
+        self.assertEqual(_net_ot_evening_hours([_ot(14, 0, 16, 0)], shift, None, False), Decimal('0'))
+
+    def test_overnight_ot_counts_pre_midnight_only(self):
+        # OT 22:00–02:00 → the calendar-day (pre-midnight) portion is 22:00–24:00 = 2h
+        self.assertEqual(_net_ot_evening_hours([_ot(22, 0, 2, 0)], None, None, False), Decimal('2'))
 
 
 # Fixed Monday — keeps tests deterministic and avoids weekday-boundary issues
