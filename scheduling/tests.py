@@ -22,6 +22,35 @@ def _make_agent(username, role='admin', role_type='supervisor', supervisor=None,
     )
 
 
+class QaLoginEligibilityTests(TestCase):
+    """QA is a login-eligible admin type: creating a QA admin with a password keeps a usable
+    website login (so they reach the platform for call reviews + requests). Trainer stays off."""
+
+    def setUp(self):
+        admin = _make_agent('qa_login_admin', role_type='supervisor')
+        admin.is_super_admin = True
+        admin.save()
+        self.client.login(username='qa_login_admin', password='pw')
+
+    def _payload(self, username, role_type, password='pw123456'):
+        return {
+            'username': username, 'email': f'{username}@example.com',
+            'legal_name': 'Q A Person', 'password': password, 'agent_name': username,
+            'employee_id': '', 'role': 'admin', 'role_type': role_type,
+            'status': 'active', 'employer': 'Infinity', 'billing_status': 'Not Billed',
+            'phone_country_code': '+1', 'phone_number': '', 'teams_password': '',
+            'hourly_rate': '62.50', 'billing_rate_usd': '', 'admin_bonus_mxn': '', 'notes': '',
+        }
+
+    def test_qa_admin_gets_usable_login(self):
+        self.client.post(reverse('agent_create'), self._payload('qa_person', 'qa'))
+        self.assertTrue(User.objects.get(username='qa_person').has_usable_password())
+
+    def test_trainer_admin_still_blocked(self):
+        self.client.post(reverse('agent_create'), self._payload('trainer_person', 'trainer'))
+        self.assertFalse(User.objects.get(username='trainer_person').has_usable_password())
+
+
 class RequestArchiveTests(TestCase):
     """Rejected requests can be archived (hidden from the active REJECTED list) and
     unarchived; only rejected requests are archivable. DONE renders collapsed."""
