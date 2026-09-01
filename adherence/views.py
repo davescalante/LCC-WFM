@@ -176,6 +176,8 @@ def _hours_evening(shift):
     if not shift or getattr(shift, 'is_off', False):
         return Decimal('0')
     s, e = shift.start_time, shift.end_time
+    if s is None or e is None:   # non-off template saved with no times — treat as no hours
+        return Decimal('0')
     if e < s:  # overnight — only count start→midnight
         secs = 86400 - (s.hour * 3600 + s.minute * 60 + s.second)
     else:
@@ -188,6 +190,8 @@ def _hours_morning(shift):
     if not shift or getattr(shift, 'is_off', False):
         return Decimal('0')
     s, e = shift.start_time, shift.end_time
+    if s is None or e is None:   # non-off template saved with no times — treat as no hours
+        return Decimal('0')
     if e < s:  # overnight — only the post-midnight portion spills
         secs = e.hour * 3600 + e.minute * 60 + e.second
         return Decimal(str(round(secs / 3600, 6)))
@@ -205,21 +209,27 @@ def _net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_sh
         return t.hour * 60 + t.minute + t.second / 60.0
 
     def _evening(s):
+        if s.start_time is None or s.end_time is None:
+            return None
         start = _mins(s.start_time)
         end = _mins(s.end_time) if s.end_time > s.start_time else 1440.0
         return (start, end)
 
     def _morning(s):
         # post-midnight portion of an overnight shift — lands 00:00–end on this calendar day
+        if s.start_time is None or s.end_time is None:
+            return None
         return (0.0, _mins(s.end_time)) if s.end_time < s.start_time else None
 
-    ot_intervals = [_evening(s) for s in ot_shifts]
+    ot_intervals = [iv for iv in (_evening(s) for s in ot_shifts) if iv is not None]
     if not ot_intervals:
         return Decimal('0')
 
     covered = []
     if shift is not None and not getattr(shift, 'is_off', False):
-        covered.append(_evening(shift))
+        ev = _evening(shift)
+        if ev is not None:
+            covered.append(ev)
     if prev_not_off and prev_shift is not None:
         m = _morning(prev_shift)
         if m:
@@ -803,7 +813,7 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
                 'date': day_date,
                 'scheduled': (
                     'Off' if effective_is_off
-                    else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift and not is_off
+                    else f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}" if shift and not is_off and shift.start_time and shift.end_time
                     else ''
                 ),
                 'shift_start': shift.start_time.strftime('%H:%M') if (shift and not is_off and shift.start_time) else '',
