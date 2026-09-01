@@ -221,7 +221,24 @@ def _net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_sh
             return None
         return (0.0, _mins(s.end_time)) if s.end_time < s.start_time else None
 
-    ot_intervals = [iv for iv in (_evening(s) for s in ot_shifts) if iv is not None]
+    def _merge(intervals):
+        # Coalesce overlapping/adjacent intervals into a minimal disjoint, sorted list.
+        # Unioning up front keeps the result identical while collapsing duplicate or
+        # near-duplicate OT rows, so the subtraction below can't go quadratic when a
+        # runaway import piles thousands of OT rows onto a single day (the 502 timeout).
+        if not intervals:
+            return []
+        ivs = sorted(intervals)
+        out = [ivs[0]]
+        for a, b in ivs[1:]:
+            la, lb = out[-1]
+            if a <= lb:
+                out[-1] = (la, max(lb, b))
+            else:
+                out.append((a, b))
+        return out
+
+    ot_intervals = _merge([iv for iv in (_evening(s) for s in ot_shifts) if iv is not None])
     if not ot_intervals:
         return Decimal('0')
 
@@ -238,6 +255,7 @@ def _net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_sh
         m = _morning(o)
         if m:
             covered.append(m)
+    covered = _merge(covered)
 
     # Subtract every covered interval from each OT interval.
     segments = []
@@ -461,11 +479,21 @@ def _build_maps(agents, week_dates):
         key = (c.agent_id, c.date)
         coded_map[key] = coded_map.get(key, Decimal('0')) + Decimal(str(c.total_hours()))
 
-    # Multiple OT per day — list-valued map
+    # Multiple OT per day — list-valued map. Collapse exact-duplicate OT rows (same times
+    # + status) per agent/day: identical rows are the same slot, and a runaway import/save
+    # can pile up thousands of them, which bloats the grid and — before the union guard in
+    # _net_ot_evening_hours — drove the per-cell OT math quadratic (the group-load 502).
     ot_qs = OvertimeShift.objects.filter(date__in=week_dates, agent__in=agents).exclude(status='cancelled')
     ot_map = {}
+    _ot_seen = {}
     for s in ot_qs:
-        ot_map.setdefault((s.agent_id, s.date), []).append(s)
+        key = (s.agent_id, s.date)
+        dedup_key = (s.start_time, s.end_time, s.status)
+        seen = _ot_seen.setdefault(key, set())
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        ot_map.setdefault(key, []).append(s)
 
     # Extra schedule blocks — ShiftTemplate level
     tmpl_ids = list({s.pk for s in shift_map.values() if isinstance(s, ShiftTemplate)})

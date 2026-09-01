@@ -46,6 +46,25 @@ class NetOtEveningHoursTests(SimpleTestCase):
         # OT 22:00–02:00 → the calendar-day (pre-midnight) portion is 22:00–24:00 = 2h
         self.assertEqual(_net_ot_evening_hours([_ot(22, 0, 2, 0)], None, None, False), Decimal('2'))
 
+    def test_thousands_of_duplicate_ot_union_to_one_slot(self):
+        # A runaway import/save can pile thousands of identical OT rows onto one day. They
+        # must union to a single interval (identical hours), not sum — and must not go
+        # quadratic, which is what timed out the Adherence group load (the 502).
+        ots = [_ot(18, 0, 23, 0) for _ in range(5000)]          # 5000 identical evening slots
+        self.assertEqual(_net_ot_evening_hours(ots, None, None, False), Decimal('5'))
+
+    def test_duplicate_overnight_prev_and_evening_ot_no_blowup(self):
+        # The exact production shape: thousands of duplicate OVERNIGHT OT yesterday plus
+        # thousands of duplicate EVENING OT today. Net evening OT = today's 18:00–23:00 (5h);
+        # yesterday's post-midnight 00:00–04:00 spillover doesn't overlap the evening. Before
+        # the interval merge this was 3000×3000 subtractions per agent-day.
+        today_ot = [_ot(18, 0, 23, 0) for _ in range(3000)]
+        prev_ot = [_ot(20, 0, 4, 0) for _ in range(3000)]       # overnight → morning 00:00–04:00
+        self.assertEqual(
+            _net_ot_evening_hours(today_ot, None, None, False, prev_ot_shifts=prev_ot),
+            Decimal('5'),
+        )
+
 
 # Fixed Monday — keeps tests deterministic and avoids weekday-boundary issues
 _WEEK_START = date(2025, 1, 6)
@@ -101,6 +120,40 @@ class BuildRowsNullTimeTemplateTests(TestCase):
         )
         # null-time regular shift contributes 0; the 2h OT still counts
         self.assertEqual(rows[0]['cells'][0]['sched_hrs'], Decimal('2'))
+
+
+class BuildMapsOtDedupeTests(TestCase):
+    """Duplicate OvertimeShift rows (same agent/day/time/status) — from a runaway import or
+    repeated save — collapse to one per slot when the adherence maps are built, so the grid
+    neither bloats nor drives the per-cell OT math into an O(N^2) timeout (the group-load 502)."""
+
+    def setUp(self):
+        self.agent = _make_agent('ot_dedupe_test')
+
+    def test_duplicate_ot_rows_collapse_to_one(self):
+        from adherence.views import _build_maps
+        from scheduling.models import OvertimeShift
+        OvertimeShift.objects.bulk_create([
+            OvertimeShift(agent=self.agent, date=_WEEK[0],
+                          start_time=time(18, 0), end_time=time(23, 0), status='completed')
+            for _ in range(200)
+        ])
+        ot_map = _build_maps([self.agent], _WEEK)[3]
+        self.assertEqual(len(ot_map[(self.agent.pk, _WEEK[0])]), 1)
+
+    def test_distinct_slots_and_distinct_status_are_kept(self):
+        from adherence.views import _build_maps
+        from scheduling.models import OvertimeShift
+        # different times → kept; same time but different status → kept (no_show must survive
+        # so the bonus-disqualify check still fires)
+        OvertimeShift.objects.create(agent=self.agent, date=_WEEK[0],
+                                     start_time=time(18, 0), end_time=time(20, 0), status='completed')
+        OvertimeShift.objects.create(agent=self.agent, date=_WEEK[0],
+                                     start_time=time(21, 0), end_time=time(23, 0), status='completed')
+        OvertimeShift.objects.create(agent=self.agent, date=_WEEK[0],
+                                     start_time=time(18, 0), end_time=time(20, 0), status='no_show')
+        ot_map = _build_maps([self.agent], _WEEK)[3]
+        self.assertEqual(len(ot_map[(self.agent.pk, _WEEK[0])]), 3)
 
 
 class BuildRowsBonusTests(TestCase):
