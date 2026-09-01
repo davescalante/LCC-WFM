@@ -14,8 +14,11 @@ documents** whenever they disagree — the app changes faster than the docs.
 - **Ignore `.claude/worktrees/` completely.** It contains a parallel checkout of
   `finance/views.py` and `adherence/views.py` with older line numbers. Citing it produces
   wrong file references.
-- `db.sqlite3` is committed intentionally for local dev. It tells you nothing about
-  production data.
+- `db.sqlite3` is **gitignored and untracked** (`.gitignore` line 1; untracked since
+  `ed1022e`). Local database state does **not** travel with the repo — every developer
+  has their own, and yours can be missing migrations that are already applied in
+  production. Run `python3 manage.py showmigrations` before trusting local behavior,
+  and never infer production data from it.
 
 ## Tests
 
@@ -56,6 +59,14 @@ The tests are the regression gate and double as executable specs for the trickie
 - **`is_admin_coding` and `is_official_admin` are a hard partition.** Regular
   Codings/Adherence queries exclude admin rows entirely; Admin Codings/Admin Adherence use
   the admin path. Never mix the two query paths.
+- **Coding creation goes through `adherence.views.create_coding`.** Extracted from
+  `add_coding_ajax` in `d4fd7d6`; the Codings tab and the coding-request auto-code hook
+  are its two callers. It also owns the recompute rule: `_refresh_actual_hours` fires for
+  **regular codings only**. That function sums `is_admin_coding=False` rows exclusively,
+  so calling it for an admin coding would not even include the new row — it would just
+  write an `AdherenceRecord` for an Official Admin who should not have one.
+  `finance.views.add_admin_coding_ajax` deliberately never recomputes either. Do not add
+  a bare `Coding.objects.create()` anywhere; it silently skips the recompute.
 - **Historical rates.** Always `BillingSettings.get_for_week(week_start)`, never the
   `BillingSettings.get()` singleton — otherwise past weeks recompute with today's rates
   instead of the rates in force at the time.
