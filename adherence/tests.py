@@ -68,6 +68,41 @@ def _settings(**overrides):
     return obj
 
 
+class BuildRowsNullTimeTemplateTests(TestCase):
+    """A non-off ShiftTemplate saved with no start/end times must not crash the adherence
+    rows render (regression for the 'Failed to load data' 500 — TypeError: None < None)."""
+
+    def setUp(self):
+        self.agent = _make_agent('nulltime_test')
+
+    def test_null_time_non_off_template_does_not_crash(self):
+        from adherence.views import _build_rows
+        tmpl = ShiftTemplate(agent=self.agent, day_of_week=_WEEK[0].weekday(),
+                             start_time=None, end_time=None, is_off=False)
+        rows = _build_rows(
+            agents=[self.agent], week_dates=_WEEK,
+            shift_map={(self.agent.pk, _WEEK[0]): tmpl},
+            record_map={}, coded_map={},
+        )
+        self.assertEqual(rows[0]['cells'][0]['sched_hrs'], Decimal('0'))
+        self.assertEqual(rows[0]['sched_hours'], Decimal('0'))
+
+    def test_null_time_template_with_ot_does_not_crash(self):
+        from adherence.views import _build_rows
+        from scheduling.models import OvertimeShift
+        tmpl = ShiftTemplate(agent=self.agent, day_of_week=_WEEK[0].weekday(),
+                             start_time=None, end_time=None, is_off=False)
+        ot = OvertimeShift(agent=self.agent, date=_WEEK[0], start_time=time(9, 0), end_time=time(11, 0))
+        rows = _build_rows(
+            agents=[self.agent], week_dates=_WEEK,
+            shift_map={(self.agent.pk, _WEEK[0]): tmpl},
+            record_map={}, coded_map={},
+            ot_map={(self.agent.pk, _WEEK[0]): [ot]},
+        )
+        # null-time regular shift contributes 0; the 2h OT still counts
+        self.assertEqual(rows[0]['cells'][0]['sched_hrs'], Decimal('2'))
+
+
 class BuildRowsBonusTests(TestCase):
     """_build_rows correctly determines bonus eligibility from status codes."""
 
