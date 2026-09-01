@@ -427,7 +427,8 @@ const ROLE_TYPES = {
 };
 
 const CURRENT_ROLE_TYPE = "{{ agent_form.instance.role_type }}";
-const LOGIN_ELIGIBLE_TYPES = ['supervisor', 'coordinator', 'cs', 'tester', 'sms_email'];
+// Keep in sync with the login gating in scheduling.views (agent_create / agent_edit).
+const LOGIN_ELIGIBLE_TYPES = ['supervisor', 'coordinator', 'cs', 'tester', 'sms_email', 'qa'];
 
 function updateRoleTypes() {
     const role = document.getElementById('id_role').value;
