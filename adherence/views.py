@@ -409,23 +409,49 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
     Uses a two-step query to avoid DISTINCT+ORDER BY on related fields,
     which fails on PostgreSQL (works on SQLite but not in production).
     Results are cached for 5 minutes per week/supervisor combination.
+
+    Collected in two steps — eligibility, then the activity gate as four
+    separate queries unioned in Python. Expressing the activity gate as one
+    OR'd filter() put all four date predicates in the WHERE clause with
+    nothing restricting the four LEFT JOINs, so the database had to
+    materialise (every shift) x (every OT) x (every template) x (every
+    adherence record) per agent before de-duplicating: half a billion rows to
+    return ~93 integers, which timed out the rows endpoint and the combined
+    Adherence export. Same pk set, same predicate, same branches.
     """
     cache_key = f'adh_pks_{week_start.isoformat()}_{supervisor_id or "all"}'
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
-    pks = set(Agent.objects.filter(
+
+    # Step 1 — eligibility. The three separation conditions stay inside a single
+    # Q in a single filter() so they keep matching the same separation row; split
+    # across filter() calls they would each get their own join and an agent with
+    # more than one separation row would match on a combination that no single
+    # row satisfies.
+    elig = set(Agent.objects.filter(
         Q(status='active', track_attendance=True, is_official_admin=False) |
         Q(status='inactive', separations__status='finalized',
           separations__remove_from_adherence_date__gt=week_start)
     ).filter(
-        Q(shifts__date__in=week_dates) |
-        Q(overtime_shifts__date__in=week_dates) |
-        Q(shift_templates__isnull=False) |
-        Q(adherence_records__date__in=week_dates)
-    ).filter(
         Q(adherence_start_date__isnull=True) | Q(adherence_start_date__lte=week_start)
     ).values_list('pk', flat=True).distinct())
+
+    # Step 2 — activity gate: any one of the four branches admits an agent.
+    # The shift-template branch is deliberately unscoped by date (any template
+    # satisfies the gate for every week); adherence_start_date above is the only
+    # floor on it. Do not add a date filter here — it would drop agents from the tab.
+    active = set()
+    active |= set(Shift.objects.filter(date__in=week_dates, agent_id__in=elig)
+                  .values_list('agent_id', flat=True).distinct())
+    active |= set(OvertimeShift.objects.filter(date__in=week_dates, agent_id__in=elig)
+                  .values_list('agent_id', flat=True).distinct())
+    active |= set(ShiftTemplate.objects.filter(agent_id__in=elig)
+                  .values_list('agent_id', flat=True).distinct())
+    active |= set(AdherenceRecord.objects.filter(date__in=week_dates, agent_id__in=elig)
+                  .values_list('agent_id', flat=True).distinct())
+
+    pks = elig & active
     cache.set(cache_key, pks, 300)
     return pks
 

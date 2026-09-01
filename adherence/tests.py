@@ -7,7 +7,8 @@ from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import User
 
-from scheduling.models import Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate
+from django.db.models import Q
+from scheduling.models import Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate, OvertimeShift
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
 from adherence.views import _get_adherence_agent_pks, _net_ot_evening_hours
 from finance.models import BillingSettings
@@ -816,3 +817,338 @@ class DailyUploadStaleActualHoursTests(TestCase):
 
         rec = AdherenceRecord.objects.get(agent=self.agent_x, date=d)
         self.assertEqual(rec.actual_hours, Decimal('8'))
+
+
+# ── Adherence roster helper: _get_adherence_agent_pks ─────────────────────────
+#
+# The helper decides who appears on the Adherence tab and in the combined
+# Adherence export. If its pk set changes, agents silently vanish from the tab,
+# stop being coded, and lose their adherence bonus with nothing warning anyone.
+# So the set is pinned two ways: an oracle test holding the original single-query
+# implementation verbatim, and per-branch tests for each half of the predicate.
+
+
+def _roster_oracle(week_dates, week_start):
+    """The original single-query implementation, kept verbatim as a test oracle.
+
+    _get_adherence_agent_pks was split into several small queries because this
+    one — four OR'd conditions across four unrestricted LEFT JOINs — made the
+    database materialise the cartesian product of every shift, OT, template and
+    adherence record per agent. The split must return an identical pk set, so
+    this stays here as the thing to compare against.
+    """
+    return set(Agent.objects.filter(
+        Q(status='active', track_attendance=True, is_official_admin=False) |
+        Q(status='inactive', separations__status='finalized',
+          separations__remove_from_adherence_date__gt=week_start)
+    ).filter(
+        Q(shifts__date__in=week_dates) |
+        Q(overtime_shifts__date__in=week_dates) |
+        Q(shift_templates__isnull=False) |
+        Q(adherence_records__date__in=week_dates)
+    ).filter(
+        Q(adherence_start_date__isnull=True) | Q(adherence_start_date__lte=week_start)
+    ).values_list('pk', flat=True).distinct())
+
+
+class AdherenceRosterOracleParityTests(TestCase):
+    """The split implementation returns exactly the set the original query returned,
+    over a fixture that exercises every branch of both halves of the predicate."""
+
+    def setUp(self):
+        cache.clear()
+        prev_week = _WEEK_START - timedelta(days=7)
+
+        # Eligibility branch 1: active + tracked + not an official admin.
+        self.by_shift = _make_agent('par_shift')
+        Shift.objects.create(agent=self.by_shift, date=_WEEK_START,
+                             start_time=time(9, 0), end_time=time(17, 0), is_off=False)
+
+        self.by_ot = _make_agent('par_ot')
+        OvertimeShift.objects.create(agent=self.by_ot, date=_WEEK_START + timedelta(days=2),
+                                     start_time=time(17, 0), end_time=time(19, 0))
+
+        self.by_template = _make_agent('par_template')
+        ShiftTemplate.objects.create(agent=self.by_template, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        self.by_record = _make_agent('par_record')
+        AdherenceRecord.objects.create(agent=self.by_record, date=_WEEK_START, status='P')
+
+        # Fails the activity gate entirely.
+        self.no_activity = _make_agent('par_none')
+
+        # Has activity, but all of it outside the week (template branch excepted).
+        self.outside_week = _make_agent('par_outside')
+        Shift.objects.create(agent=self.outside_week, date=prev_week,
+                             start_time=time(9, 0), end_time=time(17, 0), is_off=False)
+        OvertimeShift.objects.create(agent=self.outside_week, date=prev_week,
+                                     start_time=time(17, 0), end_time=time(19, 0))
+        AdherenceRecord.objects.create(agent=self.outside_week, date=prev_week, status='P')
+
+        # Fails eligibility three different ways, each with activity present.
+        self.untracked = _make_agent('par_untracked')
+        self.untracked.track_attendance = False
+        self.untracked.save()
+        ShiftTemplate.objects.create(agent=self.untracked, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        self.official_admin = _make_agent('par_admin')
+        self.official_admin.is_official_admin = True
+        self.official_admin.save()
+        ShiftTemplate.objects.create(agent=self.official_admin, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        self.inactive_no_sep = _make_agent('par_inactive')
+        self.inactive_no_sep.status = 'inactive'
+        self.inactive_no_sep.save()
+        ShiftTemplate.objects.create(agent=self.inactive_no_sep, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        # Eligibility branch 2: separated, still inside the pay window.
+        self.separated_in = _make_agent('par_sep_in')
+        self.separated_in.status = 'inactive'
+        self.separated_in.save()
+        AgentSeparation.objects.create(
+            agent=self.separated_in, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=1),
+            remove_from_adherence_date=_WEEK_START + timedelta(days=7),
+        )
+        ShiftTemplate.objects.create(agent=self.separated_in, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        # Separated and past the pay window.
+        self.separated_out = _make_agent('par_sep_out')
+        self.separated_out.status = 'inactive'
+        self.separated_out.save()
+        AgentSeparation.objects.create(
+            agent=self.separated_out, status='finalized', separation_type='quit',
+            last_day_worked=prev_week,
+            remove_from_adherence_date=_WEEK_START - timedelta(days=1),
+        )
+        ShiftTemplate.objects.create(agent=self.separated_out, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        # Two separation rows: one inside the window, one outside. The conditions must
+        # keep matching the same row, and the agent must appear exactly once.
+        self.two_seps = _make_agent('par_two_seps')
+        self.two_seps.status = 'inactive'
+        self.two_seps.save()
+        AgentSeparation.objects.create(
+            agent=self.two_seps, status='finalized', separation_type='quit',
+            last_day_worked=prev_week - timedelta(days=30),
+            remove_from_adherence_date=_WEEK_START - timedelta(days=14),
+        )
+        AgentSeparation.objects.create(
+            agent=self.two_seps, status='finalized', separation_type='terminated',
+            last_day_worked=_WEEK_START - timedelta(days=1),
+            remove_from_adherence_date=_WEEK_START + timedelta(days=7),
+        )
+        ShiftTemplate.objects.create(agent=self.two_seps, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        # adherence_start_date floor, both sides.
+        self.floored_out = _make_agent('par_floor_out')
+        self.floored_out.adherence_start_date = _WEEK_START + timedelta(days=7)
+        self.floored_out.save()
+        ShiftTemplate.objects.create(agent=self.floored_out, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+        self.floored_in = _make_agent('par_floor_in')
+        self.floored_in.adherence_start_date = _WEEK_START
+        self.floored_in.save()
+        ShiftTemplate.objects.create(agent=self.floored_in, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+    def test_matches_oracle_for_the_week(self):
+        cache.clear()
+        self.assertEqual(_get_adherence_agent_pks(_WEEK, _WEEK_START),
+                         _roster_oracle(_WEEK, _WEEK_START))
+
+    def test_matches_oracle_across_eight_weeks(self):
+        for offset in range(-4, 4):
+            ws = _WEEK_START + timedelta(weeks=offset)
+            wd = [ws + timedelta(days=i) for i in range(7)]
+            cache.clear()
+            self.assertEqual(_get_adherence_agent_pks(wd, ws), _roster_oracle(wd, ws),
+                             msg=f'roster diverged from the oracle for week {ws}')
+
+    def test_returns_a_set_of_pks(self):
+        cache.clear()
+        pks = _get_adherence_agent_pks(_WEEK, _WEEK_START)
+        self.assertIsInstance(pks, set)
+        self.assertTrue(all(isinstance(p, int) for p in pks))
+
+
+class AdherenceRosterBranchTests(TestCase):
+    """Each branch of the predicate, asserted directly rather than via the oracle,
+    so a change of behaviour is named rather than just reported as a difference."""
+
+    def setUp(self):
+        cache.clear()
+
+    def _pks(self, week_dates=None, week_start=None):
+        cache.clear()
+        return _get_adherence_agent_pks(week_dates or _WEEK, week_start or _WEEK_START)
+
+    # ── Activity gate: each branch admits an agent on its own ──
+    def test_shift_in_week_alone_admits(self):
+        a = _make_agent('br_shift')
+        Shift.objects.create(agent=a, date=_WEEK_START + timedelta(days=3),
+                             start_time=time(9, 0), end_time=time(17, 0), is_off=False)
+        self.assertIn(a.pk, self._pks())
+
+    def test_ot_in_week_alone_admits(self):
+        a = _make_agent('br_ot')
+        OvertimeShift.objects.create(agent=a, date=_WEEK_START + timedelta(days=4),
+                                     start_time=time(17, 0), end_time=time(19, 0))
+        self.assertIn(a.pk, self._pks())
+
+    def test_template_alone_admits(self):
+        a = _make_agent('br_tmpl')
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        self.assertIn(a.pk, self._pks())
+
+    def test_adherence_record_in_week_alone_admits(self):
+        a = _make_agent('br_rec')
+        AdherenceRecord.objects.create(agent=a, date=_WEEK_START + timedelta(days=1), status='P')
+        self.assertIn(a.pk, self._pks())
+
+    def test_no_activity_at_all_excluded(self):
+        a = _make_agent('br_noact')
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_dated_activity_outside_the_week_excluded(self):
+        a = _make_agent('br_outside')
+        prev = _WEEK_START - timedelta(days=7)
+        Shift.objects.create(agent=a, date=prev, start_time=time(9, 0),
+                             end_time=time(17, 0), is_off=False)
+        OvertimeShift.objects.create(agent=a, date=prev, start_time=time(17, 0),
+                                     end_time=time(19, 0))
+        AdherenceRecord.objects.create(agent=a, date=prev, status='P')
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_template_branch_stays_unscoped_by_date(self):
+        """A template with a far-future effective_from still admits the agent to a
+        past week. Deliberate existing behaviour — adherence_start_date is the only
+        floor on it — and the reason this branch carries no date filter."""
+        a = _make_agent('br_tmpl_future')
+        ShiftTemplate.objects.create(agent=a, day_of_week=0, start_time=time(9, 0),
+                                     end_time=time(17, 0),
+                                     effective_from=_WEEK_START + timedelta(weeks=52))
+        past = _WEEK_START - timedelta(weeks=52)
+        past_dates = [past + timedelta(days=i) for i in range(7)]
+        self.assertIn(a.pk, self._pks(past_dates, past))
+
+    # ── Eligibility: active / tracked / non-admin ──
+    def test_active_tracked_non_admin_included(self):
+        a = _make_agent('br_ok')
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        self.assertIn(a.pk, self._pks())
+
+    def test_untracked_excluded(self):
+        a = _make_agent('br_untracked')
+        a.track_attendance = False
+        a.save()
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_official_admin_excluded(self):
+        a = _make_agent('br_admin')
+        a.is_official_admin = True
+        a.save()
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_inactive_without_separation_excluded(self):
+        a = _make_agent('br_inactive')
+        a.status = 'inactive'
+        a.save()
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        self.assertNotIn(a.pk, self._pks())
+
+    # ── Eligibility: separated but still inside the pay window ──
+    def _separated(self, username, remove_date, status='finalized'):
+        a = _make_agent(username)
+        a.status = 'inactive'
+        a.save()
+        AgentSeparation.objects.create(
+            agent=a, status=status, separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=1),
+            remove_from_adherence_date=remove_date,
+        )
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        return a
+
+    def test_separated_inside_pay_window_included(self):
+        a = self._separated('br_sep_in', _WEEK_START + timedelta(days=7))
+        self.assertIn(a.pk, self._pks())
+
+    def test_separated_on_removal_date_excluded(self):
+        """remove_from_adherence_date is strictly greater-than, so the removal week itself
+        is out."""
+        a = self._separated('br_sep_on', _WEEK_START)
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_separation_not_finalized_excluded(self):
+        a = self._separated('br_sep_pending', _WEEK_START + timedelta(days=7), status='pending')
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_two_separations_conditions_match_the_same_row(self):
+        """One separation row is finalized but out of window; the other is in window but
+        not finalized. Neither row satisfies both conditions, so the agent is excluded —
+        this is what splitting the conditions across filter() calls would get wrong."""
+        a = _make_agent('br_two_seps_mixed')
+        a.status = 'inactive'
+        a.save()
+        AgentSeparation.objects.create(
+            agent=a, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=30),
+            remove_from_adherence_date=_WEEK_START - timedelta(days=14),
+        )
+        AgentSeparation.objects.create(
+            agent=a, status='pending', separation_type='terminated',
+            last_day_worked=_WEEK_START - timedelta(days=1),
+            remove_from_adherence_date=_WEEK_START + timedelta(days=7),
+        )
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        self.assertNotIn(a.pk, self._pks())
+
+    def test_two_separations_one_qualifying_included_once(self):
+        a = _make_agent('br_two_seps_ok')
+        a.status = 'inactive'
+        a.save()
+        AgentSeparation.objects.create(
+            agent=a, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=30),
+            remove_from_adherence_date=_WEEK_START - timedelta(days=14),
+        )
+        AgentSeparation.objects.create(
+            agent=a, status='finalized', separation_type='terminated',
+            last_day_worked=_WEEK_START - timedelta(days=1),
+            remove_from_adherence_date=_WEEK_START + timedelta(days=7),
+        )
+        ShiftTemplate.objects.create(agent=a, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        pks = self._pks()
+        self.assertIn(a.pk, pks)
+        self.assertEqual(len([p for p in pks if p == a.pk]), 1)
+
+    # ── Activity must belong to the agent it admits ──
+    def test_another_agents_activity_does_not_admit(self):
+        """The activity queries are scoped to eligible agents; an eligible agent with no
+        activity of their own must not be admitted by someone else's rows."""
+        bare = _make_agent('br_bare')
+        other = _make_agent('br_other')
+        Shift.objects.create(agent=other, date=_WEEK_START, start_time=time(9, 0),
+                             end_time=time(17, 0), is_off=False)
+        pks = self._pks()
+        self.assertIn(other.pk, pks)
+        self.assertNotIn(bare.pk, pks)
