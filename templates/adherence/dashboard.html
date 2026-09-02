@@ -412,53 +412,123 @@ function _loadAdhRowsFull(params) {
         });
 }
 
-// Progressive load — loads each supervisor group sequentially, appending rows.
+// Fetches one supervisor group's rows. Shared by the initial progressive load and by
+// Retry on a failed group, so there is exactly one place that builds this request.
+function _fetchAdhGroup(grp, params) {
+    const grpParams = new URLSearchParams(params.toString());
+    grpParams.set('group', grp);
+    const url = '/adherence/rows/?' + grpParams.toString();
+    return fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}})
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(data => { if (data.error) throw new Error(data.error); return data; });
+}
+
+// Appends one group's successful response — used by both the initial load and Retry.
+function _appendAdhGroupRows(data) {
+    if (data.tbody_html && data.tbody_html.trim()) {
+        document.getElementById('adh-tbody').insertAdjacentHTML('beforeend', data.tbody_html);
+        _applyAllStatusStyles();
+        requestAnimationFrame(syncColumnWidths);
+    }
+    // Tfoot: only set on the group whose response lands last (overwrite each time; last
+    // wins). Pre-existing behavior — each group's footer totals cover only that group's
+    // own agents, not the whole roster. Retry follows the same rule, unchanged here.
+    if (data.tfoot_html) {
+        document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
+    }
+    recomputeCoS();
+}
+
+// Supervisor display name for a group id, read from the existing supervisor-filter
+// dropdown (templates/includes/supervisor_filter.html) — no extra data from the view needed.
+function _adhGroupLabel(grp) {
+    if (grp === '__none__') return 'No Supervisor';
+    const opt = document.querySelector('select[name="supervisor"] option[value="' + grp + '"]');
+    return opt ? opt.textContent.trim() : 'This group';
+}
+
+const _adhFailedGroups = new Set();
+let _adhFailWarnTimer = null;
+
+// One quiet inline notice for however many groups are currently marked failed, reusing
+// the existing save-status pill (the same element that shows "Saving…" during cell edits).
+function _adhShowFailedGroupsNotice() {
+    const n = _adhFailedGroups.size;
+    clearTimeout(_adhFailWarnTimer);
+    if (n === 0) {
+        document.getElementById('save-status').style.display = 'none';
+        return;
+    }
+    const msg = n === 1 ? "1 group didn't load — see marked row below"
+                         : n + " groups didn't load — see marked rows below";
+    showStatus(msg, '#b45309', '#fef3c7');
+    _adhFailWarnTimer = setTimeout(() => { document.getElementById('save-status').style.display = 'none'; }, 8000);
+}
+
+// Marks one group as failed in place, styled like the existing supervisor divider row
+// (.group-hdr), with a Retry link.
+function _markAdhGroupFailed(grp) {
+    _adhFailedGroups.add(grp);
+    const row = document.createElement('tr');
+    row.className = 'group-hdr';
+    row.dataset.group = grp;
+    row.innerHTML = `<td colspan="21">${_esc(_adhGroupLabel(grp))} — ` +
+        `<span style="color:#b45309;text-transform:none;letter-spacing:normal;">couldn't load</span> ` +
+        `<a href="#" onclick="_retryAdhGroup('${grp}', this); return false;" ` +
+        `style="color:#1a3a5c;text-transform:none;letter-spacing:normal;">Retry</a></td>`;
+    document.getElementById('adh-tbody').appendChild(row);
+    _adhShowFailedGroupsNotice();
+}
+
+// Retries one failed group. On success, replaces its marker row with the real rows and
+// clears it from the failed set; on failure, leaves the row marked and retryable.
+async function _retryAdhGroup(grp, linkEl) {
+    linkEl.textContent = 'Retrying…';
+    const params = new URLSearchParams(window.location.search);
+    try {
+        const data = await _fetchAdhGroup(grp, params);
+        const marker = document.querySelector('#adh-tbody tr[data-group="' + grp + '"]');
+        if (marker) marker.remove();
+        _appendAdhGroupRows(data);
+        _adhFailedGroups.delete(grp);
+        _adhShowFailedGroupsNotice();
+    } catch (e) {
+        linkEl.textContent = 'Retry';
+    }
+}
+
+// Progressive load — loads each supervisor group sequentially, appending rows. A group
+// that fails is marked in place (see _markAdhGroupFailed) and does not stop the rest of
+// the groups from loading; only if every group fails does this fall back to the existing
+// full-page error, since that's a real outage rather than one bad group.
 async function _loadAdhRowsProgressive(params) {
     // Build list of group param values: each supervisor PK + "__none__" for unsupervised.
     const groups = _ADH_SUPERVISOR_PKS.concat(['__none__']);
     let firstGroupDone = false;
+    let failedCount = 0;
 
     for (const grp of groups) {
-        const grpParams = new URLSearchParams(params.toString());
-        grpParams.set('group', grp);
-        const url = '/adherence/rows/?' + grpParams.toString();
         try {
-            const r = await fetch(url, {headers: {'X-Requested-With': 'XMLHttpRequest'}});
-            if (!r.ok) throw new Error(r.status);
-            const data = await r.json();
-            if (data.error) throw new Error(data.error);
-
+            const data = await _fetchAdhGroup(grp, params);
             if (!firstGroupDone) {
                 // Remove skeleton rows before inserting real content.
                 _removeSkeleton();
                 firstGroupDone = true;
             }
-
-            // Append tbody rows (skip empty responses).
-            if (data.tbody_html && data.tbody_html.trim()) {
-                const tbody = document.getElementById('adh-tbody');
-                tbody.insertAdjacentHTML('beforeend', data.tbody_html);
-                _applyAllStatusStyles();
-                requestAnimationFrame(syncColumnWidths);
-            }
-
-            // Tfoot: only set on the last group (overwrite each time; last wins).
-            if (data.tfoot_html) {
-                document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
-            }
-
-            recomputeCoS();
+            _appendAdhGroupRows(data);
         } catch (e) {
-            if (!firstGroupDone) {
-                _showLoadError();
-                return;
-            }
-            // Partial failure — continue loading other groups.
+            failedCount++;
+            _markAdhGroupFailed(grp);
         }
     }
 
-    if (!firstGroupDone) {
-        _removeSkeleton();
+    if (failedCount === groups.length) {
+        // Every group failed — a real outage. Drop the per-group markers/notice in
+        // favor of the existing full-page error.
+        _adhFailedGroups.clear();
+        clearTimeout(_adhFailWarnTimer);
+        document.getElementById('save-status').style.display = 'none';
+        _showLoadError();
     }
 }
 
