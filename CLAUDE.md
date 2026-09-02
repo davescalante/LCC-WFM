@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **464**. The tests are the regression gate and double as executable specs for the
+Currently **466**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Two read-only management commands exist for diagnosis; neither is reachable from a request
@@ -88,10 +88,14 @@ future-dated counts for the schedule/adherence tables.
   row satisfies), and the `ShiftTemplate` branch stays **unscoped by date** — it looks wrong
   and is deliberate; `adherence_start_date` is the only floor on it.
 - **The Adherence supervisor filter does not filter in SQL.** `_get_adherence_agent_pks`
-  takes `supervisor_id`, but uses it only to build the cache key — the query always scans
-  the whole roster. Narrowing happens afterwards in `_apply_supervisor_filter` and the
-  `group=` param. So filtering the tab to one supervisor does not make its query cheaper,
-  which is genuinely counterintuitive and cost real diagnostic time.
+  takes `supervisor_id`, but the query always scans the whole roster regardless — that
+  parameter used to also key a 300-second cache, removed in `23c67a8` since the query costs
+  single-digit ms post-`86ab564` and isn't worth caching. Do not re-add a cache here; the
+  tab calls this helper once per supervisor group per page load with identical arguments
+  every time, which is redundant by design but cheap. Narrowing happens afterwards in
+  `_apply_supervisor_filter` and the `group=` param. So filtering the tab to one supervisor
+  does not make its query cheaper, which is genuinely counterintuitive and cost real
+  diagnostic time.
 - **Historical rates.** Always `BillingSettings.get_for_week(week_start)`, never the
   `BillingSettings.get()` singleton — otherwise past weeks recompute with today's rates
   instead of the rates in force at the time.
