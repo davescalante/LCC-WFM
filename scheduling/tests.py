@@ -767,6 +767,20 @@ class AgentListExportTests(TestCase):
         self.assertIn('Test Oaexp2', names)
         self.assertNotIn('Test Oaexp1', names)
 
+    def test_official_admin_column_renders_yes_no(self):
+        # Optional 'Official Admin' column (opt-in via the picker): Yes for official admins,
+        # No otherwise. Selected here alongside Legal name; registry order puts it second.
+        self._make_full_agent('oacol_yes', official=True)
+        self._make_full_agent('oacol_no', official=False)
+        rows = self._export_rows('&fields=full_name&fields=official_admin')
+        self.assertEqual(rows[0], ['Legal name', 'Official Admin'])
+        self.assertEqual(self._row_for(rows, 'Test Oacol_Yes')[1], 'Yes')
+        self.assertEqual(self._row_for(rows, 'Test Oacol_No')[1], 'No')
+
+    def test_official_admin_column_is_off_by_default(self):
+        # Opt-in like the other optional columns — not in the default export.
+        self.assertNotIn('Official Admin', self._export_rows()[0])
+
     def test_official_admin_pay_window_agent_included(self):
         # Mirrors AgentListExportPayWindowTests._separated_agent: inactive with
         # a finalized separation whose pay window is still open must still be
