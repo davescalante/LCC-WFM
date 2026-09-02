@@ -6,7 +6,6 @@ import json
 
 from django.db import transaction
 from django.db.models import Q, Count as DbCount
-from django.core.cache import cache
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
@@ -408,7 +407,6 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
     Get PKs of agents who should appear in the adherence week view.
     Uses a two-step query to avoid DISTINCT+ORDER BY on related fields,
     which fails on PostgreSQL (works on SQLite but not in production).
-    Results are cached for 5 minutes per week/supervisor combination.
 
     Collected in two steps — eligibility, then the activity gate as four
     separate queries unioned in Python. Expressing the activity gate as one
@@ -418,12 +416,14 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
     adherence record) per agent before de-duplicating: half a billion rows to
     return ~93 integers, which timed out the rows endpoint and the combined
     Adherence export. Same pk set, same predicate, same branches.
-    """
-    cache_key = f'adh_pks_{week_start.isoformat()}_{supervisor_id or "all"}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
 
+    Uncached on purpose. The Adherence tab calls this once per supervisor
+    group on a single page load, and every one of those calls passes the same
+    (week_start, supervisor_id) — same query, same answer, N times over. That's
+    redundant, but at this query's current cost (single-digit ms) it isn't worth
+    caching; a cache here previously masked up to 5 minutes of staleness across
+    gunicorn workers for no real savings.
+    """
     # Step 1 — eligibility. The three separation conditions stay inside a single
     # Q in a single filter() so they keep matching the same separation row; split
     # across filter() calls they would each get their own join and an agent with
@@ -452,7 +452,6 @@ def _get_adherence_agent_pks(week_dates, week_start, supervisor_id=None):
                   .values_list('agent_id', flat=True).distinct())
 
     pks = elig & active
-    cache.set(cache_key, pks, 300)
     return pks
 
 
