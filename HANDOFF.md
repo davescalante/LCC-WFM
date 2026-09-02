@@ -3,15 +3,15 @@
 *Last updated: September 1, 2026. Written for a new assistant/developer with no prior exposure to this project.*
 
 > **⚠ KNOWN DOCUMENTATION GAP — read before trusting this document's coverage.**
-> A second developer builds in this repo independently, and a substantial body of their
-> work is **not described anywhere in these reference docs**: the `nomina` app's full
-> build-out (payroll inputs, loans, welcome bonus, break abuse, overrides, Finalize),
-> the **Vacations** feature (top-level page, per-work-anniversary balance, tiered
-> approval, vacation pay), and **Holiday** attendance handling (the `Holiday` model,
-> holiday tags on the adherence date headers, holiday-worked pay, the per-day not-ready
-> allowance). Treat those areas as undocumented and read the code. This document being
-> silent on them means nobody has written them up yet — not that they are absent or
-> unimportant. Documenting them is a separate task.
+> A second developer builds in this repo independently, and this document is silent on
+> their work. The `nomina` app (payroll inputs, loans, welcome bonus, break abuse,
+> overrides, Finalize), the **Vacations** feature (top-level page, per-work-anniversary
+> balance, tiered approval, vacation pay) and **Holiday** pay handling are now written up
+> in **`SYSTEM-SUMMARY.md` §11**, with their landmines in **`CLAUDE.md`**; read those, not
+> this document, for anything payroll-related. Still undocumented anywhere: the adherence
+> grid's own holiday display and per-day not-ready allowance behavior. This document being
+> silent on these areas means nobody has written them up here yet — not that they are
+> absent or unimportant.
 
 ---
 
