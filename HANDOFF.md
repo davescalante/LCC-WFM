@@ -3,15 +3,13 @@
 *Last updated: September 1, 2026. Written for a new assistant/developer with no prior exposure to this project.*
 
 > **⚠ KNOWN DOCUMENTATION GAP — read before trusting this document's coverage.**
-> A second developer builds in this repo independently, and this document is silent on
-> their work. The `nomina` app (payroll inputs, loans, welcome bonus, break abuse,
-> overrides, Finalize), the **Vacations** feature (top-level page, per-work-anniversary
-> balance, tiered approval, vacation pay) and **Holiday** pay handling are now written up
-> in **`SYSTEM-SUMMARY.md` §11**, with their landmines in **`CLAUDE.md`**; read those, not
-> this document, for anything payroll-related. Still undocumented anywhere: the adherence
-> grid's own holiday display and per-day not-ready allowance behavior. This document being
-> silent on these areas means nobody has written them up here yet — not that they are
-> absent or unimportant.
+> A second developer builds in this repo independently, and this document is largely silent
+> on their work. The `nomina` app (payroll inputs, loans, welcome bonus, break abuse,
+> overrides, Finalize) is written up in **`SYSTEM-SUMMARY.md` §11**; the **Vacations**
+> feature (top-level page, per-work-anniversary balance, tiered approval, vacation pay) in
+> **§12**; **Holiday** handling — the calendar, the adherence-grid tags, holiday-worked pay
+> and its per-day not-ready allowance — in **§13**. Landmines for all three are in
+> **`CLAUDE.md`**. Read those, not this document, for anything payroll-related.
 
 ---
 
@@ -137,14 +135,16 @@ Other per-agent fields that alter behavior: `track_attendance` (gates dashboard 
 | `T+I` | Tardy and incomplete | **disqualifying** |
 | `Quit` | Quit (auto-set by separations) | neutral |
 | `Baja` | Terminated | neutral |
-| `V` | Vacation | qualifying |
+| `V` | Vacation | qualifying; zeroes scheduled hours |
 | `LOA` | Leave of Absence | **disqualifying**; zeroes scheduled hours |
+| `Holiday` | Company holiday, scheduled but **not worked** | qualifying; zeroes scheduled hours |
+| `Issues` | Log-in/out issues — Admin Adherence only (`ADMIN_ONLY_STATUSES`), drives the admin-bonus penalty | **disqualifying** |
 
-Statuses are set **manually** by supervisors (cell click or bulk save) or automatically by request approvals (V/VTO/LOA) and separations (Quit/NCNS). There is **no automated tardy detection** — uploads only zero the hours of scheduled agents missing from the file; they never set a status.
+Statuses are set **manually** by supervisors (cell click or bulk save) or automatically by request approvals (V/VTO/LOA) and separations (Quit/NCNS). Nothing sets `Holiday` automatically — a `nomina.Holiday` row only tags the date header (SYSTEM-SUMMARY.md §13.2). There is **no automated tardy detection** — uploads only zero the hours of scheduled agents missing from the file; they never set a status.
 
 ### 6.2 Adherence bonus
 
-- Constants: `BONUS_QUALIFYING = {P, OT, MUT, VTO, P+VTO, V}`, `BONUS_DISQUALIFYING = {Absent, NCNS, T, T+VTO, T+I, I, LOA, S}` (`wfm/constants.py`).
+- Constants: `BONUS_QUALIFYING = {P, OT, MUT, VTO, P+VTO, V, Holiday}`, `BONUS_DISQUALIFYING = {Absent, NCNS, T, T+VTO, T+I, I, LOA, S, Issues}` (`wfm/constants.py`).
 - **Eligibility**: any disqualifying status in the week → no bonus. An OT shift marked **No Show** also disqualifies. Requires at least one recorded status. Official Admins never get it (they get the admin bonus).
 - **Amount** (proportional rule): `bonus = min(max_bonus, final_hours / full_hours × max_bonus)` — defaults **400 MXN max**, **40 h threshold**. At or above 40 final hours → full 400; below → pro-rated (e.g. 30 h → 300 MXN).
 - `final_hours` is the week's login+coded hours after all NR deductions.

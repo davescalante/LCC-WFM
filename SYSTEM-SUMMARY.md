@@ -50,7 +50,7 @@
 Manual credited-time block: `agent`, `date`, `start_time`, `end_time`, `notes`, `is_admin_coding` (splits regular Codings-tab entries from Finance-only admin entries — regular Codings/Adherence queries always exclude `is_admin_coding=True`). Cannot cross midnight (UI-enforced). Helper methods compute duration (`total_hours`, `total_hhmmss`). Created through the single shared path `adherence.views.create_coding` since `d4fd7d6` — see §6 for the recompute rule it owns.
 
 ### `AdherenceRecord` (adherence/models.py)
-One row per agent per day: `status` (17-value `STATUS_CHOICES` — see §6.1), `actual_hours` (computed, written by the daily NR-deduction pipeline — see §5), `notes` (unused field; real per-cell notes live in the separate `AdherenceNote` model), `unique_together (agent, date)`.
+One row per agent per day: `status` (19-value `STATUS_CHOICES`, including `Holiday` and `Issues` — see §6.1 of HANDOFF.md, §12.4 and §13.5), `actual_hours` (computed, written by the daily NR-deduction pipeline — see §5), `notes` (unused field; real per-cell notes live in the separate `AdherenceNote` model), `unique_together (agent, date)`.
 
 ### `DailyAgentHours` / `DailyUpload` (adherence/models.py)
 `DailyUpload` = one Five9 "Daily Hours" CSV per calendar date (`unique=True` on `date`; re-uploading replaces it). `DailyAgentHours` = one row per Five9 username in that upload: `login_seconds`, `not_ready_seconds`, `agent` (nullable FK — unmatched rows stay in the table for later re-matching), `five9_username`.
@@ -467,3 +467,238 @@ they are the exception to the §7 rule.
 - Change `PayrollAdjustment.commission_deduction` semantics → changes Net LPO on the Agent Nómina.
 - Change the `Agent` flags `employer`, `is_official_admin`, `role_type`, `track_attendance`,
   `hourly_rate`, `admin_bonus_mxn` → changes who is on which sheet and what they are paid.
+
+---
+
+## 12. Vacations
+
+A top-level page plus a balance rule that three other surfaces enforce. The math lives in
+`nomina/views.py`; the page, the request flow and the adherence grid all import from there.
+For the money columns it feeds see §11.4; this section covers the feature end to end.
+
+### 12.1 The page
+
+`/vacations/` is mounted on the **root** urlconf (`wfm/urls.py`), not under `/nomina/` — view
+`nomina.views.vacations`, template `nomina/vacations.html`. It is `@login_required` only; every
+access rule is inside the view:
+
+- `is_super` = `user.is_superuser` **or** `agent.is_super_admin`.
+  `is_admin` = `is_super` **or** `agent.role == 'admin'`.
+- `is_admin` sees every `status='active'` Agent, with a search box (`q`, matched against agent
+  name / first / last / username) and a supervisor dropdown. Anyone else sees **only their own
+  row**. A user with no `Agent` profile sees nothing.
+- Columns: Agent name, Legal name, Start day, Available days. Super admins additionally see
+  **Accrued** and **Used**, and their Available cell is an inline edit form.
+- The POST that saves an adjustment is super-admin-gated server-side (non-supers get
+  "Only super admins can edit vacation days" and a redirect), not merely hidden.
+- `/vacations/` is in `_AGENT_ALLOWED` in `wfm/middleware.py`, so portal users can reach it. The
+  nav renders it as **My Vacation** for portal users and **Vacations** for staff, with no
+  permission condition on either link.
+- There is no employer filter and no pay-window predicate: an inactive agent has no row at all,
+  including one still inside their final pay window.
+
+### 12.2 Balance — per work anniversary, not per calendar year
+
+`vacation_balance(agent, as_of=None)` → `(accrued, used, remaining)`:
+
+- **Service start** (`_service_start`) = the earliest `EmploymentPeriod.start_date`, falling back
+  to `Agent.start_date`. No start date → `accrued` and `used` are both 0 and only the adjustment
+  applies.
+- **Accrued** = `_lft_vacation_days(completed years)`, the Mexican LFT "Vacaciones Dignas"
+  schedule: under 1 year → 0; years 1–5 → 12/14/16/18/20; years 6–10 → 22; beyond →
+  `22 + 2 × ((years − 6) // 5)`.
+- **Used** = the count of `AdherenceRecord` rows with `status='V'` from the agent's most recent
+  hire anniversary through `as_of` **inclusive**. A Feb-29 hire resolves its anniversary to Feb 28.
+- **Remaining** = `accrued − used + VacationAdjustment.days`.
+
+`_vacation_year(agent, as_of)` returns the calendar year in which the agent's *current*
+anniversary period began; that value is the `VacationAdjustment.year` key. Everyone resets to
+their full entitlement on their anniversary and nothing carries over on its own.
+
+### 12.3 Request and tiered approval
+
+A vacation request is an ordinary `AgentRequest` (`request_type='vacation'`, `vacation_start`,
+`vacation_end`), submitted from My Requests (portal) or Requests → My Requests (staff). The
+submit path stores the two dates with no validation beyond "blank end defaults to start."
+
+- `scheduling.views.request_detail` calls `vacation_request_check` and renders
+  "requesting X day(s) · Y of Z remaining", an over-balance warning, and — for a blocked viewer —
+  a banner naming who can approve instead.
+- `vacation_request_check(agent, start, end)` → `(accrued, used, remaining, new_days, overdraw)`.
+  `new_days` counts days in the range **whose year equals the current calendar year** and that are
+  not already marked `'V'`; `overdraw = new_days > remaining`.
+- **The tier is enforced in `scheduling.views.request_approve`**: if `overdraw` and the approver is
+  not a super admin (`is_superuser` or `is_super_admin`), the view posts an error and returns
+  before any write — the request stays `pending`. A super admin may approve it and the balance goes
+  negative. Server-side, not a hidden button.
+- On approval the view writes `AdherenceRecord.objects.update_or_create(agent, date,
+  defaults={'status': 'V'})` for **every calendar day** from `vacation_start` through
+  `vacation_end` — weekends and scheduled days off included — and appends
+  "Set V (Vacation) for N day(s)" to `auto_action_log`. Unlike the LOA branch there is no
+  scheduled-day filter.
+
+### 12.4 The `V` status on the adherence grid
+
+Three writers: vacation-request approval (12.3), the single-cell AJAX endpoint
+`adherence.views.save_adherence_cell`, and the bulk grid POST in `adherence.views.adherence_week`.
+
+- **The safety net lives only in `save_adherence_cell`.** When a cell changes *into* `'V'` (the
+  check is skipped if the previous status was already `'V'`), a non-super-admin is rejected with
+  `{'ok': False, 'rejected': True}` at HTTP 200 — and the grid JS reverts the cell — whenever
+  `vacation_balance(agent, day_date).remaining < 1`. A super admin may place it and the balance
+  goes negative.
+- The **bulk grid save applies no balance check at all**; it writes `status_val` straight through
+  `update_or_create`.
+- `'V'` is in `BONUS_QUALIFYING` and in `SCHED_HOURS_ZEROING_STATUSES` (`wfm/constants.py`), so a
+  vacation day never disqualifies the adherence bonus and its scheduled hours are zeroed on the
+  Adherence tab and in `_compute_effective_scheduled_hours`. It is **not** in
+  `COS_INCLUDE_STATUSES`, so it contributes nothing to Cost of Schedule.
+- That zeroing is adherence/NR accounting only. Nómina reads the resolved shift directly, so
+  vacation pay is unaffected by it (see 12.5 and the comment in `wfm/constants.py`).
+
+### 12.5 How a vacation day becomes money
+
+**Agent Nómina only.** The full path:
+
+```
+AdherenceRecord.status='V'  (week-scoped)
+  → nomina.views._vacation_hours(agents, week_dates)
+      → adherence.views._build_maps()[0]   resolved shift for that day
+      → adherence.views._scheduled_hours(shift)  +  _build_maps()[4]  split-shift blocks
+      → per day: min(sched, 8)   — or a flat 8 when the day has no scheduled hours
+  → vac_hrs  ×  hourly_mxn (from the engine)  =  vac_pay
+  → Pay (48)  and  Total Hours     ["Mine" / corrected variant only]
+  → Subtotal → Total
+```
+
+The "Yours" sheet excludes vacation from both the pay and the hours columns and states it in the
+Notes cell instead ("Agent had N days of vacation, total hours worked should be Y"). The Agent
+Nómina page shows a banner naming each person on vacation that week with their paid hours and day
+count (`totals['on_vacation']`, `row['vac_hrs']`, `row['vac_days']`).
+
+**Admin Nómina pays no vacation hours.** `_admin_nomina_data` computes `vac_hrs` and
+`corrected_hours`, and `_admin_bonus_factors` prorates the admin bonus by worked ÷ scheduled days
+(worked = scheduled days that are not `'V'`) — but both land in the **Notes column only**. The
+exported `Total` is unchanged by either.
+
+### 12.6 `VacationAdjustment`
+
+`(agent, year)` unique, `days` (signed, one decimal place), `note`, `updated_by`, `updated_at`;
+migration `0007`. `year` is the anniversary year from `_vacation_year`, never a plain calendar year.
+
+Exactly one writer: the super-admin POST on `/vacations/`. That form takes the **target available
+figure** and stores the delta — `adjustment = new_available − (accrued − used)` — so subsequent
+`'V'` days still deduct on top of it. It is read by `vacation_balance`, so a saved adjustment moves
+the Vacations page, the request-approval gate and the adherence `V` gate together. No
+`log_action` is written.
+
+---
+
+## 13. Company Holidays
+
+### 13.1 The model and who maintains it
+
+`nomina.models.Holiday` — `date` (unique) and an optional `name`, ordered newest first. Two write
+paths:
+
+- `/nomina/holidays/` (`nomina.views.holidays`, behind `nomina_access_required` = super admin
+  or Django superuser). Save is an `update_or_create` keyed on the date, so re-adding a date
+  renames it rather than duplicating; Remove deletes by pk behind a JS `confirm()`.
+- The Django admin, via the `HolidayAdmin` registration in `nomina/admin.py` (superuser only).
+
+The page lists **every** holiday ever recorded, not just the selected week's, and neither write
+path calls `log_action`.
+
+### 13.2 Holiday tags on the grids
+
+Display only. `adherence.views.adherence_week` and `finance.views.admin_adherence` each build a
+`holiday_dates` set for the visible week from `Holiday` and pass it to their template;
+`adherence/dashboard.html` and `finance/admin_adherence.html` tint the date-header cell and render
+an amber "HOLIDAY" label under the date. Both imports are local to the function. Nothing else on
+either grid changes and no `AdherenceRecord` is created — the `'Holiday'` status is always set by
+hand.
+
+### 13.3 Holiday-worked pay
+
+Trigger: a `Holiday` row whose date falls inside the week, plus `DailyAgentHours` rows for that
+date. `nomina.views._holiday_worked_hours(agents, holiday_dates, nr_ratio)`:
+
+- Any `(agent, date)` carrying `AdherenceRecord.status='Holiday'` is dropped from the worked set
+  entirely, even if stray Five9 login exists for that day (`4f152b0`) — it is paid the
+  not-worked way instead, never both.
+- Rows are restricted to the agent's **billable** Five9 usernames. An agent with no billable
+  profile has no entry in `get_billable_username_map`, and the `bn is None` branch then counts
+  **every** username on the row.
+- Per holiday day: `worked = max(0, login_h − max(0, nr_h − login_h × nr_ratio))`, summed across
+  the week's holiday days.
+
+Where it lands, on **both** nóminas and in **both** the Yours and Mine variants:
+
+```
+holiday_pay = worked_hrs × rate × 2   +   not_worked_hrs × rate
+```
+
+into Subtotal, overridable per agent-week by a `holiday` `NominaOverride` (the Overrides page
+exposes it for agents and for official admins). The engine's `final_hrs` already carries the
+holiday's hours at 1× through base pay, so the `+2×` makes it triple **when the two hour figures
+agree** — they are produced by different rules (13.4) and need not.
+
+The not-worked case is `_holiday_not_worked_hours`: for holidays inside the week where the agent
+has `status='Holiday'`, the day's resolved scheduled hours (plus split-shift blocks) are paid at
+1× and add **nothing** to Hours Worked.
+
+### 13.4 The per-day 12.5% allowance is a third, separate NR rule
+
+Three not-ready rules coexist. All three read the same `settings.nr_ratio`, and they genuinely
+disagree — deliberately.
+
+| Rule | Allowance base | Scope | Cap |
+|---|---|---|---|
+| Money engine — `finance.views._get_billable_weekly_data` | `(login + coded) × nr_ratio` | the whole week, one bucket | yes: `nr_cap_regular_hours` 6 h / `nr_cap_kill_team_hours` 7 h; a VTO-type day substitutes the flat cap |
+| Daily display — `adherence.views._refresh_actual_hours` | `(login + coded) × nr_ratio` | one calendar day | none |
+| Holiday premium — `nomina.views._holiday_worked_hours` | **`login × nr_ratio`** (coded time excluded) | one holiday day | none |
+
+The holiday rule is the only one that leaves coded time out of the allowance base, and the only
+per-day rule that feeds money. Two consequences follow directly: coded time on a holiday enlarges
+the allowance for base pay but not for the premium; and because the weekly rule is pooled across
+seven days and capped while the holiday rule is neither, the hours the premium is paid on can
+differ from that same day's contribution to `final_hrs`. This is the intended behavior from
+`d5ecf07` — the 2× premium is paid on the day's productive hours, not on raw login.
+
+### 13.5 Holiday's place in the status sets
+
+`AdherenceRecord.status='Holiday'` means **scheduled but not worked**. It is offered on both the
+regular Adherence grid and Admin Adherence (only `'Issues'` is admin-only, via
+`ADMIN_ONLY_STATUSES`).
+
+- In `BONUS_QUALIFYING`, absent from `BONUS_DISQUALIFYING` — a company holiday is not the agent's
+  fault, so it must not kill the week's adherence bonus. Pinned by
+  `test_holiday_status_is_bonus_qualifying`.
+- In `SCHED_HOURS_ZEROING_STATUSES` — the agent was not expected to work, so the day's scheduled
+  hours are zeroed on the Adherence tab and in `_compute_effective_scheduled_hours`.
+- Absent from `COS_INCLUDE_STATUSES`, so it contributes nothing to Cost of Schedule.
+
+The zeroing is adherence/NR accounting only. `_holiday_not_worked_hours` reads the resolved shift
+directly through `_build_maps` / `_scheduled_hours`, so holiday not-worked pay is unaffected by it.
+
+### 13.6 Dependency map — what breaks if you change X
+
+- Add, rename or delete a `Holiday` row for a week already **finalized** → nothing moves; that week
+  renders from the `PayrollRun` snapshot. For an open week it changes holiday pay on both nóminas
+  immediately, and changes the amber tag on both adherence grids.
+- Change `BillingSettings.nr_ratio` → moves the holiday premium's hours, the weekly NR allowance
+  and `actual_hours`, by three different formulas.
+- Change `AdherenceRecord.status` value `'V'` or `'Holiday'`, or their membership in
+  `BONUS_QUALIFYING` / `SCHED_HOURS_ZEROING_STATUSES` → changes vacation pay, holiday pay, bonus
+  eligibility and displayed scheduled hours at once.
+- Change `_lft_vacation_days`, `_service_start` or `_vacation_year` → changes every balance, and
+  therefore what supervisors are allowed to approve.
+- Change `adherence.views._build_maps`' return-tuple order or `_scheduled_hours` → moves vacation
+  pay and holiday not-worked pay silently (both read `[0]` and `[4]` by index).
+- Rename or move `vacation_balance` / `vacation_request_check` → breaks
+  `scheduling.views.request_detail`, `scheduling.views.request_approve` and
+  `adherence.views.save_adherence_cell`. Rename or move `Holiday` → breaks
+  `adherence.views.adherence_week` and `finance.views.admin_adherence`.
+- Change the `V` writers (request approval, `save_adherence_cell`, the bulk grid POST) → changes
+  both the vacation balance and Agent Nómina vacation pay, since `'V'` rows are the only source of
+  either.

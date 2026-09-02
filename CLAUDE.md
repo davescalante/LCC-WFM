@@ -200,6 +200,79 @@ nothing in `nomina/` reads `AdherenceRecord.actual_hours`; all hours and base pa
   `adherence.views._build_maps` by tuple index** (`[0]` = shift map, `[4]` = split-shift extra
   hours). Reordering that return tuple changes vacation and holiday pay with no error.
 
+## Vacations landmines
+
+Full map in `SYSTEM-SUMMARY.md` §12. The math lives in `nomina/views.py` and is imported by
+`scheduling` and `adherence`, so a change there moves three screens at once.
+
+- **The balance is per work anniversary; the overdraw check is per calendar year.** They
+  disagree on purpose in neither direction — `vacation_balance` counts `'V'` days since the
+  agent's hire anniversary, but `vacation_request_check` counts `new_days` only for dates whose
+  `d.year == today.year`. A request whose dates fall in the next calendar year therefore scores
+  `new_days = 0`, `overdraw` is never `True`, and a supervisor can approve it with no balance
+  left. Anything touching either function has to keep both keyings straight.
+- **`used` counts only up to today, so approved future vacation is invisible to the next
+  check.** `vacation_balance` filters `date__lte=today`. Two future requests can each pass the
+  overdraw gate against the same untouched balance and together exceed it. Approving does not
+  reserve the days.
+- **The `V` safety net exists on one write path out of three.** Only
+  `adherence.views.save_adherence_cell` checks the balance (and only on a transition *into*
+  `'V'`, and only when `remaining < 1`). The bulk grid POST in `adherence.views.adherence_week`
+  writes `status_val` straight through with no check, and vacation-request approval enforces the
+  super-admin tier instead. Do not assume placing a `'V'` is gated.
+- **Approving a vacation request marks every calendar day in the range**, weekends and scheduled
+  days off included, and `update_or_create` **overwrites** whatever status was on those days
+  (`actual_hours` is left alone). The LOA branch filters to scheduled days; the vacation branch
+  deliberately does not — and `_vacation_hours` pays a flat 8 h for a `'V'` on an unscheduled
+  day, so a Sat–Sun in the range is 16 paid hours.
+- **Nothing validates the request's date range.** `_fill_request_from_post` stores
+  `vacation_start`/`vacation_end` unchecked: an end before the start silently marks zero days and
+  never overdraws; there is no cap on the length.
+- **`/vacations/` scopes on `role == 'admin'`, and it is on the portal allowlist.** The
+  `cs`, `tester` and `sms_email` portal admin types have `role='admin'`, and `/vacations/` is in
+  `_AGENT_ALLOWED` in `wfm/middleware.py` — so those portal users see the whole active roster's
+  balances, not just their own row. Accrued/Used and the edit form stay super-admin-only.
+- **The Vacations page shows `status='active'` agents only** — no pay-window carve-out, so a
+  separated agent inside their final pay window has no row even though their `'V'` days still pay.
+- **Vacation pay is Agent Nómina only.** `_admin_nomina_data` computes `vac_hrs` and the
+  worked÷scheduled bonus proration but states both in the **Notes column only**; the exported
+  Total never includes them. Do not "fix" that — it changes what admins are paid.
+- **`VacationAdjustment` stores a delta, not the number on screen.** The `/vacations/` form takes
+  a target *available* figure and saves `available − (accrued − used)`, keyed by
+  `_vacation_year(agent)`. Later `'V'` days still deduct on top of it, so re-reading the stored
+  `days` as "their balance" is wrong. Written from that one form; no `log_action` anywhere.
+
+## Holiday landmines
+
+Full map in `SYSTEM-SUMMARY.md` §13.
+
+- **The holiday not-ready allowance is a third NR rule and must stay different.**
+  `_holiday_worked_hours` uses `login × nr_ratio` **per holiday day, uncapped, with coded time
+  excluded** from the allowance base. The money engine uses `(login + coded) × nr_ratio` pooled
+  over the whole week and capped at 6 h/7 h; `_refresh_actual_hours` uses `(login + coded) ×
+  nr_ratio` per day, uncapped. All three read the same `nr_ratio`. The premium is meant to be
+  paid on the day's productive hours (`d5ecf07`), so the holiday hour count can legitimately
+  differ from that day's contribution to `final_hrs` — "triple pay" holds only when the two
+  figures happen to agree. This is not a bug to reconcile.
+- **`status='Holiday'` and worked holiday hours are mutually exclusive by design.** A day marked
+  `'Holiday'` is dropped from `_holiday_worked_hours` entirely, even if Five9 login exists for it,
+  and paid the 1× not-worked way instead (`4f152b0`). Removing that exclusion double-pays.
+- **`'Holiday'` is bonus-qualifying and zeroes scheduled hours.** It is in `BONUS_QUALIFYING` and
+  `SCHED_HOURS_ZEROING_STATUSES`, absent from `BONUS_DISQUALIFYING` and `COS_INCLUDE_STATUSES`.
+  The zeroing is adherence/NR accounting only — `_holiday_not_worked_hours` reads the resolved
+  shift directly, so holiday pay does not see it.
+- **An agent with no billable Five9 profile gets holiday hours counted from *every* username.**
+  `_holiday_worked_hours` falls back to `bn is None → count everything`, the same fallback the
+  non-billable-overpay guard exists to contain — and that guard never zeroes `holiday_pay`.
+- **Holiday tags on the two adherence grids are display only.** `adherence_week` and
+  `admin_adherence` read `Holiday` for the visible week purely to tint the date header; no
+  `AdherenceRecord` is ever created from a `Holiday` row. The `'Holiday'` status is always set by
+  hand.
+- **Deleting or moving a `Holiday` silently repays an open week.** `/nomina/holidays/` and the
+  Django admin both write with no finalize check and no `log_action`; a finalized week is safe
+  only because it renders from its `PayrollRun` snapshot. Any open week recomputes on the next
+  page load.
+
 ## Conventions
 
 - Weeks are Monday–Sunday everywhere. Snap `week_start` values using
