@@ -1943,3 +1943,76 @@ class AutoCodeApprovalTests(TestCase):
         resp = self.client.get(reverse('request_detail',
                                        kwargs={'pk': self._request(plain).pk}))
         self.assertNotContains(resp, 'Auto-codes on approval')
+
+
+class OtDuplicateInventoryTests(TestCase):
+    """The read-only OT-duplicate sections of `schedule_data_inventory`.
+
+    That command is the only way to size the duplicate-OT problem on production,
+    and its numbers decide whether anyone was overpaid — so the arithmetic and
+    the origin split are pinned here. It must never write anything.
+    """
+
+    def setUp(self):
+        self.agent = _make_agent('otdup', role='agent', role_type='regular_agent')
+        self.day = date(2026, 9, 2)  # a Wednesday; week starts Mon 2026-08-31
+
+    def _run(self):
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        call_command('schedule_data_inventory', stdout=out)
+        return out.getvalue()
+
+    def _ot(self, start, end, status='pending', incentive='power_hour'):
+        return OvertimeShift.objects.create(
+            agent=self.agent, date=self.day, start_time=start, end_time=end,
+            status=status, incentive_type=incentive,
+        )
+
+    def test_no_duplicates_reports_none_in_all_three_sections(self):
+        self._ot(time(13, 0), time(17, 0))
+        self._ot(time(18, 0), time(20, 0))  # split OT: same day, different times
+        out = self._run()
+        self.assertIn('no agent/date/time slot carries more than one row', out)
+        self.assertIn('(2) MONEY-EXPOSED DUPLICATES', out)
+        self.assertIn('(3) ORIGIN OF THE EXTRA ROWS', out)
+
+    def test_duplicates_counted_priced_and_attributed(self):
+        r1 = self._ot(time(13, 0), time(17, 0), status='completed')
+        r2 = self._ot(time(13, 0), time(17, 0), status='completed')
+        self._ot(time(13, 0), time(17, 0), status='pending')
+        # Excluded: cancelled rows, and legitimate split OT at other times.
+        self._ot(time(13, 0), time(17, 0), status='cancelled')
+        self._ot(time(18, 0), time(20, 0), status='completed')
+        # Only ot_claim_approve leaves a posting pointing at the row it created.
+        OpenOTShift.objects.create(
+            date=self.day, start_time=time(13, 0), end_time=time(17, 0),
+            status='filled', assigned_shift=r2,
+        )
+
+        out = self._run()
+
+        # (1) one duplicated slot, three rows in it, two of them extra
+        self.assertIn('duplicated slots: 1   extra rows: 2', out)
+        # (2) two completed rows in the slot → exactly one is overpay.
+        #     4h x 62.50 MXN x 1.0 (power_hour) = 250.00
+        self.assertIn('overpaying extra rows: 1   total exposure: 250.00 MXN', out)
+        self.assertIn('2026-08-31', out)  # per-week breakdown, Monday of that week
+        # (3) r2 came from a posting, the pending row did not
+        self.assertIn('agent self-service): 1', out)
+        self.assertIn('coordinator OT editor): 1', out)
+
+        # Read-only: nothing added, removed or altered
+        self.assertEqual(OvertimeShift.objects.count(), 5)
+        r1.refresh_from_db()
+        self.assertEqual(r1.status, 'completed')
+
+    def test_pending_and_unincentivized_duplicates_cost_nothing(self):
+        self._ot(time(13, 0), time(17, 0), status='pending')
+        self._ot(time(13, 0), time(17, 0), status='pending')
+        self._ot(time(9, 0), time(11, 0), status='completed', incentive='none')
+        self._ot(time(9, 0), time(11, 0), status='completed', incentive='none')
+        out = self._run()
+        self.assertIn('duplicated slots: 2   extra rows: 2', out)
+        self.assertIn('no duplicated slot has more than one completed incentivized row', out)
