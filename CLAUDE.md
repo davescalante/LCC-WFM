@@ -23,14 +23,17 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **466**. The tests are the regression gate and double as executable specs for the
+Currently **489**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Two read-only management commands exist for diagnosis; neither is reachable from a request
 path and neither writes anything. `verify_adherence_roster` runs the old and new roster
 implementations against the same database and reports any difference in the pk sets
 (`--weeks`, default 8). `schedule_data_inventory` prints row counts, date ranges and
-future-dated counts for the schedule/adherence tables.
+future-dated counts for the schedule/adherence tables, plus three OT-duplicate sections
+(`ccb64cf`): exact-duplicate slots keyed on agent/date/start/end with cancelled rows
+excluded, the money-exposed subset (extra rows that are `completed` **and** incentivized,
+priced and broken out per week), and the origin split by write path.
 
 ## The rule that matters most: there are two separate hours pipelines
 
@@ -99,11 +102,31 @@ future-dated counts for the schedule/adherence tables.
 - **Historical rates.** Always `BillingSettings.get_for_week(week_start)`, never the
   `BillingSettings.get()` singleton — otherwise past weeks recompute with today's rates
   instead of the rates in force at the time.
-- **`OvertimeShift` has no uniqueness guard** (model `Meta` has indexes only; the original
-  `unique_together` was dropped in migration `0018` to allow split OT). `overtime_week` uses
-  a bare `.create()` in a loop whose count comes straight from the POST body with no cap,
-  unlike `open_ot_create`, which clamps to 20. Duplicate rows mean duplicated hours, and
-  those feed billing and payroll. Known and unfixed — see `HANDOFF.md` §7.
+- **`OvertimeShift` has no database-level uniqueness guard, deliberately.** Model `Meta` has
+  indexes only; `unique_together = ('agent','date')` was dropped in migration `0018` so split
+  OT can hold several rows per agent-day. Enforcement is **application-level only**, in the two
+  views that create rows: `open_ot_claim` and `overtime_week` (both `b544e4d`/`5ea019f`, keyed
+  on the exact slot — agent + date + `start_time` + `end_time` — so split OT at different hours
+  is untouched by construction). A DB constraint **cannot** be added until the duplicate rows
+  already in production are cleaned up: Postgres validates a new unique constraint against
+  existing data and would fail the deploy. Any new OT create path must carry its own guard.
+- **The OT incentive top-up sums duplicate rows; the adherence maps dedupe them.**
+  `finance.views._get_billable_weekly_data` loops every `status='completed'` `OvertimeShift`
+  and does a plain `+= total_shift_hours()` per incentive type, which becomes `ph_topup_mxn` /
+  `ot_1_5_topup_mxn` and lands in `total_pay_mxn`. `adherence.views._build_maps` collapses
+  exact duplicates on `(start_time, end_time, status)`, and `_net_ot_evening_hours` unions
+  intervals rather than summing. So duplicate rows **would** overpay if they were ever marked
+  `completed` with an incentive. Measured on production 2026-09-02: **zero exposure** — every
+  existing duplicate sits at `pending`, so the path has never fired. A live hazard and a known
+  backlog item, not an incident. Do not "tidy" either side without understanding both.
+- **Cancelling an OT row is the safe void; deleting one destroys history.** Every consumer
+  already excludes `status='cancelled'` (`adherence._build_maps`, `erlang._build_scheduled_map`,
+  `_zero_missing_scheduled`, the OT grid, `overtime_export`), and `finance` counts only
+  `completed`/`no_show` — so a cancel removes a row from hours, pay and staffing while keeping
+  the row, its times and its `cancellation_reason`. `_finalize_separation` is the existing
+  precedent, retiring future OT with a bulk `.update(status='cancelled', ...)`. A hard delete
+  cascades and takes `OTShiftVerification` (`OneToOneField`) and the whole
+  `OTCancellationRequest` audit trail with it. **Any future cleanup must cancel, never delete.**
 - **`PayrollAdjustment.commission_deduction`** is stored and displayed but deliberately
   never subtracted from pay. Commission tracking is unfinished. Do not wire it up
   opportunistically while working nearby.
