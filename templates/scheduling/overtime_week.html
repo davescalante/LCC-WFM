@@ -445,9 +445,14 @@ window.addEventListener('beforeunload', function(e) {
     }
 });
 
-// Suppress beforeunload when intentionally submitting the OT form
+// Suppress beforeunload when intentionally submitting the OT form, and disable
+// Save so a double-click can't post the same rows twice. This form carries several
+// type="button" controls ahead of Save, so the selector has to name the submit
+// button specifically. Convenience only — the server skips duplicate slots itself.
 document.getElementById('ot-form').addEventListener('submit', function() {
     _otFormSubmitting = true;
+    var btn = this.querySelector('button[type=submit]');
+    if (btn) btn.disabled = true;
 });
 </script>
 {% endblock %}

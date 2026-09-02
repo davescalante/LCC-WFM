@@ -2186,3 +2186,152 @@ class OtClaimDuplicateGuardTests(TestCase):
         self._login(self.agent)
         self._claim(p2)
         self.assertEqual(OTShiftClaimRequest.objects.count(), 2)
+
+
+class OvertimeWeekSaveGuardTests(TestCase):
+    """The OT week editor must not create a second row for a slot it already has.
+
+    Every row in this form is resubmitted on every save, and a row with no pk is
+    a create — so a double-click or a re-save duplicated whatever was new. Split
+    OT (same day, different hours) has to keep working, since migration 0018
+    dropped the uniqueness guard precisely to allow it.
+    """
+
+    def setUp(self):
+        self.sup = _make_agent('wsup', role_type='supervisor')
+        self.agent = _make_agent('wagent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        self.week_start = date(2026, 9, 7)   # a Monday
+        self.client.login(username=self.sup.user.username, password='pw')
+
+    def _post(self, days, count_override=None):
+        """days: {day_index: [(start, end), ...]} — every row pk-less, i.e. a create."""
+        data = {'agent': str(self.agent.pk), 'week_start': self.week_start.isoformat()}
+        for i in range(7):
+            rows = days.get(i, [])
+            data[f'day_{i}_ot_count'] = (count_override
+                                         if count_override is not None else str(len(rows)))
+            for j, (start, end) in enumerate(rows):
+                data[f'day_{i}_ot_{j}_pk'] = ''
+                data[f'day_{i}_ot_{j}_start'] = start
+                data[f'day_{i}_ot_{j}_end'] = end
+                data[f'day_{i}_ot_{j}_incentive_type'] = 'none'
+        return self.client.post(reverse('overtime_week'), data, follow=True)
+
+    def test_identical_post_body_twice_yields_one_row(self):
+        self._post({0: [('13:00', '17:00')]})
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+
+        resp = self._post({0: [('13:00', '17:00')]})
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+        self.assertContains(resp, 'already on the schedule')
+
+    def test_split_ot_same_day_different_times_still_creates_both(self):
+        self._post({0: [('13:00', '17:00'), ('18:00', '20:00')]})
+        self.assertEqual(OvertimeShift.objects.count(), 2)
+        times = set(OvertimeShift.objects.values_list('start_time', flat=True))
+        self.assertEqual(times, {time(13, 0), time(18, 0)})
+
+        # Re-saving that day adds nothing and reports both as already present.
+        resp = self._post({0: [('13:00', '17:00'), ('18:00', '20:00')]})
+        self.assertEqual(OvertimeShift.objects.count(), 2)
+        self.assertContains(resp, '2 OT shifts were already on the schedule')
+
+    def test_same_times_on_a_different_day_is_not_a_duplicate(self):
+        self._post({0: [('13:00', '17:00')], 3: [('13:00', '17:00')]})
+        self.assertEqual(OvertimeShift.objects.count(), 2)
+        self.assertEqual(
+            set(OvertimeShift.objects.values_list('date', flat=True)),
+            {self.week_start, self.week_start + timedelta(days=3)})
+
+    def test_same_times_for_a_different_agent_is_not_a_duplicate(self):
+        other = _make_agent('wother', role='agent', role_type='regular_agent')
+        OvertimeShift.objects.create(agent=other, date=self.week_start,
+                                     start_time=time(13, 0), end_time=time(17, 0))
+        self._post({0: [('13:00', '17:00')]})
+        self.assertEqual(OvertimeShift.objects.filter(agent=self.agent).count(), 1)
+        self.assertEqual(OvertimeShift.objects.count(), 2)
+
+    def test_cancelled_row_does_not_block_a_new_one(self):
+        OvertimeShift.objects.create(agent=self.agent, date=self.week_start,
+                                     start_time=time(13, 0), end_time=time(17, 0),
+                                     status='cancelled')
+        self._post({0: [('13:00', '17:00')]})
+        self.assertEqual(
+            OvertimeShift.objects.filter(agent=self.agent).exclude(status='cancelled').count(), 1)
+
+    def test_editing_an_existing_row_by_pk_updates_and_does_not_duplicate(self):
+        self._post({0: [('13:00', '17:00')]})
+        ot = OvertimeShift.objects.get()
+        resp = self.client.post(reverse('overtime_week'), {
+            'agent': str(self.agent.pk), 'week_start': self.week_start.isoformat(),
+            'day_0_ot_count': '1',
+            'day_0_ot_0_pk': str(ot.pk),
+            'day_0_ot_0_start': '14:00', 'day_0_ot_0_end': '18:00',
+            'day_0_ot_0_incentive_type': 'none',
+            **{f'day_{i}_ot_count': '0' for i in range(1, 7)},
+        }, follow=True)
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+        ot.refresh_from_db()
+        self.assertEqual((ot.start_time, ot.end_time), (time(14, 0), time(18, 0)))
+        self.assertNotContains(resp, 'already on the schedule')
+
+    def test_oversized_count_is_clamped_to_six(self):
+        data = {'agent': str(self.agent.pk), 'week_start': self.week_start.isoformat()}
+        for i in range(7):
+            data[f'day_{i}_ot_count'] = '0'
+        data['day_0_ot_count'] = '100000'
+        for j in range(20):   # 20 distinct slots offered; only the first 6 are read
+            data[f'day_0_ot_{j}_pk'] = ''
+            data[f'day_0_ot_{j}_start'] = f'{6 + j:02d}:00'
+            data[f'day_0_ot_{j}_end'] = f'{6 + j:02d}:30'
+            data[f'day_0_ot_{j}_incentive_type'] = 'none'
+        self.client.post(reverse('overtime_week'), data, follow=True)
+        self.assertEqual(OvertimeShift.objects.count(), 6)
+
+    def test_non_numeric_count_does_not_error(self):
+        data = {'agent': str(self.agent.pk), 'week_start': self.week_start.isoformat()}
+        for i in range(7):
+            data[f'day_{i}_ot_count'] = '0'
+        data['day_0_ot_count'] = 'abc'
+        resp = self.client.post(reverse('overtime_week'), data, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(OvertimeShift.objects.count(), 0)
+
+    def _two_rows(self):
+        self._post({0: [('13:00', '17:00'), ('18:00', '20:00')]})
+        return list(OvertimeShift.objects.order_by('start_time'))
+
+    def test_explicit_removal_still_works(self):
+        keep, drop = self._two_rows()
+        self.client.post(reverse('overtime_week'), {
+            'agent': str(self.agent.pk), 'week_start': self.week_start.isoformat(),
+            'day_0_ot_count': '2',
+            'day_0_ot_0_pk': str(keep.pk),
+            'day_0_ot_0_start': '13:00', 'day_0_ot_0_end': '17:00',
+            'day_0_ot_0_incentive_type': 'none',
+            'day_0_ot_1_pk': str(drop.pk), 'day_0_ot_1_remove': 'true',
+            **{f'day_{i}_ot_count': '0' for i in range(1, 7)},
+        }, follow=True)
+        self.assertEqual(list(OvertimeShift.objects.values_list('pk', flat=True)), [keep.pk])
+
+    def test_blank_time_still_deletes_the_row(self):
+        """Pins pre-existing behavior, which this change deliberately left alone.
+
+        A submitted row whose start or end arrives blank deletes the existing row,
+        with no log_action — unlike the explicit-removal branch above. Recorded
+        here so the re-indent in this change is provably behavior-preserving; it
+        is a separate decision, not an endorsement.
+        """
+        keep, drop = self._two_rows()
+        self.client.post(reverse('overtime_week'), {
+            'agent': str(self.agent.pk), 'week_start': self.week_start.isoformat(),
+            'day_0_ot_count': '2',
+            'day_0_ot_0_pk': str(keep.pk),
+            'day_0_ot_0_start': '13:00', 'day_0_ot_0_end': '17:00',
+            'day_0_ot_0_incentive_type': 'none',
+            'day_0_ot_1_pk': str(drop.pk),
+            'day_0_ot_1_start': '', 'day_0_ot_1_end': '',
+            **{f'day_{i}_ot_count': '0' for i in range(1, 7)},
+        }, follow=True)
+        self.assertEqual(list(OvertimeShift.objects.values_list('pk', flat=True)), [keep.pk])

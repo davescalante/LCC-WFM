@@ -1755,73 +1755,107 @@ def overtime_week(request):
 
     if request.method == 'POST' and selected_agent_id:
         from decimal import Decimal, InvalidOperation
+        from django.db import transaction
         agent = get_object_or_404(Agent, pk=selected_agent_id)
+        skipped = 0
 
-        for i, day_date in enumerate(week_dates):
-            count = int(request.POST.get(f'day_{i}_ot_count', 0) or 0)
-            submitted_pks = set()
-
-            for j in range(count):
-                pk_str = request.POST.get(f'day_{i}_ot_{j}_pk', '').strip()
-                remove = request.POST.get(f'day_{i}_ot_{j}_remove', '').strip()
-                start = request.POST.get(f'day_{i}_ot_{j}_start', '').strip()
-                end = request.POST.get(f'day_{i}_ot_{j}_end', '').strip()
-                notes = request.POST.get(f'day_{i}_ot_{j}_notes', '').strip()
-                incentive_type = request.POST.get(f'day_{i}_ot_{j}_incentive_type', 'none').strip()
-                if incentive_type not in ('none', 'time_and_a_half', 'power_hour'):
-                    incentive_type = 'none'
-                inc_hrs_str = request.POST.get(f'day_{i}_ot_{j}_incentivized_hours', '').strip()
-                base_rate_str = request.POST.get(f'day_{i}_ot_{j}_base_hourly_rate', '').strip()
+        # One transaction for the whole week, so a database failure can't leave
+        # half a week of OT behind. Each write below keeps its own savepoint, so a
+        # single bad row still fails on its own exactly as it did before.
+        with transaction.atomic():
+            for i, day_date in enumerate(week_dates):
+                # `count` is how many form rows the browser rendered, and the
+                # template's own JS already caps a day at 6. Clamping it server-side
+                # keeps a crafted or malformed POST from driving this loop, and stops
+                # a non-numeric value 500ing on the bare int().
                 try:
-                    inc_hrs = Decimal(inc_hrs_str) if inc_hrs_str else None
-                except InvalidOperation:
-                    inc_hrs = None
-                try:
-                    base_rate = Decimal(base_rate_str) if base_rate_str else None
-                except InvalidOperation:
-                    base_rate = None
+                    count = max(0, min(6, int(request.POST.get(f'day_{i}_ot_count', 0) or 0)))
+                except (ValueError, TypeError):
+                    count = 0
+                submitted_pks = set()
 
-                if remove == 'true':
-                    if pk_str:
-                        OvertimeShift.objects.filter(pk=pk_str, agent=agent).delete()
-                    continue
-
-                if not (start and end):
-                    if pk_str:
-                        OvertimeShift.objects.filter(pk=pk_str, agent=agent).delete()
-                    continue
-
-                defaults = {
-                    'start_time': start,
-                    'end_time': end,
-                    'notes': notes,
-                    'incentive_type': incentive_type,
-                    'incentivized_hours': inc_hrs,
-                    'base_hourly_rate': base_rate,
-                }
-
-                if pk_str:
+                for j in range(count):
+                    pk_str = request.POST.get(f'day_{i}_ot_{j}_pk', '').strip()
+                    remove = request.POST.get(f'day_{i}_ot_{j}_remove', '').strip()
+                    start = request.POST.get(f'day_{i}_ot_{j}_start', '').strip()
+                    end = request.POST.get(f'day_{i}_ot_{j}_end', '').strip()
+                    notes = request.POST.get(f'day_{i}_ot_{j}_notes', '').strip()
+                    incentive_type = request.POST.get(f'day_{i}_ot_{j}_incentive_type', 'none').strip()
+                    if incentive_type not in ('none', 'time_and_a_half', 'power_hour'):
+                        incentive_type = 'none'
+                    inc_hrs_str = request.POST.get(f'day_{i}_ot_{j}_incentivized_hours', '').strip()
+                    base_rate_str = request.POST.get(f'day_{i}_ot_{j}_base_hourly_rate', '').strip()
                     try:
-                        ot_obj = OvertimeShift.objects.get(pk=pk_str, agent=agent)
-                        for k, v in defaults.items():
-                            setattr(ot_obj, k, v)
-                        ot_obj.save()
-                        submitted_pks.add(ot_obj.pk)
-                        log_action(request.user, 'Updated OT shift',
-                                   f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
-                    except OvertimeShift.DoesNotExist:
-                        pass
-                    except Exception as _e:
-                        messages.error(request, f"Error saving OT shift for {day_date.strftime('%A, %b %d')} ({start}–{end}): {_e}")
-                else:
+                        inc_hrs = Decimal(inc_hrs_str) if inc_hrs_str else None
+                    except InvalidOperation:
+                        inc_hrs = None
                     try:
-                        ot_obj = OvertimeShift.objects.create(agent=agent, date=day_date, **defaults)
-                        submitted_pks.add(ot_obj.pk)
-                        log_action(request.user, 'Added OT shift',
-                                   f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
-                    except Exception as _e:
-                        messages.error(request, f"Error saving OT shift for {day_date.strftime('%A, %b %d')} ({start}–{end}): {_e}")
+                        base_rate = Decimal(base_rate_str) if base_rate_str else None
+                    except InvalidOperation:
+                        base_rate = None
 
+                    if remove == 'true':
+                        if pk_str:
+                            OvertimeShift.objects.filter(pk=pk_str, agent=agent).delete()
+                        continue
+
+                    if not (start and end):
+                        if pk_str:
+                            OvertimeShift.objects.filter(pk=pk_str, agent=agent).delete()
+                        continue
+
+                    defaults = {
+                        'start_time': start,
+                        'end_time': end,
+                        'notes': notes,
+                        'incentive_type': incentive_type,
+                        'incentivized_hours': inc_hrs,
+                        'base_hourly_rate': base_rate,
+                    }
+
+                    if pk_str:
+                        try:
+                            with transaction.atomic():
+                                ot_obj = OvertimeShift.objects.get(pk=pk_str, agent=agent)
+                                for k, v in defaults.items():
+                                    setattr(ot_obj, k, v)
+                                ot_obj.save()
+                            submitted_pks.add(ot_obj.pk)
+                            log_action(request.user, 'Updated OT shift',
+                                       f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
+                        except OvertimeShift.DoesNotExist:
+                            pass
+                        except Exception as _e:
+                            messages.error(request, f"Error saving OT shift for {day_date.strftime('%A, %b %d')} ({start}–{end}): {_e}")
+                    else:
+                        # A row with no pk means "create". Nothing here looked at what
+                        # the agent already had that day, so re-submitting this form —
+                        # a double-click, or a coordinator adding a shift someone else
+                        # already entered — made a second row for the same slot. There
+                        # is no uniqueness constraint to catch it: migration 0018 drops
+                        # it deliberately so split OT can hold several rows per day.
+                        # Matching on the exact times leaves split OT alone.
+                        if OvertimeShift.objects.filter(
+                            agent=agent, date=day_date, start_time=start, end_time=end,
+                        ).exclude(status='cancelled').exists():
+                            skipped += 1
+                            continue
+                        try:
+                            with transaction.atomic():
+                                ot_obj = OvertimeShift.objects.create(agent=agent, date=day_date, **defaults)
+                            submitted_pks.add(ot_obj.pk)
+                            log_action(request.user, 'Added OT shift',
+                                       f'{agent} on {day_date.isoformat()}: {start}–{end}', agent=agent)
+                        except Exception as _e:
+                            messages.error(request, f"Error saving OT shift for {day_date.strftime('%A, %b %d')} ({start}–{end}): {_e}")
+
+        if skipped:
+            messages.warning(
+                request,
+                f"⚠ {skipped} OT shift{'s' if skipped > 1 else ''} "
+                f"{'were' if skipped > 1 else 'was'} already on the schedule and "
+                f"{'were' if skipped > 1 else 'was'} not added again."
+            )
         messages.success(request, f"OT shifts saved for {agent} — week of {week_start.strftime('%B %d, %Y')}.")
         return redirect(f"{reverse('overtime_list')}?week_start={week_start.isoformat()}")
 
