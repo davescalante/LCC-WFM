@@ -2016,3 +2016,173 @@ class OtDuplicateInventoryTests(TestCase):
         out = self._run()
         self.assertIn('duplicated slots: 2   extra rows: 2', out)
         self.assertIn('no duplicated slot has more than one completed incentivized row', out)
+
+
+class OtClaimDuplicateGuardTests(TestCase):
+    """An agent cannot request an OT slot they already hold or already asked for.
+
+    The pre-existing guard was per-posting; coordinators post several identical
+    postings for one slot on purpose, so an agent could ask for the same hours
+    twice through different postings. These pin the slot-level rule, and pin that
+    a rejection still leaves the slot re-requestable.
+    """
+
+    def setUp(self):
+        self.sup = _make_agent('gsup', role_type='supervisor')
+        self.agent = _make_agent('gagent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        self.day = date.today() + timedelta(days=3)
+
+    def _login(self, agent):
+        self.client.login(username=agent.user.username, password='pw')
+
+    def _post_open(self, count=1, start='13:00', end='17:00'):
+        self._login(self.sup)
+        self.client.post(reverse('open_ot_create'), {
+            'date': self.day.isoformat(), 'start_time': start, 'end_time': end,
+            'incentive_type': 'power_hour', 'notes': '', 'count': str(count),
+        })
+        self.client.logout()
+        return list(OpenOTShift.objects.order_by('pk'))
+
+    def _claim(self, posting):
+        return self.client.post(reverse('open_ot_claim', kwargs={'pk': posting.pk}),
+                                follow=True)
+
+    def _ot(self, start=time(13, 0), end=time(17, 0), status='pending'):
+        return OvertimeShift.objects.create(
+            agent=self.agent, date=self.day, start_time=start, end_time=end, status=status,
+        )
+
+    # ── pending claim on another posting for the same slot ───────────────
+
+    def test_second_posting_same_slot_blocked(self):
+        p1, p2 = self._post_open(count=2)
+        self._login(self.agent)
+        self._claim(p1)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 1)
+
+        resp = self._claim(p2)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 1)
+        self.assertContains(resp, 'already have a pending request for 13:00')
+        self.assertContains(resp, 'still waiting for approval')
+
+    def test_same_posting_twice_keeps_the_original_message(self):
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self._claim(posting)
+        resp = self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 1)
+        self.assertContains(resp, 'already have a pending request for this shift')
+
+    def test_different_times_same_day_still_allowed(self):
+        """Split OT regression guard: same day, different hours must go through."""
+        self._post_open(start='13:00', end='17:00')
+        self._post_open(start='18:00', end='20:00')
+        p1, p2 = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self._claim(p1)
+        self._claim(p2)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 2)
+
+    # ── rejected claims stay re-requestable ─────────────────────────────
+
+    def test_rejected_claim_can_be_requested_again(self):
+        """Rejections happen for reasons that change, so the slot reopens to them.
+
+        Nothing special-cases this: both new guards look only at `pending` claims
+        and at live OvertimeShift rows, and a rejected claim is neither.
+        """
+        p1, p2 = self._post_open(count=2)
+        self._login(self.agent)
+        self._claim(p1)
+        self.client.logout()
+
+        claim = OTShiftClaimRequest.objects.get()
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_reject', kwargs={'pk': claim.pk}),
+                         {'rejection_reason': 'Covered already'})
+        self.client.logout()
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 0)
+
+        # The same posting is requestable again...
+        self._login(self.agent)
+        self._claim(p1)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 1)
+
+        # ...and that fresh request immediately re-arms the slot guard.
+        resp = self._claim(p2)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 1)
+        self.assertContains(resp, 'still waiting for approval')
+
+    def test_rejected_claim_reopens_slot_even_via_a_different_posting(self):
+        p1, p2 = self._post_open(count=2)
+        self._login(self.agent)
+        self._claim(p1)
+        self.client.logout()
+
+        claim = OTShiftClaimRequest.objects.get()
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_reject', kwargs={'pk': claim.pk}),
+                         {'rejection_reason': 'Covered already'})
+        self.client.logout()
+
+        self._login(self.agent)
+        self._claim(p2)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 1)
+
+    # ── already holding an OvertimeShift for the slot ────────────────────
+
+    def test_existing_assigned_shift_blocks_claim(self):
+        self._ot()
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        resp = self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 0)
+        self.assertContains(resp, 'already have an OT shift assigned for 13:00')
+
+    def test_cancelled_shift_does_not_block_claim(self):
+        self._ot(status='cancelled')
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 1)
+
+    def test_assigned_shift_at_other_times_does_not_block(self):
+        self._ot(start=time(18, 0), end=time(20, 0))
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 1)
+
+    def test_approved_claim_blocks_a_second_identical_posting(self):
+        """The end-to-end case: approval creates the OvertimeShift, which then
+        blocks the same agent claiming the duplicate posting for that slot."""
+        p1, p2 = self._post_open(count=2)
+        self._login(self.agent)
+        self._claim(p1)
+        self.client.logout()
+
+        claim = OTShiftClaimRequest.objects.get()
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}))
+        self.client.logout()
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+
+        self._login(self.agent)
+        resp = self._claim(p2)
+        self.assertContains(resp, 'already have an OT shift assigned for 13:00')
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 0)
+
+    # ── unrelated agents are unaffected ─────────────────────────────────
+
+    def test_another_agents_claim_does_not_block_this_agent(self):
+        other = _make_agent('gother', role='agent', role_type='regular_agent')
+        p1, p2 = self._post_open(count=2)
+        self._login(other)
+        self._claim(p1)
+        self.client.logout()
+        self._login(self.agent)
+        self._claim(p2)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 2)

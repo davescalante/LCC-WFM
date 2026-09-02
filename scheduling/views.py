@@ -2247,17 +2247,52 @@ def open_ot_claim(request, pk):
         return _redirect_after_ot_action(request)
 
     posting = get_object_or_404(OpenOTShift, pk=pk)
-    if posting.status != 'open':
-        messages.error(request, "This shift has already been filled.")
-        return _redirect_after_ot_action(request, posting.date)
-    if posting.claim_requests.filter(requester=viewer, status='pending').exists():
-        messages.error(request, "You already have a pending request for this shift.")
-        return _redirect_after_ot_action(request, posting.date)
 
-    OTShiftClaimRequest.objects.create(
-        open_shift=posting, requester=viewer,
-        supervisor_read=False, requester_read=True,
-    )
+    # One agent, one request per slot. The guards below and the create have to see
+    # the same state or a double-click slips two pending claims through — there is
+    # no uniqueness constraint behind this table to catch it. The row lock is a
+    # silent no-op on local SQLite and only real on production Postgres.
+    from django.db import transaction
+    with transaction.atomic():
+        posting = OpenOTShift.objects.select_for_update().get(pk=posting.pk)
+        if posting.status != 'open':
+            messages.error(request, "This shift has already been filled.")
+            return _redirect_after_ot_action(request, posting.date)
+        if posting.claim_requests.filter(requester=viewer, status='pending').exists():
+            messages.error(request, "You already have a pending request for this shift.")
+            return _redirect_after_ot_action(request, posting.date)
+
+        slot = f"{posting.time_label()} on {posting.date.strftime('%A, %b %d')}"
+
+        # Same hours, same day, but a DIFFERENT posting. Coordinators post several
+        # identical postings for one slot on purpose (open_ot_create's `count`), so
+        # the per-posting check above misses the case agents actually hit: asking
+        # for the same time twice, days apart, having forgotten the first one.
+        if OTShiftClaimRequest.objects.filter(
+            requester=viewer, status='pending',
+            open_shift__date=posting.date,
+            open_shift__start_time=posting.start_time,
+            open_shift__end_time=posting.end_time,
+        ).exists():
+            messages.error(request, f"You already have a pending request for {slot} — "
+                                    f"it's still waiting for approval.")
+            return _redirect_after_ot_action(request, posting.date)
+
+        # Already holding this slot. Only `pending` claims are checked above and a
+        # rejected claim never produced an OvertimeShift, so neither guard can
+        # block a re-request after a rejection — that needs no special case.
+        if OvertimeShift.objects.filter(
+            agent=viewer, date=posting.date,
+            start_time=posting.start_time, end_time=posting.end_time,
+        ).exclude(status='cancelled').exists():
+            messages.error(request, f"You already have an OT shift assigned for {slot}.")
+            return _redirect_after_ot_action(request, posting.date)
+
+        OTShiftClaimRequest.objects.create(
+            open_shift=posting, requester=viewer,
+            supervisor_read=False, requester_read=True,
+        )
+
     log_action(request.user, 'Requested open OT shift',
                f"{posting.date} {posting.time_label()}", agent=viewer)
     messages.success(request, "Your request has been submitted and is pending approval.")
