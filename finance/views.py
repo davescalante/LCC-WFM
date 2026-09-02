@@ -137,18 +137,27 @@ def _get_billable_weekly_data(agents, week_dates, settings):
     """
     Compute weekly pay and billing figures for a list of billable agents.
 
-    Sums each agent's login seconds and NR seconds from Five9 DailyAgentHours rows,
-    then applies the NR deduction rule (the larger of two independent checks):
-      - check1: deduct any NR hours above the absolute weekly cap (6 h regular, 7 h kill-team)
-      - check2: deduct any NR hours above 12.5% of total worked time (only when pre-NR total ≤ 48 h)
-    Adds any manually coded hours and runs pay calculations (base pay, OT top-ups, bonus, billing).
+    Sums each agent's login seconds and NR seconds from Five9 DailyAgentHours rows
+    (restricted to that agent's billable Five9 usernames), adds coded hours from
+    exactly one path per person — Official Admins from admin codings, everyone else
+    from regular codings, never both — then applies ONE weekly not-ready allowance:
+      nr_allowed    = min(cap, connected × settings.nr_ratio)   # connected = login + coded
+      nr_deduction  = max(0, weekly_NR − nr_allowed)
+      final_hrs     = max(0, connected − nr_deduction)
+    Cap = nr_cap_regular_hours (6 h) / nr_cap_kill_team_hours (7 h for kill_team). Any
+    VTO-type day that week substitutes the flat cap for the ratio. There is no 48-hour
+    threshold and no larger-of-two comparison. Then runs the pay calculations (base pay,
+    OT top-ups, adherence or admin bonus, billing).
 
     Returns a dict keyed by agent.pk, each value containing:
-      total_login_hrs, total_coded_hrs, total_nr_hrs,
-      nr_cap_hrs, nr_cap_adj_hrs, final_hrs,
-      bonus (bool), ot_regular_hrs, ot_1_5_hrs, ot_power_hrs,
-      commission_pct, base_pay_mxn, ot_regular_mxn, ot_1_5_mxn,
-      power_hour_usd, bonus_mxn, total_pay_mxn, total_pay_usd, billing_usd
+      agent, five9_username
+      total_nr_hrs, nr_cap_hrs, nr_allowed_hrs, nr_deduction
+      actual_hrs (raw login), coded_hrs, pre_cap_total, final_hrs
+      ot_regular_hrs, ot_1_5_hrs, ot_power_hrs
+      hourly_mxn, billing_rate_usd
+      base_pay_mxn, ph_topup_mxn, ot_1_5_topup_mxn
+      bonus_qualifies (bool), is_official_admin (bool), bonus_mxn, admin_bonus_mxn
+      commission_pct, total_pay_mxn, total_pay_usd, billing_usd
     """
     agent_ids = [a.pk for a in agents]
     week_start = week_dates[0]
