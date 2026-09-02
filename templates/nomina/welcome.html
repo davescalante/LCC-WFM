@@ -35,7 +35,7 @@
         <h2>Enrolled</h2>
         {% if enrolls %}
         <table style="width:100%;font-size:13px;">
-            <thead><tr><th>Agent</th><th style="text-align:right;">Amount</th><th style="text-align:center;"># Wks</th><th>Since</th><th style="text-align:center;">This wk?</th><th style="text-align:center;">Weeks left</th><th></th></tr></thead>
+            <thead><tr><th>Agent</th><th style="text-align:right;">Amount</th><th style="text-align:center;"># Wks</th><th>Since</th><th style="text-align:center;">Earned?</th><th style="text-align:center;">Weeks left</th><th></th></tr></thead>
             <tbody>
             {% for e in enrolls %}
             <tr>
@@ -43,7 +43,7 @@
                 <td style="text-align:right;font-family:monospace;">${{ e.amount|floatformat:2 }}</td>
                 <td style="text-align:center;">{{ e.num_weeks }}</td>
                 <td>{{ e.start_week|date:"M d" }}</td>
-                <td style="text-align:center;">{% if e.weeks_in %}<span style="color:#16a34a;font-weight:700;">✓</span>{% else %}<span style="color:#ccc;">—</span>{% endif %}</td>
+                <td style="text-align:center;">{% if e.earned_this_week %}<span style="color:#16a34a;font-weight:700;">✓</span>{% else %}<span style="color:#ccc;">—</span>{% endif %}</td>
                 <td style="text-align:center;">{% if e.weeks_left > 0 %}<span style="{% if e.weeks_left == 1 %}color:#d97706;font-weight:700;{% endif %}">{{ e.weeks_left }}</span>{% else %}<span style="color:#ccc;">lapsed</span>{% endif %}</td>
                 <td style="text-align:right;"><form method="post" style="margin:0;" onsubmit="return confirm('Remove?');">{% csrf_token %}<input type="hidden" name="delete" value="{{ e.pk }}"><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Remove</button></form></td>
             </tr>

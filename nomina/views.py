@@ -1060,8 +1060,16 @@ def welcome(request):
         return redirect(f"{request.path}?week_start={week_start.isoformat()}")
 
     enrolls = list(WelcomeBonusEnrollment.objects.select_related('agent__user').all())
+    # "Earned?" reflects whether they actually EARN the welcome bonus this week — the same
+    # condition the nómina export pays on: the week must be covered AND they must have earned
+    # an adherence bonus that week. Reuse the nómina builder (never re-derive the bonus) so the
+    # table and the export can never disagree.
+    rows, _ = _agent_nomina_data(week_start, week_dates)
+    bonus_by_agent = {r['agent'].pk: r['adherence_bonus'] for r in rows}
     for e in enrolls:
-        e.weeks_in = e.covers_week(week_start)
+        e.earned_this_week = (
+            e.covers_week(week_start) and bonus_by_agent.get(e.agent_id, Decimal('0')) > 0
+        )
         elapsed = (week_start - e.start_week).days // 7
         if week_start < e.start_week:
             e.weeks_left = e.num_weeks              # term hasn't started yet
