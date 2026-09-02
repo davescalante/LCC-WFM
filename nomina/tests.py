@@ -64,6 +64,46 @@ class WelcomeWeeksLeftTests(TestCase):
         self.assertEqual(self._weeks_left_at(self.start - timedelta(weeks=1)), 4)
 
 
+class WelcomeEarnedThisWeekTests(TestCase):
+    """The 'Earned?' column shows ✓ only when the person actually earns the welcome bonus that
+    week — the week is within the term AND they earned an adherence bonus that week — matching
+    what the nómina export pays. (Regression: it used to show ✓ for any week inside the term,
+    even when the export paid $0 because no adherence bonus was earned.)"""
+
+    def setUp(self):
+        from datetime import date
+        from nomina.models import WelcomeBonusEnrollment
+        _make_agent('we_super', is_super_admin=True)
+        self.client.login(username='we_super', password='x')
+        self.agent = _make_agent('we_agent', role='agent', role_type='regular_agent')
+        self.start = date(2026, 8, 3)   # a Monday
+        self.enr = WelcomeBonusEnrollment.objects.create(
+            agent=self.agent, amount=Decimal('1000'), num_weeks=4, start_week=self.start)
+
+    def _earned_at(self, week_start, bonus):
+        # Patch the nómina builder so the enrolled agent's adherence bonus for the week is
+        # exactly `bonus` — the welcome table must derive "earned" from the same number the
+        # export pays on, never re-computing it.
+        from unittest.mock import patch
+        rows = [{'agent': self.agent, 'adherence_bonus': Decimal(str(bonus))}]
+        with patch('nomina.views._agent_nomina_data', return_value=(rows, {})):
+            url = reverse('nomina:welcome') + f'?week_start={week_start.isoformat()}'
+            resp = self.client.get(url)
+        enr = next(e for e in resp.context['enrolls'] if e.pk == self.enr.pk)
+        return enr.earned_this_week
+
+    def test_earned_when_covered_and_bonus(self):
+        self.assertTrue(self._earned_at(self.start, bonus='500'))
+
+    def test_not_earned_when_covered_but_no_bonus(self):
+        # In term, but no adherence bonus that week → no welcome bonus paid → no ✓.
+        self.assertFalse(self._earned_at(self.start, bonus='0'))
+
+    def test_not_earned_when_bonus_but_term_lapsed(self):
+        from datetime import timedelta
+        self.assertFalse(self._earned_at(self.start + timedelta(weeks=4), bonus='500'))
+
+
 class NominaAccessTests(TestCase):
     """The Nómina landing is super-admin only (mirrors Finance gating)."""
 
