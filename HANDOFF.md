@@ -32,7 +32,7 @@ LCC WFM is a workforce-management web application for a bilingual call-center op
 | Excel exports | openpyxl |
 | Frontend | Server-rendered Django templates with inline CSS, vanilla JS. No framework, no build step. Small AJAX endpoints (JSON `fetch`) for in-place updates: OT status pills, adherence cells, codings, notes, live-refresh polling (`/poll/`, `/adherence/poll/`) |
 | Auth | Stock `django.contrib.auth` (login at `/accounts/login/`), custom session-timeout + access middleware |
-| Tests | `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run `python3 manage.py test`. As of the last commit: 461/461 passing |
+| Tests | `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run `python3 manage.py test`. As of the last commit: 464/464 passing |
 | Diagnostics | Two **read-only** management commands, neither reachable from any request path and neither writing anything: `verify_adherence_roster` (`6877c40`/`e2509eb`) runs the pre- and post-`86ab564` roster implementations against the same database and reports any difference in the pk sets — `--weeks`, default 8, exits 1 on a mismatch so it can gate a deploy; `schedule_data_inventory` prints row counts, date ranges and future-dated counts for the schedule/adherence tables plus ShiftTemplate-per-agent and OT-duplicate distributions. See §7 items 54 and 59 |
 
 URL mounts (`wfm/urls.py`): scheduling app at **site root** (and duplicated at `/scheduling/`), `/adherence/`, `/erlang/`, `/finance/`, Django admin at `/admin/`, auth at `/accounts/`.
@@ -170,12 +170,12 @@ So each agent gets an NR allowance of 12.5% of their worked time; only NR **beyo
 
 Computed in Finance per agent per week, **from raw login seconds** (not the daily-adjusted values):
 
-- **Check 1 — absolute cap**: weekly NR hours above the cap are deducted. Cap = **6 h** regular, **7 h** for `kill_team` role type.
-- **Check 2 — 48-hour ratio rule**: only when the week's pre-deduction total (login+coded) is **≤ 48 h**, deduct `max(0, weekly_NR − raw_login × 12.5%)`. Above 48 h this check is skipped entirely.
-- **Larger-of-two rule**: the deduction applied is `max(check1, check2)` — never both.
+- **One weekly allowance**: `nr_allowed = min(cap, connected × 12.5%)`, where `connected` is the pre-deduction total (login + coded). Cap = **6 h** regular, **7 h** for `kill_team` role type.
+- **VTO raises it to the flat cap**: any `VTO`/`P+VTO`/`T+VTO` day that week makes the allowance the flat cap instead of the ratio.
+- **Deduction** = `max(0, weekly_NR − nr_allowed)`. There is **no 48-hour threshold and no larger-of-two comparison** — `nr_ratio_max_hours` was removed from `BillingSettings` and `BillingSettingsHistory` in migration `0008` (2026-08-05), and the ratio is taken against connected time, not raw login.
 - `final_hours = max(0, login + coded − deduction)` → drives both billing and payroll.
 
-Note the adherence tab shows only the check-1 portion in its `NR Cap Adj` column (its daily 12.5% was already applied at upload); Finance recomputes independently from raw seconds.
+Note the adherence tab shows only the flat-cap excess (`max(0, weekly_NR − cap)`) in its `NR Cap Adj` column (its daily 12.5% was already applied at upload); Finance recomputes the full allowance independently from raw seconds.
 
 ### 6.6 Cost of Schedule (COS)
 
