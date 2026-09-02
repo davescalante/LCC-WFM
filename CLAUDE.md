@@ -23,8 +23,14 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-The tests are the regression gate and double as executable specs for the trickier rules
-(NR caps, bonus eligibility, request approvals, export field gating).
+Currently **461**. The tests are the regression gate and double as executable specs for the
+trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
+
+Two read-only management commands exist for diagnosis; neither is reachable from a request
+path and neither writes anything. `verify_adherence_roster` runs the old and new roster
+implementations against the same database and reports any difference in the pk sets
+(`--weeks`, default 8). `schedule_data_inventory` prints row counts, date ranges and
+future-dated counts for the schedule/adherence tables.
 
 ## The rule that matters most: there are two separate hours pipelines
 
@@ -42,14 +48,16 @@ The tests are the regression gate and double as executable specs for the trickie
 
 - **Pay-window predicate.** An agent counts toward a given week if `status='active'` OR
   they are inactive with a `finalized` separation whose `remove_from_adherence_date >
-  week_start`. This predicate is duplicated across 8 call sites: `_get_adherence_agent_pks`
-  in `adherence/`, the `agent_list` export in `scheduling/views.py`, and `billing_report`,
-  `billing_export`, `billing_export_v2`, `payroll_report`, `payroll_export`, and
-  `codings_export` in `finance/views.py`. Four of these (`billing_report`, `billing_export`,
-  `payroll_report`, `payroll_export`) use an `.exclude()`-shaped form rather than the `Q()`
-  form — the same rule in two different shapes, so a change to this predicate has to check
-  both and can easily miss a site. Prefer additive changes; do not consolidate it into one
-  helper unless that is explicitly the task.
+  week_start`. This predicate is duplicated across 11 call sites: `_get_adherence_agent_pks`
+  and `codings_week` in `adherence/`, the `agent_list` export in `scheduling/views.py`,
+  `billing_report`, `billing_export`, `billing_export_v2`, `payroll_report`,
+  `payroll_export`, and `codings_export` in `finance/views.py`, and `_pay_window` plus
+  `_agent_nomina_data` in `nomina/views.py` (the latter deliberately uses only the
+  inactive-separated half — see its comment). Four of these (`billing_report`,
+  `billing_export`, `payroll_report`, `payroll_export`) use an `.exclude()`-shaped form
+  rather than the `Q()` form — the same rule in two different shapes, so a change to this
+  predicate has to check both and can easily miss a site. Prefer additive changes; do not
+  consolidate it into one helper unless that is explicitly the task.
 - **Best-template resolution.** A specific-date `Shift` override always beats a
   `ShiftTemplate`; among templates covering the date, the latest `effective_from` wins
   (`None` treated as earliest). A shared helper, `_best_shift_template` in
@@ -67,9 +75,31 @@ The tests are the regression gate and double as executable specs for the trickie
   write an `AdherenceRecord` for an Official Admin who should not have one.
   `finance.views.add_admin_coding_ajax` deliberately never recomputes either. Do not add
   a bare `Coding.objects.create()` anywhere; it silently skips the recompute.
+- **The Adherence roster query is not indexable.** `_get_adherence_agent_pks` collects pks
+  in two steps — eligibility, then four scoped activity queries unioned in Python — and it
+  must stay that way (`86ab564`). As one `filter()` with four OR'd conditions across four
+  multi-valued relations, each relation got an unrestricted `LEFT JOIN` and every date
+  predicate landed in the `WHERE`, so the database materialised the cartesian product of
+  every shift, OT, template and adherence record per agent: half a billion rows to return
+  93 integers, and a 502. Every useful index already exists; the cost is the join shape,
+  so do not reach for an index here. Two things inside it are load-bearing: the eligibility
+  conditions must stay in a **single `.filter()` chain** (split across calls, each gets its
+  own join and an agent with several separation rows is judged on a combination no single
+  row satisfies), and the `ShiftTemplate` branch stays **unscoped by date** — it looks wrong
+  and is deliberate; `adherence_start_date` is the only floor on it.
+- **The Adherence supervisor filter does not filter in SQL.** `_get_adherence_agent_pks`
+  takes `supervisor_id`, but uses it only to build the cache key — the query always scans
+  the whole roster. Narrowing happens afterwards in `_apply_supervisor_filter` and the
+  `group=` param. So filtering the tab to one supervisor does not make its query cheaper,
+  which is genuinely counterintuitive and cost real diagnostic time.
 - **Historical rates.** Always `BillingSettings.get_for_week(week_start)`, never the
   `BillingSettings.get()` singleton — otherwise past weeks recompute with today's rates
   instead of the rates in force at the time.
+- **`OvertimeShift` has no uniqueness guard** (model `Meta` has indexes only; the original
+  `unique_together` was dropped in migration `0018` to allow split OT). `overtime_week` uses
+  a bare `.create()` in a loop whose count comes straight from the POST body with no cap,
+  unlike `open_ot_create`, which clamps to 20. Duplicate rows mean duplicated hours, and
+  those feed billing and payroll. Known and unfixed — see `HANDOFF.md` §7.
 - **`PayrollAdjustment.commission_deduction`** is stored and displayed but deliberately
   never subtracted from pay. Commission tracking is unfinished. Do not wire it up
   opportunistically while working nearby.
