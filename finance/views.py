@@ -217,7 +217,25 @@ def _get_billable_weekly_data(agents, week_dates, settings):
     ot_regular_map = {}
     ot_1_5_map = {}
     ot_power_map = {}
-    for ot in OvertimeShift.objects.filter(agent__in=agent_ids, date__in=week_dates, status='completed'):
+    # Collapse exact-duplicate OT rows per agent/day, keyed on (start_time, end_time,
+    # status) — the identical key adherence.views._build_maps uses. Identical rows are the
+    # same slot recorded twice, and summing them paid the incentive premium twice. Split OT
+    # is untouched by construction: two rows on one day at different hours have different
+    # keys and both still count. incentive_type is deliberately NOT in the key — including
+    # it would keep both rows of a slot recorded once as power_hour and once as
+    # time_and_a_half and pay both premiums, the exact overpay this closes. order_by('pk')
+    # makes "the first row wins" deterministic when a duplicated slot's rows disagree on
+    # incentive_type, matching how schedule_data_inventory attributes a duplicated slot.
+    # Proved a no-op on production over 52 weeks by the verify_ot_topups parity command.
+    _ot_seen = {}
+    for ot in OvertimeShift.objects.filter(
+        agent__in=agent_ids, date__in=week_dates, status='completed'
+    ).order_by('pk'):
+        seen = _ot_seen.setdefault((ot.agent_id, ot.date), set())
+        dedup_key = (ot.start_time, ot.end_time, ot.status)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
         hrs = ot.total_shift_hours()
         if ot.incentive_type == 'none':
             ot_regular_map[ot.agent_id] = ot_regular_map.get(ot.agent_id, Decimal('0')) + hrs

@@ -1760,3 +1760,151 @@ class OTTopupParityCommandTests(TestCase):
         )
         self.assertEqual(before, after)
         self.assertEqual(OvertimeShift.objects.count(), 2)
+
+
+class OTTopupDedupeTests(TestCase):
+    """The OT incentive top-up collapses exact-duplicate rows, matching adherence.
+
+    finance.views._get_billable_weekly_data used to sum every status='completed'
+    OvertimeShift with a plain +=, so a slot recorded twice paid its premium twice
+    through ph_topup_mxn / ot_1_5_topup_mxn and total_pay_mxn. It now collapses on
+    (start_time, end_time, status) per agent/day — the identical key
+    adherence.views._build_maps uses — with order_by('pk') as the tiebreak.
+
+    Proved a no-op on production over 52 weeks by verify_ot_topups before landing.
+    """
+
+    def setUp(self):
+        # High NR cap so no deduction interferes; no login hours anywhere in this
+        # class, so base_pay is 0 and the top-ups are the only money in play.
+        self.s = _settings(nr_cap_regular_hours=Decimal('99'), nr_ratio=Decimal('0.125'))
+        self.agent = _make_agent('ot_dedupe_a')
+        self.agent.hourly_rate = Decimal('100')
+        self.agent.save()
+
+    def _ot(self, agent, week_day, start_h, end_h, incentive='power_hour', status='completed'):
+        return OvertimeShift.objects.create(
+            agent=agent, date=_WEEK[week_day],
+            start_time=time(start_h, 0), end_time=time(end_h, 0),
+            incentive_type=incentive, status=status,
+        )
+
+    def _data(self, *agents):
+        from finance.views import _get_billable_weekly_data
+        return _get_billable_weekly_data(list(agents) or [self.agent], _WEEK, self.s)
+
+    def test_duplicate_power_hour_pays_one_premium(self):
+        self._ot(self.agent, 1, 18, 20)
+        self._ot(self.agent, 1, 18, 20)   # the exact duplicate
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_power_hrs'], Decimal('2'))          # not 4
+        self.assertEqual(d['ph_topup_mxn'], Decimal('200.00'))     # not 400
+
+    def test_duplicate_time_and_a_half_pays_one_premium(self):
+        self._ot(self.agent, 1, 18, 20, incentive='time_and_a_half')
+        self._ot(self.agent, 1, 18, 20, incentive='time_and_a_half')
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_1_5_hrs'], Decimal('2'))            # not 4
+        self.assertEqual(d['ot_1_5_topup_mxn'], Decimal('100.00'))  # 2h x 100 x 0.5, not 200
+
+    def test_split_ot_same_day_different_hours_both_count(self):
+        """The critical regression guard: unique_together was dropped in migration 0018
+        precisely so split OT can hold several rows per agent-day. Different hours are
+        different slots and must never collapse."""
+        self._ot(self.agent, 1, 18, 20)   # 2h
+        self._ot(self.agent, 1, 21, 22)   # 1h, same day, different hours
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_power_hrs'], Decimal('3'))
+        self.assertEqual(d['ph_topup_mxn'], Decimal('300.00'))
+
+    def test_same_times_completed_and_no_show_are_kept_apart(self):
+        """status is in the key, and the separate no_show loop is untouched: the
+        completed row pays its premium and the no_show row still kills the bonus."""
+        _status(self.agent, 1, 'P')       # would otherwise qualify for the bonus
+        self._ot(self.agent, 1, 18, 20)
+        self._ot(self.agent, 1, 18, 20, status='no_show')
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ph_topup_mxn'], Decimal('200.00'))   # completed row pays once
+        self.assertFalse(d['bonus_qualifies'])                   # no_show still disqualifies
+        self.assertEqual(d['bonus_mxn'], Decimal('0'))
+
+    def test_same_times_pending_and_completed_pays_completed_only(self):
+        self._ot(self.agent, 1, 18, 20, status='pending')
+        self._ot(self.agent, 1, 18, 20)
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_power_hrs'], Decimal('2'))
+        self.assertEqual(d['ph_topup_mxn'], Decimal('200.00'))
+
+    def test_same_times_on_different_days_both_count(self):
+        self._ot(self.agent, 1, 18, 20)
+        self._ot(self.agent, 2, 18, 20)   # identical times, next day
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_power_hrs'], Decimal('4'))
+        self.assertEqual(d['ph_topup_mxn'], Decimal('400.00'))
+
+    def test_same_slot_for_two_agents_both_count(self):
+        other = _make_agent('ot_dedupe_b')
+        other.hourly_rate = Decimal('100')
+        other.save()
+        self._ot(self.agent, 1, 18, 20)
+        self._ot(other, 1, 18, 20)        # same slot, different agent
+        data = self._data(self.agent, other)
+        self.assertEqual(data[self.agent.pk]['ph_topup_mxn'], Decimal('200.00'))
+        self.assertEqual(data[other.pk]['ph_topup_mxn'], Decimal('200.00'))
+
+    def test_duplicate_non_incentivized_rows_collapse_too(self):
+        """incentive_type='none' pays nothing either way, but ot_regular_hrs is an
+        engine output and must be counted once like the other two."""
+        self._ot(self.agent, 1, 18, 20, incentive='none')
+        self._ot(self.agent, 1, 18, 20, incentive='none')
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_regular_hrs'], Decimal('2'))       # not 4
+        self.assertEqual(d['ph_topup_mxn'], Decimal('0.00'))
+        self.assertEqual(d['ot_1_5_topup_mxn'], Decimal('0.00'))
+
+    def test_five_hundred_identical_rows_pay_once(self):
+        """The mirror of the adherence 5,000-row union test: a runaway import must not
+        multiply the premium by the row count."""
+        OvertimeShift.objects.bulk_create([
+            OvertimeShift(agent=self.agent, date=_WEEK[1],
+                          start_time=time(18, 0), end_time=time(20, 0),
+                          incentive_type='power_hour', status='completed')
+            for _ in range(500)
+        ])
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['ot_power_hrs'], Decimal('2'))
+        self.assertEqual(d['ph_topup_mxn'], Decimal('200.00'))
+
+    def test_total_pay_reflects_one_top_up_not_two(self):
+        """End-to-end on the field that actually pays people. No login hours, no
+        adherence record, non-admin — so total_pay_mxn is the top-up alone."""
+        self._ot(self.agent, 1, 18, 20)
+        self._ot(self.agent, 1, 18, 20)
+        d = self._data()[self.agent.pk]
+        self.assertEqual(d['base_pay_mxn'], Decimal('0.00'))
+        self.assertEqual(d['total_pay_mxn'], Decimal('200.00'))   # not 400
+
+    def test_duplicate_with_disagreeing_incentive_resolves_by_lowest_pk(self):
+        """Two completed rows at identical times with different incentive types collapse
+        to one, and order_by('pk') decides which — the earliest-created row. Both
+        creation orders are checked, so this pins pk order rather than a preference for
+        one incentive type."""
+        other = _make_agent('ot_dedupe_c')
+        other.hourly_rate = Decimal('100')
+        other.save()
+        # Agent A: power_hour created first.
+        self._ot(self.agent, 1, 18, 20, incentive='power_hour')
+        self._ot(self.agent, 1, 18, 20, incentive='time_and_a_half')
+        # Agent B: the same pair, created the other way round.
+        self._ot(other, 1, 18, 20, incentive='time_and_a_half')
+        self._ot(other, 1, 18, 20, incentive='power_hour')
+
+        data = self._data(self.agent, other)
+        a, b = data[self.agent.pk], data[other.pk]
+        self.assertEqual(a['ph_topup_mxn'], Decimal('200.00'))     # power_hour won
+        self.assertEqual(a['ot_1_5_topup_mxn'], Decimal('0.00'))
+        self.assertEqual(b['ot_1_5_topup_mxn'], Decimal('100.00'))  # 1.5x won
+        self.assertEqual(b['ph_topup_mxn'], Decimal('0.00'))
+        # Either way exactly one premium is paid, never both.
+        self.assertEqual(a['total_pay_mxn'], Decimal('200.00'))
+        self.assertEqual(b['total_pay_mxn'], Decimal('100.00'))
