@@ -65,9 +65,10 @@ priced and broken out per week), and the origin split by write path.
   `ShiftTemplate`; among templates covering the date, the latest `effective_from` wins
   (`None` treated as earliest). A shared helper, `_best_shift_template` in
   `scheduling/views.py`, already exists and is reused three times (`agent_my_shifts`,
-  an import into `erlang/views.py`, and `_ot_schedule_conflict`), but the same comparison
-  logic is independently reimplemented in 5 other places. Use `_best_shift_template`
-  rather than adding a sixth reimplementation.
+  an import into `erlang/views.py`, and the shared `_resolve_schedule_blocks` that
+  `_ot_schedule_conflict` and `overtime_week`'s `_resolve_agent_week_schedule` both call),
+  but the same comparison logic is independently reimplemented in 5 other places. Use
+  `_best_shift_template` rather than adding a sixth reimplementation.
 - **`is_admin_coding` and `is_official_admin` are a hard partition.** Regular
   Codings/Adherence queries exclude admin rows entirely; Admin Codings/Admin Adherence use
   the admin path. Never mix the two query paths.
