@@ -2,7 +2,9 @@ from datetime import date, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth.models import User
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from adherence.models import AdherenceRecord, Coding
@@ -2186,6 +2188,139 @@ class OtClaimDuplicateGuardTests(TestCase):
         self._login(self.agent)
         self._claim(p2)
         self.assertEqual(OTShiftClaimRequest.objects.count(), 2)
+
+
+class OtInboxConflictWarningTests(TestCase):
+    """The approver inbox (overtime_list) flags a pending claim whose requester
+    already has a conflicting claim or shift elsewhere — same slot rule as
+    OtClaimDuplicateGuardTests, but display-only here. The scenarios pinned
+    below only arise because that submission-time guard doesn't see the OT
+    week editor: a coordinator can assign the exact slot a pending claim
+    covers without either guard firing (HANDOFF.md item 66(b)/64).
+    """
+
+    def setUp(self):
+        self.sup = _make_agent('isup', role_type='supervisor')
+        self.agent = _make_agent('iagent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        self.day = date.today() + timedelta(days=3)
+
+    def _login(self, agent):
+        self.client.login(username=agent.user.username, password='pw')
+
+    def _post_open(self, count=1, start='13:00', end='17:00'):
+        self._login(self.sup)
+        self.client.post(reverse('open_ot_create'), {
+            'date': self.day.isoformat(), 'start_time': start, 'end_time': end,
+            'incentive_type': 'power_hour', 'notes': '', 'count': str(count),
+        })
+        self.client.logout()
+        return list(OpenOTShift.objects.order_by('pk'))
+
+    def _inbox(self):
+        self._login(self.sup)
+        resp = self.client.get(reverse('overtime_list'))
+        self.client.logout()
+        return resp
+
+    def test_duplicate_pending_claim_flagged(self):
+        # Created directly via the ORM: two pending claims for the same agent
+        # and slot can't be reached through open_ot_claim (that's exactly what
+        # OtClaimDuplicateGuardTests pins), so this models legacy data or a
+        # closed race rather than a currently-reachable path.
+        p1, p2 = self._post_open(count=2)
+        OTShiftClaimRequest.objects.create(open_shift=p1, requester=self.agent, status='pending')
+        OTShiftClaimRequest.objects.create(open_shift=p2, requester=self.agent, status='pending')
+        resp = self._inbox()
+        self.assertContains(resp, 'Also pending for this exact slot elsewhere')
+
+    def test_assigned_shift_conflict_flagged(self):
+        posting = self._post_open()[0]
+        OTShiftClaimRequest.objects.create(open_shift=posting, requester=self.agent, status='pending')
+        # A live shift for the identical slot, entered through overtime_week
+        # after the claim was already submitted — the two paths never check
+        # each other.
+        OvertimeShift.objects.create(agent=self.agent, date=self.day,
+                                     start_time=time(13, 0), end_time=time(17, 0), status='pending')
+        resp = self._inbox()
+        self.assertContains(resp, 'Already holds an OT shift for this slot')
+
+    def test_cancelled_shift_does_not_flag(self):
+        posting = self._post_open()[0]
+        OTShiftClaimRequest.objects.create(open_shift=posting, requester=self.agent, status='pending')
+        OvertimeShift.objects.create(agent=self.agent, date=self.day,
+                                     start_time=time(13, 0), end_time=time(17, 0), status='cancelled')
+        resp = self._inbox()
+        self.assertNotContains(resp, 'Already holds an OT shift for this slot')
+
+    def test_ordinary_claim_not_flagged(self):
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': posting.pk}))
+        self.client.logout()
+        resp = self._inbox()
+        self.assertNotContains(resp, 'Also pending for this exact slot elsewhere')
+        self.assertNotContains(resp, 'Already holds an OT shift for this slot')
+
+    def test_approve_unaffected_by_flags(self):
+        """Display only: Approve still works exactly as before on a flagged claim."""
+        posting = self._post_open()[0]
+        claim = OTShiftClaimRequest.objects.create(open_shift=posting, requester=self.agent, status='pending')
+        OvertimeShift.objects.create(agent=self.agent, date=self.day,
+                                     start_time=time(13, 0), end_time=time(17, 0), status='pending')
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}))
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, 'approved')
+
+    def test_reject_unaffected_by_flags(self):
+        """Display only: Reject still works exactly as before on a flagged claim."""
+        posting = self._post_open()[0]
+        claim = OTShiftClaimRequest.objects.create(open_shift=posting, requester=self.agent, status='pending')
+        OvertimeShift.objects.create(agent=self.agent, date=self.day,
+                                     start_time=time(13, 0), end_time=time(17, 0), status='pending')
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_reject', kwargs={'pk': claim.pk}),
+                         {'rejection_reason': 'Not needed'})
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, 'rejected')
+
+
+class OtInboxQueryCountProbe(TestCase):
+    """Pins that the new inbox annotation is two flat bulk queries, not
+    per-claim — the same query-count discipline HANDOFF.md item 70 measured
+    for the Available OT board's per-viewer markers. Query count for the
+    approver's GET must stay the same whether 2 or 20 claims are pending."""
+
+    def setUp(self):
+        self.sup = _make_agent('qsup', role_type='supervisor')
+
+    def _seed_claims(self, n, offset=0):
+        day = date.today() + timedelta(days=5)
+        for i in range(n):
+            ag = _make_agent(f'qagent{offset + i}', role='agent', role_type='regular_agent')
+            posting = OpenOTShift.objects.create(
+                posted_by=self.sup.user, date=day, start_time=time(9, 0), end_time=time(10, 0),
+            )
+            OTShiftClaimRequest.objects.create(open_shift=posting, requester=ag, status='pending')
+
+    def test_query_count_flat_as_claim_count_grows(self):
+        self.client.login(username=self.sup.user.username, password='pw')
+
+        self._seed_claims(2)
+        with CaptureQueriesContext(connection) as small:
+            self.client.get(reverse('overtime_list'))
+
+        self._seed_claims(20, offset=2)
+        with CaptureQueriesContext(connection) as large:
+            self.client.get(reverse('overtime_list'))
+
+        self.assertEqual(
+            len(small.captured_queries), len(large.captured_queries),
+            f"query count grew with claim count: {len(small.captured_queries)} "
+            f"(2 claims) vs {len(large.captured_queries)} (22 claims) — the "
+            f"conflict lookups must stay two flat bulk queries, not per-claim"
+        )
 
 
 class OvertimeWeekSaveGuardTests(TestCase):

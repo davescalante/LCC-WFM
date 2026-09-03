@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import date, timedelta
 from django.core.paginator import Paginator
 from django.db.models import Q, F
@@ -1498,6 +1499,28 @@ def overtime_list(request):
             .select_related('shift__agent__user', 'requester__user')
             .order_by('shift__date', 'submitted_at')
         )
+
+        # Flag a claim whose requester already has another pending claim for the identical
+        # slot, or already holds a non-cancelled OvertimeShift there — same rule open_ot_claim
+        # enforces at submission time (scheduling/views.py ~2303-2321), applied display-only
+        # here since a claim can still be sitting pending when the conflict shows up later via
+        # a different creation path (e.g. overtime_week). Two flat bulk lookups, not per-row.
+        if pending_claims:
+            requester_ids = {c.requester_id for c in pending_claims}
+            pending_slot_counts = Counter(
+                OTShiftClaimRequest.objects.filter(status='pending', requester_id__in=requester_ids)
+                .values_list('requester_id', 'open_shift__date', 'open_shift__start_time', 'open_shift__end_time')
+            )
+            assigned_slots = set(
+                OvertimeShift.objects.filter(agent_id__in=requester_ids)
+                .exclude(status='cancelled')
+                .values_list('agent_id', 'date', 'start_time', 'end_time')
+            )
+            for c in pending_claims:
+                key = (c.requester_id, c.open_shift.date, c.open_shift.start_time, c.open_shift.end_time)
+                c.has_duplicate_pending = pending_slot_counts[key] > 1
+                c.has_assigned_conflict = key in assigned_slots
+
         OTShiftClaimRequest.objects.filter(status='pending', supervisor_read=False).update(supervisor_read=True)
         OTCancellationRequest.objects.filter(status='pending', supervisor_read=False).update(supervisor_read=True)
 
