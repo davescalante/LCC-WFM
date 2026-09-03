@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **516**. The tests are the regression gate and double as executable specs for the
+Currently **541**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Two read-only management commands exist for diagnosis; neither is reachable from a request
@@ -138,6 +138,19 @@ priced and broken out per week), and the origin split by write path.
   leaves the claim `pending`, the posting `open` and backup claims untouched (it returns before
   the `transaction.atomic()` that auto-rejects them), so the approver can fix the schedule and
   approve, or reject with a reason.
+- **The approver inbox's conflict warning (`22705ec`) informs, it does not prevent — approving a
+  flagged claim still creates the duplicate.** `scheduling.views.overtime_list` flags a pending
+  `OTShiftClaimRequest` when its requester already has another pending claim for the identical
+  slot, or already holds a non-cancelled `OvertimeShift` there — mirroring the same-slot guard
+  `open_ot_claim` enforces at submission time (`b544e4d`), applied display-only because a claim
+  can go stale after that guard already ran (most concretely, `overtime_week` assigning the same
+  slot directly, since that path has never checked pending claims). **`ot_claim_approve` was not
+  changed.** Clicking Approve on a flagged claim still creates a second `OvertimeShift` for that
+  slot — verified directly: approving a claim flagged "Already holds an OT shift for this slot"
+  produced exactly that duplicate. Do not treat the warning as a guard, and do not assume flagging
+  a claim is enough to stop the duplicate it names — that requires either the approver reading it
+  and acting, or `ot_claim_approve` itself being changed to check pending claims and cross the two
+  creation paths, which has not happened.
 - **The OT incentive top-up sums duplicate rows; the adherence maps dedupe them.**
   `finance.views._get_billable_weekly_data` loops every `status='completed'` `OvertimeShift`
   and does a plain `+= total_shift_hours()` per incentive type, which becomes `ph_topup_mxn` /
