@@ -2322,6 +2322,18 @@ def open_ot_claim(request, pk):
             messages.error(request, f"You already have an OT shift assigned for {slot}.")
             return _redirect_after_ot_action(request, posting.date)
 
+        # Different from the three guards above: those catch asking twice for the
+        # same slot, this catches asking for a slot they cannot physically work.
+        # Immediate feedback only — ot_claim_approve re-checks, because that is
+        # the only place a row is created and the schedule can change in between.
+        conflict = _ot_schedule_conflict(viewer, posting.date,
+                                         posting.start_time, posting.end_time)
+        if conflict:
+            day_label, time_label = conflict
+            messages.error(request, f"You're already scheduled to work {time_label} on "
+                                    f"{day_label} — this overtime overlaps that shift.")
+            return _redirect_after_ot_action(request, posting.date)
+
         OTShiftClaimRequest.objects.create(
             open_shift=posting, requester=viewer,
             supervisor_read=False, requester_read=True,
@@ -2354,6 +2366,21 @@ def ot_claim_approve(request, pk):
     posting = claim.open_shift
     if posting.status != 'open':
         messages.error(request, "This shift has already been filled.")
+        return _redirect_after_ot_action(request, posting.date)
+
+    # The authoritative overlap check. A claim can sit for days and the
+    # requester's schedule may have changed since they asked, so checking only at
+    # claim time would let a stale claim through — and this view is the only path
+    # that turns one into a real OvertimeShift. The claim is deliberately left
+    # pending: the approver fixes the schedule and approves, or rejects with a
+    # reason. Intentional overlaps still go in by hand via the OT week editor.
+    conflict = _ot_schedule_conflict(claim.requester, posting.date,
+                                     posting.start_time, posting.end_time)
+    if conflict:
+        day_label, time_label = conflict
+        messages.error(request, f"{claim.requester} is already scheduled to work "
+                                f"{time_label} on {day_label} — this overtime overlaps "
+                                f"that shift, so nothing was assigned.")
         return _redirect_after_ot_action(request, posting.date)
 
     from django.db import transaction
@@ -3228,6 +3255,84 @@ def _best_shift_template(all_templates, agent_id, d):
         if best is None or (t.effective_from or date.min) > (best.effective_from or date.min):
             best = t
     return best
+
+
+def _ot_schedule_conflict(agent, d, start_time, end_time):
+    """Does an OT slot on `d` overlap a shift `agent` is already scheduled to work?
+
+    Returns `(day_label, time_label)` describing the first conflicting block, or
+    None. The caller words its own sentence from that — the agent-facing and
+    approver-facing messages are in different voices.
+
+    Everything is reduced to minutes offset from midnight of `d`, so a schedule
+    block that crosses midnight and an OT slot that crosses midnight sit on one
+    number line without needing absolute datetimes. The wrap rule matches
+    OvertimeShift.total_shift_hours(): a day is added only when end is *strictly*
+    before start, so a zero-length slot stays zero-length rather than becoming 24h.
+
+    Three days are resolved, not one. The previous day's shift can spill past
+    midnight into this slot, and the slot itself can spill into the next day's
+    shift — an overnight OT on Friday can land inside Saturday's morning shift.
+
+    Two rules here are load-bearing and look wrong at a glance:
+
+    - Overlap is strict half-open (`a_start < b_end and b_start < a_end`), so
+      exactly back-to-back is ALLOWED. A shift ending 17:00 with OT starting
+      17:00 is the normal way OT is attached to a shift; blocking it would break
+      the most common legitimate case.
+    - No schedule on file returns None. Unknown is not a conflict — blocking on
+      absent data would stop OT for every agent without a template, a worse
+      failure than letting one through.
+    """
+    if start_time == end_time:
+        return None
+
+    def _minutes(t):
+        return t.hour * 60 + t.minute + t.second / 60.0
+
+    def _span(s, e, day_offset):
+        base = day_offset * 1440
+        a = base + _minutes(s)
+        b = base + _minutes(e)
+        if e < s:
+            b += 1440
+        return a, b
+
+    ot_start, ot_end = _span(start_time, end_time, 0)
+
+    days = [d - timedelta(days=1), d, d + timedelta(days=1)]
+    overrides = {s.date: s for s in Shift.objects.filter(
+        agent=agent, date__in=days).prefetch_related('extra_blocks')}
+    all_templates = list(
+        ShiftTemplate.objects.filter(agent=agent).prefetch_related('extra_blocks'))
+
+    for offset, day in enumerate(days, start=-1):
+        # Canonical resolution: a specific-date override wins outright, including
+        # an is_off override sitting on top of a working template.
+        override = overrides.get(day)
+        src = override if override is not None else _best_shift_template(
+            all_templates, agent.pk, day)
+        if src is None or src.is_off:
+            continue
+
+        blocks = []
+        if src.start_time and src.end_time:
+            blocks.append((src.start_time, src.end_time))
+        for eb in src.extra_blocks.all():      # ShiftBlock or ShiftTemplateBlock
+            if eb.start_time and eb.end_time:
+                blocks.append((eb.start_time, eb.end_time))
+
+        for s, e in blocks:
+            if s == e:
+                continue
+            b_start, b_end = _span(s, e, offset)
+            if ot_start < b_end and b_start < ot_end:
+                # The block's OWN day, so an overnight Thursday shift conflicting
+                # with Friday-morning OT reads as Thursday.
+                return (day.strftime('%A, %b %d'),
+                        f"{s.strftime('%H:%M')}–{e.strftime('%H:%M')}")
+
+    return None
 
 
 from wfm.constants import PORTAL_ADMIN_TYPES as _PORTAL_ADMIN_TYPES

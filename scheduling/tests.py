@@ -9,7 +9,7 @@ from adherence.models import AdherenceRecord, Coding
 from .models import (
     Agent, AgentRequest, OvertimeShift,
     OpenOTShift, OTShiftClaimRequest, OTCancellationRequest,
-    Shift, ShiftTemplate,
+    Shift, ShiftBlock, ShiftTemplate, ShiftTemplateBlock,
 )
 
 
@@ -2335,3 +2335,297 @@ class OvertimeWeekSaveGuardTests(TestCase):
             **{f'day_{i}_ot_count': '0' for i in range(1, 7)},
         }, follow=True)
         self.assertEqual(list(OvertimeShift.objects.values_list('pk', flat=True)), [keep.pk])
+
+
+class OtScheduleConflictHelperTests(TestCase):
+    """`_ot_schedule_conflict` — the resolution and overlap rules on their own.
+
+    Kept separate from the view tests because the interesting cases are about
+    which schedule row *wins* and where midnight falls, not about HTTP. The two
+    rules most worth protecting are that exactly back-to-back stays allowed and
+    that no schedule on file is not a conflict.
+    """
+
+    def setUp(self):
+        self.agent = _make_agent('confagent', role='agent', role_type='regular_agent')
+        self.week_start = date(2026, 9, 7)             # a Monday
+        self.thu = self.week_start + timedelta(days=3)
+        self.fri = self.week_start + timedelta(days=4)
+        self.sat = self.week_start + timedelta(days=5)
+
+    def _check(self, start, end, d=None):
+        from .views import _ot_schedule_conflict
+        return _ot_schedule_conflict(self.agent, d or self.fri, start, end)
+
+    def _tmpl(self, dow, start=time(9, 0), end=time(17, 0), agent=None, **kw):
+        return ShiftTemplate.objects.create(
+            agent=agent or self.agent, day_of_week=dow,
+            start_time=start, end_time=end, **kw)
+
+    def _override(self, d, start=time(9, 0), end=time(17, 0), **kw):
+        return Shift.objects.create(agent=self.agent, date=d,
+                                    start_time=start, end_time=end, **kw)
+
+    # ── the two rules that must never regress ───────────────────────────
+
+    def test_back_to_back_after_the_shift_is_allowed(self):
+        """A shift ending 17:00 and OT starting 17:00 is how OT is normally
+        attached to a shift. Blocking it would break the common case."""
+        self._tmpl(4)
+        self.assertIsNone(self._check(time(17, 0), time(19, 0)))
+
+    def test_back_to_back_before_the_shift_is_allowed(self):
+        self._tmpl(4)
+        self.assertIsNone(self._check(time(7, 0), time(9, 0)))
+
+    def test_no_schedule_data_is_not_a_conflict(self):
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    # ── plain overlap ───────────────────────────────────────────────────
+
+    def test_template_overlap_is_reported_with_day_and_times(self):
+        self._tmpl(4)
+        self.assertEqual(self._check(time(13, 0), time(15, 0)),
+                         ('Friday, Sep 11', '09:00–17:00'))
+
+    def test_day_off_template_allows_ot(self):
+        self._tmpl(4, start=None, end=None, is_off=True)
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    def test_other_agents_shift_does_not_conflict(self):
+        other = _make_agent('confother', role='agent', role_type='regular_agent')
+        self._tmpl(4, agent=other)
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    def test_shift_on_another_date_does_not_conflict(self):
+        self._tmpl(0)          # Monday only
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    def test_zero_length_slot_is_never_a_conflict(self):
+        """Nothing validates against a 09:00–09:00 posting, and it is worth zero
+        hours to total_shift_hours(). A hard block on it would be undiagnosable."""
+        self._tmpl(4)
+        self.assertIsNone(self._check(time(13, 0), time(13, 0)))
+
+    # ── resolution: override beats template, latest template wins ───────
+
+    def test_specific_date_override_beats_the_template(self):
+        self._tmpl(4)                                   # 09:00–17:00
+        self._override(self.fri, time(12, 0), time(20, 0))
+        # 17:30 is clear of the template but inside the override, and the message
+        # must name the override's times — that is what proves which one won.
+        self.assertEqual(self._check(time(17, 30), time(19, 0)),
+                         ('Friday, Sep 11', '12:00–20:00'))
+
+    def test_day_off_override_beats_a_working_template(self):
+        self._tmpl(4)
+        self._override(self.fri, time(0, 0), time(0, 0), is_off=True)
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    def test_latest_effective_from_template_wins(self):
+        self._tmpl(4, effective_from=None)                          # 09:00–17:00
+        self._tmpl(4, time(18, 0), time(22, 0), effective_from=self.week_start)
+        # Superseded times no longer block...
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+        # ...and the current ones do.
+        self.assertEqual(self._check(time(19, 0), time(20, 0)),
+                         ('Friday, Sep 11', '18:00–22:00'))
+
+    def test_expired_template_is_ignored(self):
+        self._tmpl(4, effective_until=self.week_start - timedelta(days=7))
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    # ── midnight, in both directions ────────────────────────────────────
+
+    def test_previous_day_overnight_shift_spills_into_the_slot(self):
+        self._tmpl(3, time(22, 0), time(6, 0))          # Thu 22:00 → Fri 06:00
+        self.assertEqual(self._check(time(5, 0), time(8, 0)),
+                         ('Thursday, Sep 10', '22:00–06:00'))
+
+    def test_back_to_back_across_midnight_is_allowed(self):
+        self._tmpl(3, time(22, 0), time(6, 0))
+        self.assertIsNone(self._check(time(6, 0), time(8, 0)))
+
+    def test_overnight_slot_spills_into_the_next_days_shift(self):
+        """The mirror case a two-day window misses: the OT itself wraps."""
+        self._tmpl(5, time(5, 0), time(13, 0))          # Saturday morning
+        self.assertEqual(self._check(time(22, 0), time(6, 0)),
+                         ('Saturday, Sep 12', '05:00–13:00'))
+
+    def test_overnight_slot_clear_of_the_same_day_shift_is_allowed(self):
+        self._tmpl(4)                                   # Fri 09:00–17:00
+        self.assertIsNone(self._check(time(22, 0), time(2, 0)))
+
+    # ── split shifts, on both the template and the override ─────────────
+
+    def test_template_extra_block_conflicts(self):
+        t = self._tmpl(4, time(8, 0), time(12, 0))
+        ShiftTemplateBlock.objects.create(shift_template=t, block_number=2,
+                                          start_time=time(16, 0), end_time=time(20, 0))
+        self.assertEqual(self._check(time(17, 0), time(18, 0)),
+                         ('Friday, Sep 11', '16:00–20:00'))
+
+    def test_gap_between_template_split_blocks_allows_ot(self):
+        t = self._tmpl(4, time(8, 0), time(12, 0))
+        ShiftTemplateBlock.objects.create(shift_template=t, block_number=2,
+                                          start_time=time(16, 0), end_time=time(20, 0))
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+    def test_override_extra_block_conflicts(self):
+        s = self._override(self.fri, time(8, 0), time(12, 0))
+        ShiftBlock.objects.create(shift=s, block_number=2,
+                                  start_time=time(16, 0), end_time=time(20, 0))
+        self.assertEqual(self._check(time(17, 0), time(18, 0)),
+                         ('Friday, Sep 11', '16:00–20:00'))
+
+    def test_gap_between_override_split_blocks_allows_ot(self):
+        s = self._override(self.fri, time(8, 0), time(12, 0))
+        ShiftBlock.objects.create(shift=s, block_number=2,
+                                  start_time=time(16, 0), end_time=time(20, 0))
+        self.assertIsNone(self._check(time(13, 0), time(15, 0)))
+
+
+class OtScheduleOverlapGuardTests(TestCase):
+    """Server-side overlap blocking on the two OT claim views.
+
+    `open_ot_claim` gives the agent immediate feedback; `ot_claim_approve` is the
+    authoritative check, since it is the only place a claim becomes a real
+    OvertimeShift and the requester's schedule can change in between. A blocked
+    approval must leave the claim pending and the posting open — the approver
+    fixes the schedule and approves, or rejects with a reason.
+    """
+
+    def setUp(self):
+        self.sup = _make_agent('osup', role_type='supervisor')
+        self.agent = _make_agent('oagent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        today = date.today()
+        # A Friday between 7 and 13 days out: always future, always weekday 4.
+        self.day = today + timedelta(days=(4 - today.weekday()) % 7 + 7)
+
+    def _login(self, agent):
+        self.client.login(username=agent.user.username, password='pw')
+
+    def _tmpl(self, start=time(9, 0), end=time(17, 0), **kw):
+        return ShiftTemplate.objects.create(agent=self.agent, day_of_week=4,
+                                            start_time=start, end_time=end, **kw)
+
+    def _post_open(self, start='13:00', end='15:00', count=1):
+        self._login(self.sup)
+        self.client.post(reverse('open_ot_create'), {
+            'date': self.day.isoformat(), 'start_time': start, 'end_time': end,
+            'incentive_type': 'power_hour', 'notes': '', 'count': str(count),
+        })
+        self.client.logout()
+        return list(OpenOTShift.objects.order_by('pk'))
+
+    def _claim(self, posting):
+        return self.client.post(reverse('open_ot_claim', kwargs={'pk': posting.pk}),
+                                follow=True)
+
+    def _approve(self, claim):
+        return self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}),
+                                follow=True)
+
+    # ── claim time ──────────────────────────────────────────────────────
+
+    def test_overlapping_claim_is_refused(self):
+        self._tmpl()
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        resp = self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.count(), 0)
+        self.assertContains(resp, "already scheduled to work 09:00–17:00")
+        self.assertContains(resp, "this overtime overlaps that shift")
+
+    def test_back_to_back_claim_goes_through(self):
+        """The most common legitimate case: OT bolted onto the end of a shift."""
+        self._tmpl()
+        posting = self._post_open(start='17:00', end='19:00')[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 1)
+
+    def test_claim_on_a_scheduled_day_off_goes_through(self):
+        self._tmpl(start=None, end=None, is_off=True)
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 1)
+
+    def test_claim_with_no_schedule_on_file_goes_through(self):
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 1)
+
+    # ── approval time ───────────────────────────────────────────────────
+
+    def test_schedule_changed_after_the_claim_blocks_approval(self):
+        """Nothing overlapped when the claim was submitted; a shift was added
+        afterwards. Approval is the only gate left, so it has to catch this."""
+        posting = self._post_open()[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.client.logout()
+        claim = OTShiftClaimRequest.objects.get()
+
+        self._tmpl()                     # the schedule changes underneath the claim
+
+        self._login(self.sup)
+        resp = self._approve(claim)
+
+        self.assertEqual(OvertimeShift.objects.count(), 0)
+        self.assertContains(resp, "Oagent is already scheduled to work 09:00–17:00")
+        self.assertContains(resp, "nothing was assigned")
+
+        # State is untouched and still actionable.
+        claim.refresh_from_db()
+        posting.refresh_from_db()
+        self.assertEqual(claim.status, 'pending')
+        self.assertEqual(posting.status, 'open')
+        self.assertIsNone(posting.filled_by)
+        self.assertIsNone(posting.assigned_shift)
+
+    def test_blocked_approval_leaves_backup_claims_pending(self):
+        posting = self._post_open()[0]
+        backup = _make_agent('obackup', role='agent', role_type='regular_agent')
+        self._login(self.agent)
+        self._claim(posting)
+        self.client.logout()
+        self._login(backup)
+        self._claim(posting)
+        self.client.logout()
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 2)
+
+        self._tmpl()                     # conflicts for self.agent only
+        claim = OTShiftClaimRequest.objects.get(requester=self.agent)
+
+        self._login(self.sup)
+        self._approve(claim)
+
+        # Neither claim is rejected: the auto-reject only runs on a real assignment.
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='pending').count(), 2)
+        self.assertEqual(OTShiftClaimRequest.objects.filter(status='rejected').count(), 0)
+
+        # The unconflicted backup can still be approved normally.
+        self._approve(OTShiftClaimRequest.objects.get(requester=backup))
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+        self.assertEqual(OvertimeShift.objects.get().agent_id, backup.pk)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, 'rejected')      # now a genuine loser
+
+    def test_back_to_back_approval_creates_the_shift(self):
+        self._tmpl()
+        posting = self._post_open(start='17:00', end='19:00')[0]
+        self._login(self.agent)
+        self._claim(posting)
+        self.client.logout()
+
+        self._login(self.sup)
+        self._approve(OTShiftClaimRequest.objects.get())
+
+        self.assertEqual(OvertimeShift.objects.count(), 1)
+        posting.refresh_from_db()
+        self.assertEqual(posting.status, 'filled')
+        self.assertEqual(posting.assigned_shift, OvertimeShift.objects.get())
