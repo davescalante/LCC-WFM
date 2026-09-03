@@ -1639,3 +1639,124 @@ class AdminAdherenceLiveLoginTests(TestCase):
         _apply_live_login_hours([admin], _WEEK, record_map)
         # Only the billable username's 6h counts — matches Billing v2's billable filter.
         self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('6'))
+
+
+class OTTopupParityCommandTests(TestCase):
+    """The read-only verify_ot_topups parity gate.
+
+    finance.views._get_billable_weekly_data sums OT incentive hours with a plain +=
+    over raw rows, so a slot recorded twice pays its premium twice; adherence's
+    _build_maps already collapses exact duplicates on (start_time, end_time, status).
+    The command holds both summations verbatim so the deduped one can be proved a
+    no-op on real data BEFORE it lands in the engine. These tests pin the two loops
+    against each other and pin the command's exit codes and its read-only promise.
+
+    Rows are dated relative to the current week so the default 12-week window always
+    covers them, whatever day the suite runs on.
+    """
+
+    def setUp(self):
+        from django.utils import timezone
+        from wfm.utils import get_week_start
+        self.week_start = get_week_start(timezone.localdate())
+        self.day = self.week_start + timedelta(days=1)
+        self.next_day = self.week_start + timedelta(days=2)
+        self.agent = _make_agent('ot_parity_a')
+        self.agent.hourly_rate = Decimal('100')
+        self.agent.save()
+
+    def _ot(self, agent, d, start_h, end_h, incentive='power_hour', status='completed'):
+        return OvertimeShift.objects.create(
+            agent=agent, date=d,
+            start_time=time(start_h, 0), end_time=time(end_h, 0),
+            incentive_type=incentive, status=status,
+        )
+
+    def _rows(self):
+        return list(
+            OvertimeShift.objects.filter(status='completed')
+            .select_related('agent').order_by('pk')
+        )
+
+    def _run(self):
+        """Run the command, returning its stdout. Propagates SystemExit."""
+        from django.core.management import call_command
+        out = io.StringIO()
+        call_command('verify_ot_topups', stdout=out, stderr=out)
+        return out.getvalue()
+
+    def test_loops_agree_when_no_slot_is_duplicated(self):
+        """Split OT, the same times on another day, and the same slot for another
+        agent are all legitimate — the dedupe must leave every one of them alone."""
+        from finance.management.commands.verify_ot_topups import (
+            _topups_original, _topups_deduped,
+        )
+        other = _make_agent('ot_parity_b')
+        other.hourly_rate = Decimal('100')
+        other.save()
+        self._ot(self.agent, self.day, 18, 20)          # split OT, first block
+        self._ot(self.agent, self.day, 21, 22)          # split OT, different hours
+        self._ot(self.agent, self.next_day, 18, 20)     # same times, different day
+        self._ot(other, self.day, 18, 20)               # same slot, different agent
+
+        rows = self._rows()
+        self.assertEqual(_topups_original(rows), _topups_deduped(rows))
+        # And nothing was collapsed away: 3h for the agent's own day + 2h next day.
+        _, _, pow_map = _topups_deduped(rows)
+        self.assertEqual(pow_map[self.agent.pk], Decimal('5'))
+        self.assertEqual(pow_map[other.pk], Decimal('2'))
+
+    def test_loops_differ_by_exactly_one_premium_on_a_duplicate(self):
+        from finance.management.commands.verify_ot_topups import (
+            _topups_original, _topups_deduped, _topup_money,
+        )
+        self._ot(self.agent, self.day, 18, 20)
+        self._ot(self.agent, self.day, 18, 20)   # the exact duplicate
+
+        rows = self._rows()
+        _, old_1_5, old_pow = _topups_original(rows)
+        _, new_1_5, new_pow = _topups_deduped(rows)
+        self.assertEqual(old_pow[self.agent.pk], Decimal('4'))   # 2h counted twice
+        self.assertEqual(new_pow[self.agent.pk], Decimal('2'))   # collapsed to one slot
+
+        rate = self.agent.hourly_rate
+        old_ph, _ = _topup_money(old_1_5.get(self.agent.pk, Decimal('0')),
+                                 old_pow[self.agent.pk], rate)
+        new_ph, _ = _topup_money(new_1_5.get(self.agent.pk, Decimal('0')),
+                                 new_pow[self.agent.pk], rate)
+        self.assertEqual(old_ph, Decimal('400.00'))
+        self.assertEqual(new_ph, Decimal('200.00'))   # one premium, not two
+
+    def test_command_exits_zero_on_clean_data(self):
+        self._ot(self.agent, self.day, 18, 20)
+        self._ot(self.agent, self.day, 21, 22)
+        out = self._run()   # no SystemExit == exit 0
+        self.assertIn('Nothing was written.', out)
+        self.assertNotIn('DIFFERS', out)
+
+    def test_command_exits_non_zero_on_a_duplicated_incentivized_pair(self):
+        self._ot(self.agent, self.day, 18, 20)
+        self._ot(self.agent, self.day, 18, 20)
+        with self.assertRaises(SystemExit) as cm:
+            self._run()
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_command_writes_nothing(self):
+        """The whole command is a diagnosis tool — it must never touch a row, on
+        either the matching or the differing path."""
+        self._ot(self.agent, self.day, 18, 20)
+        self._ot(self.agent, self.day, 18, 20)
+        before = list(
+            OvertimeShift.objects.order_by('pk')
+            .values_list('pk', 'agent_id', 'date', 'start_time', 'end_time',
+                         'incentive_type', 'status')
+        )
+        with self.assertRaises(SystemExit):
+            self._run()      # the differing path
+        after = list(
+            OvertimeShift.objects.order_by('pk')
+            .values_list('pk', 'agent_id', 'date', 'start_time', 'end_time',
+                         'incentive_type', 'status')
+        )
+        self.assertEqual(before, after)
+        self.assertEqual(OvertimeShift.objects.count(), 2)
