@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **489**. The tests are the regression gate and double as executable specs for the
+Currently **516**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Two read-only management commands exist for diagnosis; neither is reachable from a request
@@ -64,9 +64,10 @@ priced and broken out per week), and the origin split by write path.
 - **Best-template resolution.** A specific-date `Shift` override always beats a
   `ShiftTemplate`; among templates covering the date, the latest `effective_from` wins
   (`None` treated as earliest). A shared helper, `_best_shift_template` in
-  `scheduling/views.py`, already exists and is reused twice (including an import into
-  `erlang/views.py`), but the same comparison logic is independently reimplemented in 5
-  other places. Use `_best_shift_template` rather than adding a sixth reimplementation.
+  `scheduling/views.py`, already exists and is reused three times (`agent_my_shifts`,
+  an import into `erlang/views.py`, and `_ot_schedule_conflict`), but the same comparison
+  logic is independently reimplemented in 5 other places. Use `_best_shift_template`
+  rather than adding a sixth reimplementation.
 - **`is_admin_coding` and `is_official_admin` are a hard partition.** Regular
   Codings/Adherence queries exclude admin rows entirely; Admin Codings/Admin Adherence use
   the admin path. Never mix the two query paths.
@@ -110,6 +111,32 @@ priced and broken out per week), and the origin split by write path.
   is untouched by construction). A DB constraint **cannot** be added until the duplicate rows
   already in production are cleaned up: Postgres validates a new unique constraint against
   existing data and would fail the deploy. Any new OT create path must carry its own guard.
+- **OT overlapping a scheduled shift is blocked on the claim path only, and several of its
+  rules look wrong on purpose.** `scheduling.views._ot_schedule_conflict` (`7b7e0b5`) sits next to
+  `_best_shift_template` and reuses it; it returns a `(day_label, time_label)` tuple or `None`,
+  and each caller writes its own sentence because the agent-facing and approver-facing messages
+  differ in voice. `open_ot_claim` calls it for immediate feedback; `ot_claim_approve` is the
+  **authoritative** check — a claim can sit for days while the schedule changes underneath it,
+  and that view is the only path turning a claim into an `OvertimeShift`. Do not "clean up" any
+  of these:
+  - The comparison is **strict half-open**, so exactly back-to-back is **allowed**. A shift
+    ending 17:00 with OT starting 17:00 is the normal way OT attaches to a shift; blocking it
+    would break the most common legitimate case.
+  - It resolves **three** days (`d-1`, `d`, `d+1`). `d-1` catches a previous-day shift spilling
+    past midnight; `d+1` catches OT that itself wraps past midnight into the next day's shift.
+    Both directions are needed — a two-day window silently misses the second.
+  - The wrap rule is `end < start`, matching `OvertimeShift.total_shift_hours()`, **not**
+    `end <= start`. A zero-length slot returns `None` early rather than becoming 24 h.
+  - **No schedule data means no conflict.** Unknown is not a conflict; blocking on absent data
+    would stop OT for every agent without a template, a worse failure than letting one through.
+  - **`is_off` days allow OT** — that is the normal OT case, not an oversight.
+  Split shifts are covered: `extra_blocks` is read from both `ShiftBlock` and
+  `ShiftTemplateBlock`. `overtime_week` is deliberately **not** blocked and blocking it is not
+  planned — coordinators sometimes need to enter an intentional overlap, and once
+  `ot_claim_approve` blocks, that editor is the only remaining path for one. A blocked approval
+  leaves the claim `pending`, the posting `open` and backup claims untouched (it returns before
+  the `transaction.atomic()` that auto-rejects them), so the approver can fix the schedule and
+  approve, or reject with a reason.
 - **The OT incentive top-up sums duplicate rows; the adherence maps dedupe them.**
   `finance.views._get_billable_weekly_data` loops every `status='completed'` `OvertimeShift`
   and does a plain `+= total_shift_hours()` per incentive type, which becomes `ph_topup_mxn` /
