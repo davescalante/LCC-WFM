@@ -1872,13 +1872,11 @@ def overtime_week(request):
         except Agent.DoesNotExist:
             selected_agent = None
 
-        # Build scheduled blocks for overlap check
-        for tmpl in ShiftTemplate.objects.filter(agent_id=selected_agent_id):
-            if not tmpl.is_off and tmpl.start_time and tmpl.end_time:
-                blocks = [{'start': tmpl.start_time.strftime('%H:%M'), 'end': tmpl.end_time.strftime('%H:%M')}]
-                for eb in tmpl.extra_blocks.all():
-                    blocks.append({'start': eb.start_time.strftime('%H:%M'), 'end': eb.end_time.strftime('%H:%M')})
-                agent_schedule[tmpl.day_of_week] = blocks
+        # Blocks for the overlap warning, resolved per calendar date (override
+        # beats template, latest effective_from wins, effective_until honored,
+        # is_off skipped) — same rules _ot_schedule_conflict uses for a slot.
+        if selected_agent is not None:
+            agent_schedule = _resolve_agent_week_schedule(selected_agent, week_dates)
 
         # All OT shifts for this agent this week, grouped by date
         ot_by_date = {}
@@ -2574,10 +2572,26 @@ def agent_available_ot(request):
         .order_by('date', 'start_time')
         .prefetch_related('claim_requests__requester')
     )
+
+    # Two flat, bulk lookups keyed the same way the Phase A guards in
+    # open_ot_claim are (date, start_time, end_time) — so a posting the viewer
+    # already holds via a DIFFERENT posting (duplicate postings for one slot)
+    # or an already-assigned OvertimeShift shows their own status instead of
+    # "Available," rather than letting them click into a guaranteed rejection.
+    my_pending_slots = set(OTShiftClaimRequest.objects.filter(
+        requester=viewer, status='pending'
+    ).values_list('open_shift__date', 'open_shift__start_time', 'open_shift__end_time'))
+    my_assigned_slots = set(OvertimeShift.objects.filter(
+        agent=viewer
+    ).exclude(status='cancelled').values_list('date', 'start_time', 'end_time'))
+
     for p in postings:
         pending = [c for c in p.claim_requests.all() if c.status == 'pending']
         p.pending_claims = pending
         p.my_pending = any(c.requester_id == viewer.pk for c in pending)
+        slot = (p.date, p.start_time, p.end_time)
+        p.my_assigned_elsewhere = (not p.my_pending) and slot in my_assigned_slots
+        p.my_pending_elsewhere = (not p.my_pending) and not p.my_assigned_elsewhere and slot in my_pending_slots
 
     my_requests = (
         OTShiftClaimRequest.objects.filter(requester=viewer)
@@ -3307,21 +3321,7 @@ def _ot_schedule_conflict(agent, d, start_time, end_time):
         ShiftTemplate.objects.filter(agent=agent).prefetch_related('extra_blocks'))
 
     for offset, day in enumerate(days, start=-1):
-        # Canonical resolution: a specific-date override wins outright, including
-        # an is_off override sitting on top of a working template.
-        override = overrides.get(day)
-        src = override if override is not None else _best_shift_template(
-            all_templates, agent.pk, day)
-        if src is None or src.is_off:
-            continue
-
-        blocks = []
-        if src.start_time and src.end_time:
-            blocks.append((src.start_time, src.end_time))
-        for eb in src.extra_blocks.all():      # ShiftBlock or ShiftTemplateBlock
-            if eb.start_time and eb.end_time:
-                blocks.append((eb.start_time, eb.end_time))
-
+        blocks = _resolve_schedule_blocks(overrides, all_templates, agent.pk, day)
         for s, e in blocks:
             if s == e:
                 continue
@@ -3333,6 +3333,54 @@ def _ot_schedule_conflict(agent, d, start_time, end_time):
                         f"{s.strftime('%H:%M')}–{e.strftime('%H:%M')}")
 
     return None
+
+
+def _resolve_schedule_blocks(overrides, all_templates, agent_id, d):
+    """Working blocks for one agent on one date: a specific-date override in
+    `overrides` (keyed by date) wins outright — including an is_off override
+    sitting on top of a working template — otherwise `_best_shift_template`
+    resolves the template in effect. `is_off` or no schedule data both mean no
+    blocks. Shared by `_ot_schedule_conflict` (three-day window, one slot) and
+    `_resolve_agent_week_schedule` (seven days, the OT week editor's warning).
+    """
+    override = overrides.get(d)
+    src = override if override is not None else _best_shift_template(
+        all_templates, agent_id, d)
+    if src is None or src.is_off:
+        return []
+
+    blocks = []
+    if src.start_time and src.end_time:
+        blocks.append((src.start_time, src.end_time))
+    for eb in src.extra_blocks.all():      # ShiftBlock or ShiftTemplateBlock
+        if eb.start_time and eb.end_time:
+            blocks.append((eb.start_time, eb.end_time))
+    return blocks
+
+
+def _resolve_agent_week_schedule(agent, week_dates):
+    """Seven days of resolved schedule blocks for the OT week editor's advisory
+    overlap warning, keyed by index into `week_dates` (0-6) to match the day
+    index the template and its JS already use. Unlike the old
+    day-of-week-keyed lookup this replaced, each day is resolved against its
+    actual calendar date via `_resolve_schedule_blocks` — same rules
+    `_ot_schedule_conflict` uses: override beats template, latest
+    effective_from wins, effective_until honored, is_off skipped.
+    """
+    overrides = {s.date: s for s in Shift.objects.filter(
+        agent=agent, date__in=week_dates).prefetch_related('extra_blocks')}
+    all_templates = list(
+        ShiftTemplate.objects.filter(agent=agent).prefetch_related('extra_blocks'))
+
+    schedule = {}
+    for i, d in enumerate(week_dates):
+        blocks = _resolve_schedule_blocks(overrides, all_templates, agent.pk, d)
+        if blocks:
+            schedule[i] = [
+                {'start': s.strftime('%H:%M'), 'end': e.strftime('%H:%M')}
+                for s, e in blocks
+            ]
+    return schedule
 
 
 from wfm.constants import PORTAL_ADMIN_TYPES as _PORTAL_ADMIN_TYPES

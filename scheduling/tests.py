@@ -2629,3 +2629,242 @@ class OtScheduleOverlapGuardTests(TestCase):
         posting.refresh_from_db()
         self.assertEqual(posting.status, 'filled')
         self.assertEqual(posting.assigned_shift, OvertimeShift.objects.get())
+
+
+class AgentWeekScheduleResolutionTests(TestCase):
+    """_resolve_agent_week_schedule — the OT week editor's overlap-warning data,
+    now resolved per calendar date instead of the old day-of-week-keyed,
+    unfiltered ShiftTemplate scan. Same resolution rules as
+    _ot_schedule_conflict (see OtScheduleConflictHelperTests above, which this
+    shares _resolve_schedule_blocks with): override beats template, latest
+    effective_from wins, effective_until honored, is_off means no blocks.
+    """
+
+    def setUp(self):
+        self.agent = _make_agent('weekagent', role='agent', role_type='regular_agent')
+        self.week_start = date(2026, 9, 7)             # a Monday
+        self.week_dates = [self.week_start + timedelta(days=i) for i in range(7)]
+        self.fri = self.week_start + timedelta(days=4)  # index 4
+
+    def _resolve(self):
+        from .views import _resolve_agent_week_schedule
+        return _resolve_agent_week_schedule(self.agent, self.week_dates)
+
+    def _tmpl(self, dow, start=time(9, 0), end=time(17, 0), **kw):
+        return ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=dow, start_time=start, end_time=end, **kw)
+
+    def _override(self, d, start=time(9, 0), end=time(17, 0), **kw):
+        return Shift.objects.create(agent=self.agent, date=d,
+                                    start_time=start, end_time=end, **kw)
+
+    def test_no_schedule_on_file_produces_an_empty_dict(self):
+        self.assertEqual(self._resolve(), {})
+
+    def test_expired_template_produces_no_entry(self):
+        self._tmpl(4, effective_until=self.week_start - timedelta(days=7))
+        self.assertNotIn(4, self._resolve())
+
+    def test_not_yet_effective_template_produces_no_entry(self):
+        self._tmpl(4, effective_from=self.week_start + timedelta(days=14))
+        self.assertNotIn(4, self._resolve())
+
+    def test_latest_effective_from_template_wins(self):
+        self._tmpl(4, effective_from=None)                                    # superseded
+        self._tmpl(4, time(18, 0), time(22, 0), effective_from=self.week_start)
+        self.assertEqual(self._resolve()[4], [{'start': '18:00', 'end': '22:00'}])
+
+    def test_specific_date_override_beats_the_template(self):
+        self._tmpl(4)                                      # 09:00-17:00
+        self._override(self.fri, time(12, 0), time(20, 0))
+        self.assertEqual(self._resolve()[4], [{'start': '12:00', 'end': '20:00'}])
+
+    def test_day_off_override_beats_a_working_template(self):
+        self._tmpl(4)
+        self._override(self.fri, time(0, 0), time(0, 0), is_off=True)
+        self.assertNotIn(4, self._resolve())
+
+    def test_day_off_template_produces_no_entry(self):
+        self._tmpl(4, start=None, end=None, is_off=True)
+        self.assertNotIn(4, self._resolve())
+
+    def test_split_shift_extra_block_included_from_template(self):
+        t = self._tmpl(4, time(8, 0), time(12, 0))
+        ShiftTemplateBlock.objects.create(shift_template=t, block_number=2,
+                                          start_time=time(16, 0), end_time=time(20, 0))
+        self.assertEqual(self._resolve()[4], [
+            {'start': '08:00', 'end': '12:00'}, {'start': '16:00', 'end': '20:00'},
+        ])
+
+    def test_split_shift_extra_block_included_from_override(self):
+        s = self._override(self.fri, time(8, 0), time(12, 0))
+        ShiftBlock.objects.create(shift=s, block_number=2,
+                                  start_time=time(16, 0), end_time=time(20, 0))
+        self.assertEqual(self._resolve()[4], [
+            {'start': '08:00', 'end': '12:00'}, {'start': '16:00', 'end': '20:00'},
+        ])
+
+
+class OvertimeWeekAdvisoryWarningDataTests(TestCase):
+    """overtime_week's GET context: agent_schedule_json is now built from
+    _resolve_agent_week_schedule, so it reflects the real, effective-dated
+    schedule for the week on screen rather than every ShiftTemplate row ever
+    created. The warning itself stays advisory — this only tests the data feeding it."""
+
+    def setUp(self):
+        self.sup = _make_agent('wksup', role_type='supervisor')
+        self.agent = _make_agent('wkagent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        self.client.login(username=self.sup.user.username, password='pw')
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday())
+        self.fri = self.week_start + timedelta(days=4)
+
+    def _get_schedule_json(self):
+        import json
+        resp = self.client.get(reverse('overtime_week'), {
+            'agent': self.agent.pk, 'week_start': self.week_start.isoformat(),
+        })
+        return json.loads(resp.context['agent_schedule_json'])
+
+    def test_expired_template_is_absent_from_the_warning_data(self):
+        ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=4, start_time=time(9, 0), end_time=time(17, 0),
+            effective_until=self.week_start - timedelta(days=7))
+        self.assertNotIn('4', self._get_schedule_json())
+
+    def test_specific_date_override_is_in_the_warning_data(self):
+        ShiftTemplate.objects.create(agent=self.agent, day_of_week=4,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        Shift.objects.create(agent=self.agent, date=self.fri,
+                             start_time=time(12, 0), end_time=time(20, 0))
+        schedule = self._get_schedule_json()
+        self.assertEqual(schedule['4'], [{'start': '12:00', 'end': '20:00'}])
+
+    def test_no_agent_selected_produces_no_schedule_and_no_error(self):
+        resp = self.client.get(reverse('overtime_week'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['agent_schedule_json'], '{}')
+
+
+class AvailableOtOwnSlotMarkerTests(TestCase):
+    """agent_available_ot now flags a posting the viewer already holds at those
+    same hours — a pending claim on a DIFFERENT posting, or an already-assigned
+    OvertimeShift — instead of leaving it looking plain 'Available' and letting
+    the agent click into a guaranteed Phase A rejection. Two bulk lookups keyed
+    on (date, start_time, end_time) and scoped to the viewer — must never leak
+    across viewers.
+    """
+
+    def setUp(self):
+        self.sup = _make_agent('mksup', role_type='supervisor')
+        self.agent = _make_agent('mkagent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        self.other = _make_agent('mkother', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        today = date.today()
+        self.day = today + timedelta(days=7)
+
+    def _login(self, agent):
+        self.client.login(username=agent.user.username, password='pw')
+
+    def _post_open(self, start='13:00', end='15:00', count=1):
+        self._login(self.sup)
+        self.client.post(reverse('open_ot_create'), {
+            'date': self.day.isoformat(), 'start_time': start, 'end_time': end,
+            'incentive_type': 'none', 'notes': '', 'count': str(count),
+        })
+        self.client.logout()
+
+    def _board(self, agent):
+        self._login(agent)
+        resp = self.client.get(reverse('agent_available_ot'))
+        self.client.logout()
+        return {p.pk: p for p in resp.context['postings']}
+
+    def test_pending_claim_on_a_different_posting_marks_the_duplicate(self):
+        self._post_open(count=2)
+        a, b = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': a.pk}))
+        self.client.logout()
+
+        board = self._board(self.agent)
+        self.assertTrue(board[a.pk].my_pending)
+        self.assertFalse(board[b.pk].my_pending)
+        self.assertTrue(board[b.pk].my_pending_elsewhere)
+        self.assertFalse(board[b.pk].my_assigned_elsewhere)
+
+    def test_assigned_shift_marks_any_other_open_posting_at_the_same_slot(self):
+        self._post_open(count=2)
+        a, b = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': a.pk}))
+        self.client.logout()
+        claim = OTShiftClaimRequest.objects.get()
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}))
+        self.client.logout()
+
+        board = self._board(self.agent)
+        self.assertTrue(board[b.pk].my_assigned_elsewhere)
+        self.assertFalse(board[b.pk].my_pending_elsewhere)
+
+    def test_cancelled_overtime_shift_does_not_mark_other_postings(self):
+        self._post_open(count=2)
+        a, b = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': a.pk}))
+        self.client.logout()
+        claim = OTShiftClaimRequest.objects.get()
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_approve', kwargs={'pk': claim.pk}))
+        self.client.logout()
+        OvertimeShift.objects.update(status='cancelled')
+
+        board = self._board(self.agent)
+        self.assertFalse(board[b.pk].my_assigned_elsewhere)
+        self.assertFalse(board[b.pk].my_pending_elsewhere)
+
+    def test_rejected_claim_does_not_mark_other_postings(self):
+        self._post_open(count=2)
+        a, b = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': a.pk}))
+        self.client.logout()
+        claim = OTShiftClaimRequest.objects.get()
+        self._login(self.sup)
+        self.client.post(reverse('ot_claim_reject', kwargs={'pk': claim.pk}),
+                         {'rejection_reason': 'no'})
+        self.client.logout()
+
+        board = self._board(self.agent)
+        self.assertFalse(board[b.pk].my_pending_elsewhere)
+        self.assertFalse(board[b.pk].my_assigned_elsewhere)
+
+    def test_markers_are_per_viewer_not_global(self):
+        """The whole point of Part 2: another agent looking at the same board
+        must see the duplicate posting completely normally."""
+        self._post_open(count=2)
+        a, b = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': a.pk}))
+        self.client.logout()
+
+        board = self._board(self.other)
+        self.assertFalse(board[b.pk].my_pending)
+        self.assertFalse(board[b.pk].my_pending_elsewhere)
+        self.assertFalse(board[b.pk].my_assigned_elsewhere)
+        self.assertEqual(board[b.pk].pending_claims, [])
+
+    def test_unrelated_posting_at_different_hours_is_unaffected(self):
+        self._post_open(start='13:00', end='15:00', count=1)
+        self._post_open(start='20:00', end='22:00', count=1)
+        slot_posting, other_posting = list(OpenOTShift.objects.order_by('pk'))
+        self._login(self.agent)
+        self.client.post(reverse('open_ot_claim', kwargs={'pk': slot_posting.pk}))
+        self.client.logout()
+
+        board = self._board(self.agent)
+        self.assertFalse(board[other_posting.pk].my_pending_elsewhere)
+        self.assertFalse(board[other_posting.pk].my_assigned_elsewhere)

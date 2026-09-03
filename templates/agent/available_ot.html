@@ -42,7 +42,11 @@
                 </td>
                 <td style="font-size:13px;color:#6b7280;">{{ p.notes|default:"—" }}</td>
                 <td style="font-size:12px;">
-                    {% if p.pending_claims %}
+                    {% if p.my_assigned_elsewhere %}
+                        <span class="badge badge-green">Approved</span>
+                    {% elif p.my_pending_elsewhere %}
+                        <div style="color:#92400e;">You already requested this — pending approval</div>
+                    {% elif p.pending_claims %}
                         {% for c in p.pending_claims %}
                         <div style="color:#92400e;">Requested by {{ c.requester }} — pending approval</div>
                         {% endfor %}
@@ -53,6 +57,10 @@
                 <td style="white-space:nowrap;text-align:right;">
                     {% if p.my_pending %}
                     <span style="font-size:12px;color:#15803d;font-weight:600;">&#10003; Requested</span>
+                    {% elif p.my_assigned_elsewhere %}
+                    <span style="font-size:12px;color:#15803d;font-weight:600;">&#10003; Already yours</span>
+                    {% elif p.my_pending_elsewhere %}
+                    <span style="font-size:12px;color:#9ca3af;">—</span>
                     {% else %}
                     <form method="post" action="{% url 'open_ot_claim' pk=p.pk %}" style="display:inline;margin:0;" onsubmit="this.querySelector('button').disabled=true;">
                         {% csrf_token %}
