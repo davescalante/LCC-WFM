@@ -23,13 +23,16 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **541**. The tests are the regression gate and double as executable specs for the
+Currently **557**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
-Two read-only management commands exist for diagnosis; neither is reachable from a request
-path and neither writes anything. `verify_adherence_roster` runs the old and new roster
+Three read-only management commands exist for diagnosis; none is reachable from a request
+path and none writes anything. `verify_adherence_roster` runs the old and new roster
 implementations against the same database and reports any difference in the pk sets
-(`--weeks`, default 8). `schedule_data_inventory` prints row counts, date ranges and
+(`--weeks`, default 8). `verify_ot_topups` (`370a2de`) does the same job for the OT incentive
+top-ups — it holds the pre-dedupe plain-`+=` summation and the current deduped one frozen side
+by side, compares the money week by week with the engine's exact expressions, and exits 1 on
+any difference (`--weeks`, default 12). `schedule_data_inventory` prints row counts, date ranges and
 future-dated counts for the schedule/adherence tables, plus three OT-duplicate sections
 (`ccb64cf`): exact-duplicate slots keyed on agent/date/start/end with cancelled rows
 excluded, the money-exposed subset (extra rows that are `completed` **and** incentivized,
@@ -151,15 +154,49 @@ priced and broken out per week), and the origin split by write path.
   a claim is enough to stop the duplicate it names — that requires either the approver reading it
   and acting, or `ot_claim_approve` itself being changed to check pending claims and cross the two
   creation paths, which has not happened.
-- **The OT incentive top-up sums duplicate rows; the adherence maps dedupe them.**
-  `finance.views._get_billable_weekly_data` loops every `status='completed'` `OvertimeShift`
-  and does a plain `+= total_shift_hours()` per incentive type, which becomes `ph_topup_mxn` /
-  `ot_1_5_topup_mxn` and lands in `total_pay_mxn`. `adherence.views._build_maps` collapses
-  exact duplicates on `(start_time, end_time, status)`, and `_net_ot_evening_hours` unions
-  intervals rather than summing. So duplicate rows **would** overpay if they were ever marked
-  `completed` with an incentive. Measured on production 2026-09-02: **zero exposure** — every
-  existing duplicate sits at `pending`, so the path has never fired. A live hazard and a known
-  backlog item, not an incident. Do not "tidy" either side without understanding both.
+- **The finance/adherence OT dedupe asymmetry is RESOLVED (`370a2de`) — both sides now collapse
+  on `(start_time, end_time, status)` per agent/day.** `finance.views._get_billable_weekly_data`
+  used to loop every `status='completed'` `OvertimeShift` and do a plain `+= total_shift_hours()`
+  per incentive type, so a slot recorded twice paid its premium twice through `ph_topup_mxn` /
+  `ot_1_5_topup_mxn` and `total_pay_mxn`; `adherence.views._build_maps` already collapsed exact
+  duplicates on that key (and `_net_ot_evening_hours` unions intervals rather than summing). The
+  finance loop now uses the identical key. Four things about it are deliberate:
+  - **Split OT is untouched by construction.** Two rows on one day at *different* hours have
+    different keys and both still count — which is what migration `0018` dropped
+    `unique_together` for. Do not widen the key to `(agent, date)`.
+  - **`incentive_type` is deliberately NOT in the key.** Including it would keep both rows of a
+    slot recorded once as `power_hour` and once as `time_and_a_half` and pay **both** premiums —
+    the exact overpay this closes. One slot pays one premium, always.
+  - **`.order_by('pk')` is the deterministic tiebreak**, and it is load-bearing. When a
+    duplicated slot's rows disagree on `incentive_type` the earliest-created row is the one that
+    pays, matching how `schedule_data_inventory` attributes a duplicated slot. Without it, which
+    incentive pays depends on database row order — `OvertimeShift.Meta.ordering` is `['date']`
+    and gives no tiebreak, so pay would be non-deterministic.
+  - **The `no_show` loop just above is untouched** and must stay that way. It assigns a boolean
+    into `bonus_map`, so duplicates were always harmless there; `status` in the dedupe key is
+    what keeps a `completed` and a `no_show` row at identical times from collapsing into one
+    consequence.
+- **A dedupe can only ever reduce a top-up, never increase it — and in an already-paid week that
+  is a reconciliation item, not a display bug.** Removing rows from a sum is one-directional, so
+  no input to this code can raise anyone's pay. But the **Finance payroll report recomputes live
+  for every week, forever** (finalized Nómina weeks are safe — they render from a `PayrollRun`
+  snapshot). So if a duplicated slot ever does accumulate two `completed` incentivized rows in a
+  week that has already been paid out, that week's report will show **less** than what actually
+  left the bank. That gap is real money already disbursed and belongs to whoever owns payroll —
+  do not "fix" the report to match the payment.
+- **`finance/management/commands/verify_ot_topups.py` is the standing regression check for the
+  above.** Read-only, not reachable from any request path, `--weeks` default 12, exits 1 on any
+  difference. It holds **both** summations frozen — `_topups_original` (the pre-`370a2de` plain
+  `+=`) and `_topups_deduped` (what the engine now does) — and compares them week by week with
+  the engine's exact money expressions. It was the pre-deploy gate and it still works as a
+  regression check, so keep both loops frozen; a change to the engine's OT summation should be
+  mirrored into `_topups_deduped`, never into `_topups_original`. Production proof before deploy
+  (2026-09-02): clean across **both 12 and 52 weeks**, including the busy weeks of 2026-06-01
+  (17 agents with completed OT) and 2026-08-10 (24 agents). **Zero pay changed.**
+- **Nómina is unaffected by the OT top-ups entirely.** It never reads `total_pay_mxn` and never
+  reads any `ot_*` field — only `final_hrs`, `hourly_mxn`, `base_pay_mxn`, `bonus_mxn`,
+  `admin_bonus_mxn` and `commission_pct` come out of the engine into `nomina/`. The OT premium
+  reaching the Finance payroll report but not Nómina is a deliberate asymmetry, not a gap.
 - **Cancelling an OT row is the safe void; deleting one destroys history.** Every consumer
   already excludes `status='cancelled'` (`adherence._build_maps`, `erlang._build_scheduled_map`,
   `_zero_missing_scheduled`, the OT grid, `overtime_export`), and `finance` counts only
