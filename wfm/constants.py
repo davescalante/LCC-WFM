@@ -14,3 +14,13 @@ SCHED_HOURS_ZEROING_STATUSES = frozenset({'VTO', 'LOA', 'V', 'Holiday'})
 # these on any day in a week raises that agent's weekly NR allowance to the
 # flat cap, skipping the 12.5% ratio check for that agent-week.
 VTO_TYPE_STATUSES = frozenset({'VTO', 'P+VTO', 'T+VTO'})
+
+# Statuses meaning the agent is fully off the floor that day — used ONLY by
+# the Staffing Calculator (erlang app) to exclude an agent from the Scheduled
+# Staff count. Deliberately separate from SCHED_HOURS_ZEROING_STATUSES (pay/
+# hours engine), BONUS_DISQUALIFYING (bonus eligibility) and COS_INCLUDE_STATUSES
+# (Cost of Schedule) — do not merge with those or reuse this one elsewhere.
+# Partial-work statuses (P+VTO, T+VTO) and failure-to-show statuses (Absent,
+# NCNS, T) are deliberately excluded: they provided real coverage or were an
+# unplanned no-show, not a pre-planned absence.
+STAFFING_EXCLUDED_STATUSES = frozenset({'V', 'VTO', 'LOA', 'Holiday', 'IMSS', 'S'})

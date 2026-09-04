@@ -147,14 +147,38 @@ def _build_scheduled_map(week_start):
 
     all_call_ids = set().union(*call_ids_by_date.values())
 
+    # OT shifts — all agents regardless of role; cancelled excluded. Queried
+    # here (rather than at its original position further down) so its agent
+    # IDs can be folded into the one adherence-status query below; Django
+    # caches this queryset's rows on first evaluation (below), so moving the
+    # query earlier does not run it twice — the loop further down still
+    # consumes the same cached rows.
+    ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).exclude(status='cancelled').values(
+        'agent_id', 'date', 'start_time', 'end_time'
+    )
+    ot_agent_ids = {s['agent_id'] for s in ot_shifts}
+
+    # Bulk-fetch every adherence status recorded this week for any agent who
+    # could appear on this grid (regular schedule or OT) — ONE query, reused
+    # for both the staffing-exclusion check and the popover's status tags.
+    from adherence.models import AdherenceRecord
+    from wfm.constants import STAFFING_EXCLUDED_STATUSES
+    adherence_status_by_agent_date = {
+        (r['agent_id'], r['date']): r['status']
+        for r in AdherenceRecord.objects.filter(
+            date__in=week_dates, agent_id__in=(all_call_ids | ot_agent_ids),
+        ).values('agent_id', 'date', 'status')
+    }
+
     # Pre-fetch agent display names
     agent_names = {
         a.pk: str(a)
         for a in Agent.objects.select_related('user').filter(status='active')
     }
 
-    scheduled = {}    # {(day_name, hour): int}
-    agents_map = {}   # {(day_name, hour): [{'name': str, 'time': str, 'ot': bool}]}
+    scheduled = {}     # {(day_name, hour): int}
+    agents_map = {}    # {(day_name, hour): [{'name': str, 'time': str, 'ot': bool, 'status': str|None}]}
+    excluded_map = {}  # {(day_name, hour): [{'name': str, 'reason': str}]} — adherence-excluded agents
     seen = set()      # (day_name, hour, agent_id) — prevent double-counting
 
     def _add(day_name, h, agent_id, entry):
@@ -165,16 +189,32 @@ def _build_scheduled_map(week_start):
         scheduled[key] = scheduled.get(key, 0) + 1
         agents_map.setdefault(key, []).append(entry)
 
-    def _add_hours(day_name, start_hour, end_hour, agent_id, entry, next_day_name=None):
+    def _add_hours(date_, start_hour, end_hour, agent_id, entry_base, exclude):
+        """Add hours for one shift/OT slot. entry_base has no 'status' key yet.
+        exclude=True lets a STAFFING_EXCLUDED_STATUSES status divert the agent
+        into excluded_map instead of counting them; exclude=False (OT) always
+        counts — status is attached for display only, never used to exclude."""
+        day_name = date_.strftime('%A')
+
+        def _place(day_name_, h, d):
+            status = adherence_status_by_agent_date.get((agent_id, d))
+            if exclude and status in STAFFING_EXCLUDED_STATUSES:
+                excluded_map.setdefault((day_name_, h), []).append(
+                    {'name': entry_base['name'], 'reason': status}
+                )
+                return
+            _add(day_name_, h, agent_id, dict(entry_base, status=status))
+
         if end_hour <= start_hour:  # overnight — split at midnight
+            next_date = date_ + timedelta(days=1)
+            next_day_name = next_date.strftime('%A')
             for h in range(start_hour, 24):
-                _add(day_name, h, agent_id, entry)
-            nd = next_day_name or day_name
+                _place(day_name, h, date_)
             for h in range(0, end_hour):
-                _add(nd, h, agent_id, entry)
+                _place(next_day_name, h, next_date)
         else:
             for h in range(start_hour, end_hour):
-                _add(day_name, h, agent_id, entry)
+                _place(day_name, h, date_)
 
     # Specific shift overrides — date-aware role check. An override fully
     # governs its date, INCLUDING is_off=True (a one-time day off must stop
@@ -193,9 +233,8 @@ def _build_scheduled_map(week_start):
             continue
         name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
-        next_day = (s['date'] + timedelta(days=1)).strftime('%A')
-        _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
-                   s['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
+        _add_hours(s['date'], s['start_time'].hour, s['end_time'].hour,
+                   s['agent_id'], {'name': name, 'time': label, 'ot': False}, exclude=True)
 
     # Recurring templates — resolved per (agent, date) with the same shared
     # rule the Shifts/Adherence tabs and agent portal use (_best_shift_template:
@@ -208,8 +247,6 @@ def _build_scheduled_map(week_start):
         templates_by_agent.setdefault(t.agent_id, []).append(t)
 
     for day_date in week_dates:
-        day_name = day_date.strftime('%A')
-        next_day = (day_date + timedelta(days=1)).strftime('%A')
         for agent_id in call_ids_by_date[day_date]:
             if (agent_id, day_date) in agents_with_shift_override:
                 continue
@@ -218,8 +255,8 @@ def _build_scheduled_map(week_start):
                 continue
             name = agent_names.get(agent_id, f"Agent {agent_id}")
             label = f"{t.start_time.strftime('%H:%M')}–{t.end_time.strftime('%H:%M')}"
-            _add_hours(day_name, t.start_time.hour, t.end_time.hour,
-                       agent_id, {'name': name, 'time': label, 'ot': False}, next_day)
+            _add_hours(day_date, t.start_time.hour, t.end_time.hour,
+                       agent_id, {'name': name, 'time': label, 'ot': False}, exclude=True)
 
     # Pending role changes with a new schedule — count them for planning before effective date applies
     # This lets coordinators see next week's staffing with graduating agents already counted.
@@ -239,22 +276,20 @@ def _build_scheduled_map(week_start):
                 continue
             name = agent_names.get(p['agent_id'], f"Agent {p['agent_id']}")
             label = f"{start_t.strftime('%H:%M')}–{end_t.strftime('%H:%M')}"
-            next_day = (day_date + timedelta(days=1)).strftime('%A')
-            _add_hours(day_date.strftime('%A'), start_t.hour, end_t.hour,
-                       p['agent_id'], {'name': name, 'time': label, 'ot': False}, next_day)
+            _add_hours(day_date, start_t.hour, end_t.hour,
+                       p['agent_id'], {'name': name, 'time': label, 'ot': False}, exclude=True)
 
-    # OT shifts — all agents regardless of role; cancelled excluded
-    ot_shifts = OvertimeShift.objects.filter(date__in=week_dates).exclude(status='cancelled').values(
-        'agent_id', 'date', 'start_time', 'end_time'
-    )
+    # OT shifts — all agents regardless of role; cancelled excluded. Never
+    # excluded by adherence status — non-cancelled OT counts as coverage
+    # exactly as it always has (the agent's status that day, if any, is still
+    # attached to the entry for display only).
     for s in ot_shifts:
         name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
-        next_day = (s['date'] + timedelta(days=1)).strftime('%A')
-        _add_hours(s['date'].strftime('%A'), s['start_time'].hour, s['end_time'].hour,
-                   s['agent_id'], {'name': name, 'time': label, 'ot': True}, next_day)
+        _add_hours(s['date'], s['start_time'].hour, s['end_time'].hour,
+                   s['agent_id'], {'name': name, 'time': label, 'ot': True}, exclude=False)
 
-    return scheduled, agents_map
+    return scheduled, agents_map, excluded_map
 
 
 def _build_open_ot_map(week_start):
@@ -383,6 +418,16 @@ def _build_days(calculated_rows, params, scheduled_map, actual_map, weeks_by_day
     return days
 
 
+def _summarize_statuses(entries):
+    """Count non-blank, non-'P' status codes among a list of agents_map
+    entries (each with a 'status' key). Returns (status, count) pairs, most
+    frequent first, ties broken by status name. Used only for the staffing
+    popover's header summary — never affects the scheduled count."""
+    from collections import Counter
+    counts = Counter(e['status'] for e in entries if e.get('status') and e['status'] != 'P')
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 @login_required
 def erlang_calculator(request):
     error = None
@@ -474,6 +519,8 @@ def erlang_calculator(request):
 
     days = []
     agents_map_json = '{}'
+    excluded_map_json = '{}'
+    status_summary_json = '{}'
     if raw_rows:
         calculated = calculate_staffing(
             raw_rows,
@@ -482,7 +529,7 @@ def erlang_calculator(request):
             params['shrinkage'],
             params['aht_seconds'],
         )
-        scheduled_map, agents_map = _build_scheduled_map(week_start)
+        scheduled_map, agents_map, excluded_map = _build_scheduled_map(week_start)
         days = _build_days(
             calculated, params,
             scheduled_map,
@@ -516,6 +563,16 @@ def erlang_calculator(request):
             f"{day}:{hour}": sorted(entries, key=lambda e: e['name'])
             for (day, hour), entries in agents_map.items()
         })
+        excluded_map_json = json.dumps({
+            f"{day}:{hour}": sorted(entries, key=lambda e: e['name'])
+            for (day, hour), entries in excluded_map.items()
+        })
+        status_summary = {}
+        for (day, hour), entries in agents_map.items():
+            pairs = _summarize_statuses(entries)
+            if pairs:
+                status_summary[f"{day}:{hour}"] = pairs
+        status_summary_json = json.dumps(status_summary)
 
     prev_week = week_start - timedelta(days=7)
     next_week = week_start + timedelta(days=7)
@@ -554,6 +611,8 @@ def erlang_calculator(request):
         'is_current_week': week_start == current_week,
         'current_week': current_week,
         'agents_map_json': agents_map_json,
+        'excluded_map_json': excluded_map_json,
+        'status_summary_json': status_summary_json,
     })
 
 
@@ -633,7 +692,7 @@ def erlang_download(request):
         params['aht_seconds'],
     )
 
-    scheduled_map, _ = _build_scheduled_map(week_start)
+    scheduled_map, _, _ = _build_scheduled_map(week_start)
     actual_map = _build_actual_map(week_start)
 
     response = HttpResponse(content_type='text/csv')

@@ -323,6 +323,27 @@ class CostOfScheduleVTests(TestCase):
         self.assertEqual(cos_week['sched_hours'], 0.0)
 
 
+class CostOfScheduleImssSuspensionFullLossTests(TestCase):
+    """IMSS and Suspension ('S') must keep losing 100% of scheduled hours in
+    Cost of Schedule — a regression guard, since the new Staffing Calculator
+    exclusion (STAFFING_EXCLUDED_STATUSES) is a separate constant and must
+    never change this adherence-app behavior."""
+
+    def _cos_pct_for_status(self, status):
+        from adherence.views import _calculate_cos
+        cells = [{'status': status, 'sched_hrs': Decimal('8'), 'display_hrs': Decimal('0')}]
+        cells += [{'status': '', 'sched_hrs': Decimal('0'), 'display_hrs': Decimal('0')} for _ in range(6)]
+        rows = [{'cells': cells}]
+        day_data, _ = _calculate_cos(rows, _WEEK)
+        return day_data[0]['cos_pct']
+
+    def test_imss_is_full_loss(self):
+        self.assertEqual(self._cos_pct_for_status('IMSS'), 100.0)
+
+    def test_suspension_is_full_loss(self):
+        self.assertEqual(self._cos_pct_for_status('S'), 100.0)
+
+
 class CodingsRosterExcludesOfficialAdminsTests(TestCase):
     """
     Part 3: Official Admins are excluded from the regular Codings tab's

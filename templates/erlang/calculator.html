@@ -560,6 +560,7 @@ function syncWeekInputs(val) {
         <div id="sp-count" style="font-size:11px;color:#94a3b8;margin-top:2px;"></div>
     </div>
     <div id="sp-list" style="overflow-y:auto;max-height:280px;padding:8px 0;"></div>
+    <div id="sp-excluded" style="display:none;padding:6px 16px 10px;font-size:11px;color:#94a3b8;border-top:1px solid #f0f4f8;"></div>
 </div>
 
 <style>
@@ -568,6 +569,8 @@ function syncWeekInputs(val) {
 
 <script>
 const SCHEDULED_AGENTS = {{ agents_map_json|safe }};
+const EXCLUDED_AGENTS = {{ excluded_map_json|safe }};
+const STATUS_SUMMARY = {{ status_summary_json|safe }};
 
 function openStaffPopover(el) {
     const day = el.dataset.day;
@@ -575,6 +578,8 @@ function openStaffPopover(el) {
     const label = el.dataset.hourLabel;
     const key = day + ':' + hour;
     const entries = SCHEDULED_AGENTS[key] || [];
+    const excluded = EXCLUDED_AGENTS[key] || [];
+    const summaryPairs = STATUS_SUMMARY[key] || [];
 
     const pop = document.getElementById('staff-popover');
     if (pop.style.display === 'flex' && pop._sourceEl === el) {
@@ -584,10 +589,12 @@ function openStaffPopover(el) {
     pop._sourceEl = el;
 
     document.getElementById('sp-title').textContent = day + ' · ' + label;
-    document.getElementById('sp-count').textContent =
+    const countText =
         entries.length === 0 ? 'No agents scheduled'
         : entries.length === 1 ? '1 agent scheduled'
         : entries.length + ' agents scheduled';
+    const summaryText = summaryPairs.map(p => p[1] + ' ' + p[0]).join(', ');
+    document.getElementById('sp-count').textContent = countText + (summaryText ? ' · ' + summaryText : '');
 
     const list = document.getElementById('sp-list');
     list.innerHTML = '';
@@ -598,8 +605,11 @@ function openStaffPopover(el) {
             const row = document.createElement('div');
             row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 16px;gap:8px;';
             row.innerHTML = `
-                <span style="font-size:13px;color:#1e293b;font-weight:${e.ot ? '400' : '500'};flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                      title="${e.name}">${e.name}</span>
+                <span style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+                    <span style="font-size:13px;color:#1e293b;font-weight:${e.ot ? '400' : '500'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                          title="${e.name}">${e.name}</span>
+                    ${e.status ? `<span style="font-size:9px;font-weight:700;background:#f1f5f9;color:#64748b;padding:1px 5px;border-radius:3px;flex-shrink:0;">${e.status}</span>` : ''}
+                </span>
                 <span style="font-size:11px;color:#64748b;white-space:nowrap;flex-shrink:0;">${e.time}</span>
                 ${e.ot ? '<span style="font-size:9px;font-weight:700;background:#ede9fe;color:#6d28d9;padding:1px 5px;border-radius:3px;flex-shrink:0;">OT</span>' : ''}
             `;
@@ -607,10 +617,20 @@ function openStaffPopover(el) {
         });
     }
 
+    const excludedEl = document.getElementById('sp-excluded');
+    if (excluded.length) {
+        excludedEl.textContent = 'Also scheduled: ' + excluded.map(e => e.name + ' (' + e.reason + ')').join(', ');
+        excludedEl.style.display = 'block';
+    } else {
+        excludedEl.textContent = '';
+        excludedEl.style.display = 'none';
+    }
+
     // Position below the clicked element
     pop.style.display = 'flex';
     const rect = el.getBoundingClientRect();
-    const popW = 280, popH = Math.min(360, 80 + entries.length * 36);
+    const popH = Math.min(360, 80 + entries.length * 36 + (excluded.length ? 28 : 0));
+    const popW = 280;
     let left = rect.left + rect.width / 2 - popW / 2;
     let top = rect.bottom + 8;
     // Keep on screen

@@ -243,7 +243,7 @@ class ScheduledMapOverrideTests(TestCase):
         )
 
     def _count(self, hour):
-        scheduled, _ = _build_scheduled_map(self.week_start)
+        scheduled, _, _ = _build_scheduled_map(self.week_start)
         return scheduled.get(('Saturday', hour), 0)
 
     def test_baseline_template_counts(self):
@@ -282,3 +282,107 @@ class ScheduledMapOverrideTests(TestCase):
                                      start_time=time(16, 0), end_time=time(18, 0))
         self.assertEqual(self._count(16), 1)
         self.assertEqual(self._count(17), 1)
+
+
+from adherence.models import AdherenceRecord
+
+
+class ScheduledMapAdherenceExclusionTests(TestCase):
+    """Scheduled Staff must exclude an agent whose adherence status that day
+    means they aren't actually on the floor (V/VTO/LOA/Holiday/IMSS/S), while
+    never touching OT coverage or any pay/bonus/COS status set."""
+
+    def setUp(self):
+        self.agent = _staff('caller2', role_type='regular_agent')
+        self.agent.role = 'agent'
+        self.agent.save()
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.monday = self.week_start
+        ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=0,  # Monday
+            start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+        )
+
+    def _count(self, hour):
+        scheduled, _, _ = _build_scheduled_map(self.week_start)
+        return scheduled.get(('Monday', hour), 0)
+
+    def _set_status(self, status):
+        AdherenceRecord.objects.update_or_create(
+            agent=self.agent, date=self.monday, defaults={'status': status},
+        )
+
+    def test_each_excluded_status_removes_agent_from_count(self):
+        for status in ('V', 'VTO', 'LOA', 'Holiday', 'IMSS', 'S'):
+            self._set_status(status)
+            self.assertEqual(self._count(10), 0, f'{status} should exclude the agent')
+
+    def test_partial_work_statuses_do_not_exclude(self):
+        for status in ('P+VTO', 'T+VTO'):
+            self._set_status(status)
+            self.assertEqual(self._count(10), 1, f'{status} should NOT exclude the agent')
+
+    def test_absent_ncns_and_tardy_do_not_exclude(self):
+        for status in ('Absent', 'NCNS', 'T'):
+            self._set_status(status)
+            self.assertEqual(self._count(10), 1, f'{status} should NOT exclude the agent')
+
+    def test_ot_still_counts_despite_excluded_adherence_status(self):
+        self._set_status('V')
+        OvertimeShift.objects.create(agent=self.agent, date=self.monday,
+                                     start_time=time(20, 0), end_time=time(22, 0))
+        self.assertEqual(self._count(10), 0)   # regular template hours excluded
+        self.assertEqual(self._count(20), 1)   # OT hours still count
+
+    def test_cancelled_ot_still_excluded_regardless_of_adherence(self):
+        OvertimeShift.objects.create(agent=self.agent, date=self.monday,
+                                     start_time=time(20, 0), end_time=time(22, 0),
+                                     status='cancelled')
+        self.assertEqual(self._count(20), 0)
+
+    def test_no_adherence_record_leaves_agent_counted(self):
+        # No AdherenceRecord at all for this date — must default to counted,
+        # the same safe direction the rest of the codebase already fails to.
+        self.assertEqual(self._count(10), 1)
+
+
+class ScheduledMapStatusTagTests(TestCase):
+    """Popover status-tag/summary data must never influence the scheduled
+    count itself — the count is the number people rely on for planning."""
+
+    def setUp(self):
+        self.agent = _staff('caller3', role_type='regular_agent')
+        self.agent.role = 'agent'
+        self.agent.save()
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.monday = self.week_start
+        ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=0,  # Monday
+            start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+        )
+
+    def test_entry_carries_status_when_record_exists(self):
+        AdherenceRecord.objects.create(agent=self.agent, date=self.monday, status='T')
+        scheduled, agents_map, _ = _build_scheduled_map(self.week_start)
+        entry = agents_map[('Monday', 10)][0]
+        self.assertEqual(entry['status'], 'T')
+        self.assertEqual(scheduled[('Monday', 10)], 1)  # count unaffected
+
+    def test_entry_has_no_status_when_no_record(self):
+        scheduled, agents_map, _ = _build_scheduled_map(self.week_start)
+        entry = agents_map[('Monday', 10)][0]
+        self.assertIsNone(entry['status'])
+        self.assertEqual(scheduled[('Monday', 10)], 1)  # count unaffected
+
+    def test_status_summary_counts_correctly_and_omits_present_and_blank(self):
+        from erlang.views import _summarize_statuses
+        entries = [
+            {'name': 'A', 'status': 'Absent'},
+            {'name': 'B', 'status': 'Absent'},
+            {'name': 'C', 'status': 'T'},
+            {'name': 'D', 'status': 'P'},
+            {'name': 'E', 'status': None},
+        ]
+        self.assertEqual(_summarize_statuses(entries), [('Absent', 2), ('T', 1)])
