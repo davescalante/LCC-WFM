@@ -386,3 +386,145 @@ class ScheduledMapStatusTagTests(TestCase):
             {'name': 'E', 'status': None},
         ]
         self.assertEqual(_summarize_statuses(entries), [('Absent', 2), ('T', 1)])
+
+
+from scheduling.models import EmploymentPeriod, ScheduledRoleChange
+
+
+class ScheduledMapQuitBajaExclusionTests(TestCase):
+    """An agent marked Quit/Baja ahead of their formal separation stops counting
+    as Scheduled Staff from that date FORWARD — including later weeks with no
+    adherence data — without ever erasing a rehired agent who is really working.
+    """
+
+    def setUp(self):
+        self.agent = _staff('caller5', role_type='regular_agent')
+        self.agent.role = 'agent'
+        self.agent.save()
+        today = date.today()
+        this_monday = today - timedelta(days=today.weekday())
+        self.past_week = this_monday - timedelta(days=14)   # entirely in the past
+        self.next_week = this_monday + timedelta(days=7)
+        for dow in range(7):    # 09:00–17:00 every day, so any day can be checked
+            ShiftTemplate.objects.create(
+                agent=self.agent, day_of_week=dow,
+                start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+            )
+        self.period = EmploymentPeriod.objects.create(
+            agent=self.agent, start_date=self.past_week - timedelta(days=365),
+        )
+
+    def _count(self, week_start, day_name, hour=10):
+        scheduled, _, _ = _build_scheduled_map(week_start)
+        return scheduled.get((day_name, hour), 0)
+
+    def _mark(self, day, status='Quit'):
+        AdherenceRecord.objects.update_or_create(
+            agent=self.agent, date=day, defaults={'status': status},
+        )
+
+    def test_days_before_the_mark_count_and_the_mark_day_onward_does_not(self):
+        self._mark(self.past_week + timedelta(days=2))   # Wednesday
+        self.assertEqual(self._count(self.past_week, 'Monday'), 1)
+        self.assertEqual(self._count(self.past_week, 'Tuesday'), 1)
+        for day in ('Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'):
+            self.assertEqual(self._count(self.past_week, day), 0, day)
+
+    def test_mark_still_excludes_in_a_later_week(self):
+        # The reappearance bug: a same-day-only rule would count them again here.
+        self._mark(self.past_week + timedelta(days=2))
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+    def test_baja_behaves_exactly_like_quit(self):
+        self._mark(self.past_week + timedelta(days=2), status='Baja')
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+    def test_sunday_mark_excludes_that_same_sunday(self):
+        # Boundary: the mark lands on the LAST day of the viewed week, so the
+        # look-back's upper bound must be inclusive of week_end.
+        self._mark(self.next_week + timedelta(days=6))   # Sunday
+        self.assertEqual(self._count(self.next_week, 'Saturday'), 1)
+        self.assertEqual(self._count(self.next_week, 'Sunday'), 0)
+
+    def test_pre_approved_future_status_does_not_rescue_the_mark(self):
+        # A future V/LOA/Holiday is not evidence the agent is still here —
+        # vacation approval writes a status onto every day of the range.
+        self._mark(self.past_week + timedelta(days=2))
+        self._mark(self.next_week + timedelta(days=4), status='V')
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+    def test_later_real_activity_restores_the_agent(self):
+        self._mark(self.past_week + timedelta(days=2))
+        self._mark(self.past_week + timedelta(days=3), status='P')
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_later_hours_with_no_status_restores_the_agent(self):
+        self._mark(self.past_week + timedelta(days=2))
+        AdherenceRecord.objects.create(
+            agent=self.agent, date=self.past_week + timedelta(days=3),
+            status='', actual_hours=8,
+        )
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_removing_the_mark_restores_the_agent(self):
+        marked_day = self.past_week + timedelta(days=2)
+        self._mark(marked_day)
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+        AdherenceRecord.objects.filter(agent=self.agent, date=marked_day).delete()
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_no_open_employment_period_never_excludes(self):
+        # Separated then rehired by just flipping the status back to active:
+        # the old period is already closed and no new one was opened. Ambiguous,
+        # so it must fail toward counting.
+        self.period.end_date = self.past_week
+        self.period.save()
+        self._mark(self.past_week + timedelta(days=2))
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_mark_from_a_previous_employment_is_ignored(self):
+        marked_day = self.past_week + timedelta(days=2)
+        self._mark(marked_day)
+        self.period.end_date = marked_day
+        self.period.save()
+        EmploymentPeriod.objects.create(
+            agent=self.agent, start_date=marked_day + timedelta(days=1),
+        )
+        self._mark(marked_day + timedelta(days=3), status='P')
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_rehire_with_no_records_since_return_is_counted_in_a_future_week(self):
+        # The failure that must not happen: nothing recorded since they came
+        # back, and the week being viewed hasn't happened yet.
+        marked_day = self.past_week + timedelta(days=2)
+        self._mark(marked_day)
+        self.period.end_date = marked_day
+        self.period.save()
+        EmploymentPeriod.objects.create(
+            agent=self.agent, start_date=marked_day + timedelta(days=1),
+        )
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_no_adherence_history_at_all_is_counted(self):
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_overtime_still_counts_for_a_quit_marked_agent(self):
+        self._mark(self.past_week + timedelta(days=2))
+        OvertimeShift.objects.create(agent=self.agent, date=self.next_week,
+                                     start_time=time(20, 0), end_time=time(22, 0))
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)    # scheduled hours
+        self.assertEqual(self._count(self.next_week, 'Monday', 20), 1)  # OT still counts
+
+    def test_excluded_agent_is_listed_once_in_the_popover(self):
+        # A template plus a pending role-change schedule reach the same agent/day
+        # twice; the count already deduped, the excluded list must too.
+        self._mark(self.past_week + timedelta(days=2))
+        ScheduledRoleChange.objects.create(
+            agent=self.agent, new_role_type='regular_agent',
+            effective_date=self.next_week, new_shift_days=[0],
+            new_shift_start_time=time(9, 0), new_shift_end_time=time(17, 0),
+        )
+        _, _, excluded_map = _build_scheduled_map(self.next_week)
+        entries = excluded_map[('Monday', 10)]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['reason'], 'Quit')

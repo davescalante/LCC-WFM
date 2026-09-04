@@ -31,6 +31,87 @@ def _get_week_start(request):
     return ws
 
 
+# How far back the Staffing Calculator looks for a Quit/Baja mark. A generous
+# ceiling on how long a separation can sit unprocessed; a mark older than this
+# lapses and the agent counts again, which is the safe direction.
+QUIT_MARK_LOOKBACK_DAYS = 180
+
+
+def _build_quit_mark_map(agent_ids, week_end, today):
+    """{agent_id: (mark_date, status)} for agents whose Quit/Baja mark still stands.
+
+    An agent marked Quit or Baja stops counting as Scheduled Staff from that date
+    FORWARD — including later weeks holding no adherence data at all — until the
+    mark is removed or the separation is processed and they go inactive. Three
+    rules keep this from ever erasing someone who is really working:
+
+    * Reinstating evidence must come from a day that has ALREADY HAPPENED
+      (date <= min(today, week_end)). Otherwise one pre-approved future V, LOA or
+      Holiday would out-date the mark and silently switch this off for that agent
+      — vacation approval writes a status onto every calendar day of the approved
+      range, so that is common, not hypothetical. Marks themselves are NOT capped
+      at today, because _auto_code_separation_week legitimately writes future-dated
+      Quit days for the rest of the separation week.
+    * Only an OPEN employment period counts as a floor, and an agent without one is
+      never excluded. _finalize_separation is the one thing that closes a period, so
+      "no open period" means separated-and-not-properly-re-onboarded — exactly the
+      rehire state where the agent must keep counting instead of vanishing.
+    * Anything missing or ambiguous falls through to counting the agent.
+    """
+    if not agent_ids:
+        return {}
+
+    from django.db.models import Max
+    from adherence.models import AdherenceRecord
+    from scheduling.models import EmploymentPeriod
+    from wfm.constants import SEPARATION_MARK_STATUSES
+
+    window_start = week_end - timedelta(days=QUIT_MARK_LOOKBACK_DAYS)
+
+    # Marks are rare by nature (only agents who left), so read the rows directly
+    # rather than aggregating — it costs the same and carries Quit vs Baja along.
+    marks = {}
+    for r in AdherenceRecord.objects.filter(
+        agent_id__in=agent_ids, status__in=SEPARATION_MARK_STATUSES,
+        date__range=(window_start, week_end),
+    ).values('agent_id', 'date', 'status'):
+        current = marks.get(r['agent_id'])
+        if current is None or r['date'] > current[0]:
+            marks[r['agent_id']] = (r['date'], r['status'])
+    if not marks:
+        return {}
+
+    # Latest real activity: any non-mark record from a day that already happened.
+    # A row carrying only Five9 hours with no typed status counts too — every
+    # extra restoring signal pushes the outcome toward counting the agent.
+    activity = {
+        r['agent_id']: r['latest']
+        for r in AdherenceRecord.objects.filter(
+            agent_id__in=marks.keys(),
+            date__range=(window_start, min(today, week_end)),
+        ).exclude(
+            status__in=SEPARATION_MARK_STATUSES
+        ).values('agent_id').annotate(latest=Max('date'))
+    }
+
+    floors = {
+        r['agent_id']: r['floor']
+        for r in EmploymentPeriod.objects.filter(
+            agent_id__in=marks.keys(), end_date__isnull=True,
+        ).values('agent_id').annotate(floor=Max('start_date'))
+    }
+
+    standing = {}
+    for agent_id, (mark_date, mark_status) in marks.items():
+        floor = floors.get(agent_id)
+        if floor is None or mark_date < floor:
+            continue    # no open period, or the mark belongs to a previous stint
+        last_seen = activity.get(agent_id)
+        if last_seen is None or mark_date > last_seen:
+            standing[agent_id] = (mark_date, mark_status)
+    return standing
+
+
 def _build_scheduled_map(week_start):
     """Count agents covering each (day_name, hour); also return which agents and their shift times."""
     from scheduling.models import ScheduledRoleChange
@@ -170,6 +251,11 @@ def _build_scheduled_map(week_start):
         ).values('agent_id', 'date', 'status')
     }
 
+    # Agents marked Quit/Baja ahead of their formal separation — excluded from
+    # the marked date forward, not just on the marked day. Scheduled coverage
+    # only; OT is never excluded (see _add_hours).
+    quit_marks = _build_quit_mark_map(all_call_ids, week_dates[-1], today)
+
     # Pre-fetch agent display names
     agent_names = {
         a.pk: str(a)
@@ -180,6 +266,7 @@ def _build_scheduled_map(week_start):
     agents_map = {}    # {(day_name, hour): [{'name': str, 'time': str, 'ot': bool, 'status': str|None}]}
     excluded_map = {}  # {(day_name, hour): [{'name': str, 'reason': str}]} — adherence-excluded agents
     seen = set()      # (day_name, hour, agent_id) — prevent double-counting
+    excluded_seen = set()  # same, for excluded_map: one row per agent per hour
 
     def _add(day_name, h, agent_id, entry):
         if (day_name, h, agent_id) in seen:
@@ -189,19 +276,32 @@ def _build_scheduled_map(week_start):
         scheduled[key] = scheduled.get(key, 0) + 1
         agents_map.setdefault(key, []).append(entry)
 
+    def _exclude(day_name, h, agent_id, name, reason):
+        if (day_name, h, agent_id) in excluded_seen:
+            return
+        excluded_seen.add((day_name, h, agent_id))
+        excluded_map.setdefault((day_name, h), []).append({'name': name, 'reason': reason})
+
     def _add_hours(date_, start_hour, end_hour, agent_id, entry_base, exclude):
         """Add hours for one shift/OT slot. entry_base has no 'status' key yet.
-        exclude=True lets a STAFFING_EXCLUDED_STATUSES status divert the agent
-        into excluded_map instead of counting them; exclude=False (OT) always
-        counts — status is attached for display only, never used to exclude."""
+        exclude=True lets a STAFFING_EXCLUDED_STATUSES status (that day) or a
+        standing Quit/Baja mark (that day and every day after it) divert the
+        agent into excluded_map instead of counting them; exclude=False (OT)
+        always counts — status is attached for display only, never used to
+        exclude, so a quit-marked agent's approved OT still counts as coverage."""
         day_name = date_.strftime('%A')
 
         def _place(day_name_, h, d):
             status = adherence_status_by_agent_date.get((agent_id, d))
+            mark = quit_marks.get(agent_id) if exclude else None
             if exclude and status in STAFFING_EXCLUDED_STATUSES:
-                excluded_map.setdefault((day_name_, h), []).append(
-                    {'name': entry_base['name'], 'reason': status}
-                )
+                _exclude(day_name_, h, agent_id, entry_base['name'], status)
+                return
+            # Sticky from the mark date on. This also fires on the overnight
+            # spillover below (d is the next day, past week_end) — deliberate:
+            # an agent who has left shouldn't cover Monday 00:00–06:00 either.
+            if mark and d >= mark[0]:
+                _exclude(day_name_, h, agent_id, entry_base['name'], mark[1])
                 return
             _add(day_name_, h, agent_id, dict(entry_base, status=status))
 

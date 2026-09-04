@@ -24,3 +24,13 @@ VTO_TYPE_STATUSES = frozenset({'VTO', 'P+VTO', 'T+VTO'})
 # NCNS, T) are deliberately excluded: they provided real coverage or were an
 # unplanned no-show, not a pre-planned absence.
 STAFFING_EXCLUDED_STATUSES = frozenset({'V', 'VTO', 'LOA', 'Holiday', 'IMSS', 'S'})
+
+# Statuses meaning the agent has left, marked ahead of the formal separation —
+# used ONLY by the Staffing Calculator (erlang app), and unlike the set above
+# they apply from the marked date FORWARD, not just on the marked day, so the
+# agent does not reappear in the count the following week. Deliberately absent
+# from every other status set (BONUS_QUALIFYING, BONUS_DISQUALIFYING,
+# COS_INCLUDE_STATUSES, SCHED_HOURS_ZEROING_STATUSES and the set above) — a
+# Quit/Baja day must keep its current neutral effect on pay, bonus and Cost of
+# Schedule, so do not add these there or reuse this set elsewhere.
+SEPARATION_MARK_STATUSES = frozenset({'Quit', 'Baja'})
