@@ -1,4 +1,4 @@
-from collections import Counter
+from collections import Counter, namedtuple
 from datetime import date, timedelta
 from django.core.paginator import Paginator
 from django.db.models import Q, F
@@ -8,6 +8,7 @@ from django.contrib.auth.models import User
 from django.contrib import messages
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateformat import format as date_format
 from django.views.decorators.http import require_POST
 from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, OpenOTShift, OTShiftClaimRequest, OTCancellationRequest, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm
@@ -3607,6 +3608,12 @@ def _request_action_block_reason(ar, viewer):
     return None
 
 
+MyRequestRow = namedtuple('MyRequestRow', [
+    'type_label', 'submitted_at', 'details', 'status',
+    'rejection_reason', 'reviewed_by', 'reviewed_at', 'is_ot_claim',
+])
+
+
 @login_required
 def agent_my_requests(request):
     try:
@@ -3639,11 +3646,31 @@ def agent_my_requests(request):
 
     # Mark agent's unread responses as seen
     AgentRequest.objects.filter(agent=agent, agent_read=False).update(agent_read=True)
-    reqs = AgentRequest.objects.filter(agent=agent).order_by('-submitted_at')
+    ar_qs = AgentRequest.objects.filter(agent=agent).select_related('reviewed_by').order_by('-submitted_at')
+    ot_qs = (OTShiftClaimRequest.objects.filter(requester=agent)
+             .select_related('open_shift', 'reviewed_by').order_by('-submitted_at')[:30])
+
+    rows = [
+        MyRequestRow(
+            type_label=ar.get_request_type_display(), submitted_at=ar.submitted_at,
+            details=ar.summary(), status=ar.status, rejection_reason=ar.rejection_reason,
+            reviewed_by=ar.reviewed_by, reviewed_at=ar.reviewed_at, is_ot_claim=False,
+        )
+        for ar in ar_qs
+    ] + [
+        MyRequestRow(
+            type_label='OT Shift Claim Request', submitted_at=c.submitted_at,
+            details=f"{date_format(c.open_shift.date, 'D, M j')} · {c.open_shift.time_label()}",
+            status=c.status, rejection_reason=c.rejection_reason,
+            reviewed_by=c.reviewed_by, reviewed_at=c.reviewed_at, is_ot_claim=True,
+        )
+        for c in ot_qs
+    ]
+    rows.sort(key=lambda r: r.submitted_at, reverse=True)
 
     return render(request, 'agent/my_requests.html', {
         'agent': agent,
-        'requests': reqs,
+        'requests': rows,
         'today': timezone.localdate(),
     })
 

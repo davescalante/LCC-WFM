@@ -311,6 +311,105 @@ class StaffRequestTests(TestCase):
         )
 
 
+class AgentMyRequestsOtClaimMergeTests(TestCase):
+    """My Requests must show OT shift claims merged into the same reverse-chronological
+    list as the six AgentRequest types (HANDOFF item 66(b), last open sub-gap) — not a
+    separate section, and not silently omitted."""
+
+    def setUp(self):
+        self.sup = _make_agent('mrsup', role_type='supervisor')
+        self.agent = _make_agent('mragent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+
+    def _claim(self, offset_days, status='pending', rejection_reason=''):
+        posting = OpenOTShift.objects.create(
+            posted_by=self.sup.user, date=date.today() + timedelta(days=offset_days),
+            start_time=time(13, 0), end_time=time(17, 0),
+        )
+        c = OTShiftClaimRequest.objects.create(
+            open_shift=posting, requester=self.agent, status=status,
+            reviewed_by=self.sup.user if status != 'pending' else None,
+            rejection_reason=rejection_reason,
+        )
+        return c
+
+    def test_ot_claims_render_with_correct_status_and_response(self):
+        self._claim(10, status='pending')
+        self._claim(11, status='approved')
+        self._claim(12, status='rejected', rejection_reason='Coverage already full')
+
+        self.client.login(username='mragent', password='pw')
+        resp = self.client.get(reverse('agent_my_requests'))
+        self.assertEqual(resp.status_code, 200)
+
+        self.assertContains(resp, 'OT Shift Claim Request')
+        self.assertContains(resp, 'The shift is yours — see My OT Shifts.')
+        self.assertContains(resp, 'Coverage already full')
+        # Pending OT claim uses the same plain gray "Pending" pill as every other type
+        self.assertContains(resp, 'Pending')
+
+    def test_merged_list_is_sorted_across_both_types(self):
+        # Interleave an AgentRequest between two OT claims by submission time.
+        c_old = self._claim(5, status='pending')
+        ar = AgentRequest.objects.create(agent=self.agent, request_type='vto',
+                                         vto_date=date.today() + timedelta(days=6))
+        c_new = self._claim(7, status='pending')
+
+        self.client.login(username='mragent', password='pw')
+        resp = self.client.get(reverse('agent_my_requests'))
+        rows = resp.context['requests']
+
+        self.assertEqual(len(rows), 3)
+        submitted = [r.submitted_at for r in rows]
+        self.assertEqual(submitted, sorted(submitted, reverse=True))
+        # Created in order c_old, ar, c_new -> newest-first puts the AgentRequest
+        # (created between the two OT claims) in the middle of the merged list.
+        self.assertEqual([r.is_ot_claim for r in rows], [True, False, True])
+
+
+class MyRequestsQueryCountProbe(TestCase):
+    """Query count for the merged My Requests page must stay flat as the number of
+    AgentRequest + OTShiftClaimRequest rows grows — mirroring the discipline
+    HANDOFF.md item 71 pinned for the approver inbox (OtInboxQueryCountProbe)."""
+
+    def setUp(self):
+        self.sup = _make_agent('qmrsup', role_type='supervisor')
+        self.agent = _make_agent('qmragent', role='agent', role_type='regular_agent',
+                                 supervisor=self.sup)
+        self.client.login(username='qmragent', password='pw')
+        # First request after login does one extra, session-related query that has
+        # nothing to do with this view; warm it up so both measurements below are
+        # on equal footing.
+        self.client.get(reverse('agent_my_requests'))
+
+    def _seed(self, n, offset=0):
+        for i in range(n):
+            AgentRequest.objects.create(agent=self.agent, request_type='vto',
+                                        vto_date=date.today() + timedelta(days=offset + i))
+            posting = OpenOTShift.objects.create(
+                posted_by=self.sup.user, date=date.today() + timedelta(days=offset + i),
+                start_time=time(9, 0), end_time=time(10, 0),
+            )
+            OTShiftClaimRequest.objects.create(open_shift=posting, requester=self.agent,
+                                               status='pending')
+
+    def test_query_count_flat_as_request_count_grows(self):
+        self._seed(2)
+        with CaptureQueriesContext(connection) as small:
+            self.client.get(reverse('agent_my_requests'))
+
+        self._seed(20, offset=2)
+        with CaptureQueriesContext(connection) as large:
+            self.client.get(reverse('agent_my_requests'))
+
+        self.assertEqual(
+            len(small.captured_queries), len(large.captured_queries),
+            f"query count grew with request count: {len(small.captured_queries)} "
+            f"(2 of each) vs {len(large.captured_queries)} (22 of each) — the merged "
+            f"AgentRequest + OT-claim lists must stay two flat bulk queries, not per-row"
+        )
+
+
 class OpenOTShiftTests(TestCase):
     def setUp(self):
         self.sup = _make_agent('sup', role_type='supervisor')

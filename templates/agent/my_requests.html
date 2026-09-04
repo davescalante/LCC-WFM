@@ -146,9 +146,9 @@
         <tbody>
             {% for req in requests %}
             <tr>
-                <td style="font-weight:600;white-space:nowrap;font-size:13px;">{{ req.get_request_type_display }}</td>
+                <td style="font-weight:600;white-space:nowrap;font-size:13px;">{{ req.type_label }}</td>
                 <td style="color:#6b7280;white-space:nowrap;font-size:13px;">{{ req.submitted_at|date:"M j, Y" }}</td>
-                <td style="font-size:13px;">{{ req.summary }}</td>
+                <td style="font-size:13px;">{{ req.details }}</td>
                 <td style="white-space:nowrap;">
                     {% if req.status == 'pending' %}
                         <span class="badge" style="background:#e5e7eb;color:#374151;">Pending</span>
@@ -167,6 +167,8 @@
                         {% else %}
                             <span style="color:#6b7280;">No reason provided</span>
                         {% endif %}
+                    {% elif req.is_ot_claim and req.status == 'approved' %}
+                        <span style="color:#15803d;">The shift is yours — see My OT Shifts.</span>
                     {% elif req.reviewed_by and req.status != 'pending' %}
                         <span style="color:#6b7280;">{{ req.reviewed_at|date:"M j" }} by {{ req.reviewed_by.get_full_name|default:req.reviewed_by.username }}</span>
                     {% else %}
