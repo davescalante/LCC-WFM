@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **557**. The tests are the regression gate and double as executable specs for the
+Currently **560**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Three read-only management commands exist for diagnosis; none is reachable from a request
@@ -219,6 +219,18 @@ priced and broken out per week), and the origin split by write path.
 - **Team scoping.** A `can_access_admin_tabs` holder who is not a super admin sees only
   their own direct reports plus themselves. `finance._admin_tabs_access(user)` returns
   `(has_access, team_pks)`, where `team_pks=None` means "see everyone."
+
+- **My Requests merges OT shift claims into the same table as the six `AgentRequest` types —
+  deliberately, not as a separate section.** `agent_my_requests` normalizes `OTShiftClaimRequest`
+  rows (date/times come from `claim.open_shift`, not the claim itself) into the same
+  `pending`/`approved`/`rejected` vocabulary and merges them by `submitted_at` alongside
+  `AgentRequest` rows. This duplicates the Available OT page's own "My Shift Requests" history
+  table (`agent_available_ot`, capped at 30) on purpose — Available OT serves the moment of
+  claiming a specific shift, My Requests serves the general "what have I asked for" question, and
+  neither should be collapsed into the other. **`OTShiftClaimRequest.requester_read` is never
+  touched by `agent_my_requests`** — that flag belongs to `agent_available_ot`, the only view that
+  mutates it, and marking it read from a second page the agent might glance at without noticing
+  the OT row would clear the unread badge before they ever saw the outcome on its native page.
 
 ## Nómina landmines
 
