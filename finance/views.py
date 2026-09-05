@@ -8,9 +8,9 @@ from django.shortcuts import render, redirect
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.http import require_POST
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, OuterRef, Subquery
 
-from scheduling.models import Agent, Five9Profile, OvertimeShift, log_action
+from scheduling.models import Agent, AgentSeparation, Five9Profile, OvertimeShift, log_action
 from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, PayrollAdjustment, Coding
 from .models import BillingSettings, BillingSettingsHistory
 from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING, VTO_TYPE_STATUSES
@@ -110,6 +110,46 @@ def _get_week_start(request):
 
 def _week_dates(week_start):
     return [week_start + timedelta(days=i) for i in range(7)]
+
+
+def _closed_pay_window_pks(week_start):
+    """Agents whose CURRENT separation has already removed them from this week.
+
+    EXISTS ONLY for finance's four exclude-shaped roster queries — billing_report,
+    billing_export, payroll_report and payroll_export. Nothing else may call it.
+
+    This is deliberately NOT the general pay-window predicate. That predicate stays
+    duplicated inline at each of its call sites by convention (CLAUDE.md), and the seven
+    Q()-include sites are correct as they are — they match on ANY separation row and that
+    is the right answer for them, so they are not routed through here.
+
+    Each agent is resolved to their latest non-cancelled separation exactly the way
+    Agent.separation does (drop cancelled, newest processed_at first), and only that one
+    row's status and date are tested. The exclude these four sites used to run compiled to
+    two INDEPENDENT EXISTS subqueries, so 'has a finalized separation' and 'has a passed
+    remove date' could be satisfied by two different rows — and the date half carried no
+    status filter at all. A rehired agent's old separation, or a stale cancelled row that
+    kept its remove date, therefore deleted the agent from their CURRENT final pay week
+    (HANDOFF §7 item 39).
+
+    Built as a positive filter on purpose. The natural alternative — annotating the
+    subqueries and negating them in place — returns NULL for an agent with no separation
+    (or a finalized one with a blank remove date), and NOT(TRUE AND NULL) is NULL, which
+    silently drops those agents from payroll. In a positive filter a NULL simply fails to
+    match, so they are never added to this set and stay on the report, as they do today.
+    """
+    latest = AgentSeparation.objects.filter(
+        agent=OuterRef('pk')
+    ).exclude(status='cancelled').order_by('-processed_at')
+    return set(
+        Agent.objects.filter(status='inactive').annotate(
+            _sep_status=Subquery(latest.values('status')[:1]),
+            _sep_remove=Subquery(latest.values('remove_from_adherence_date')[:1]),
+        ).filter(
+            _sep_status='finalized',
+            _sep_remove__lte=week_start,
+        ).values_list('pk', flat=True)
+    )
 
 
 def _fmt_hrs(h):
@@ -408,9 +448,7 @@ def billing_report(request):
     agents = Agent.objects.filter(
         five9_profiles__billable=True,
     ).exclude(
-        Q(status='inactive') &
-        Q(separations__status='finalized') &
-        Q(separations__remove_from_adherence_date__lte=week_start)
+        pk__in=_closed_pay_window_pks(week_start)
     ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles', 'separations').distinct()
 
     data = _get_billable_weekly_data(list(agents), week_dates, settings)
@@ -514,9 +552,7 @@ def billing_export(request):
     agents = Agent.objects.filter(
         five9_profiles__billable=True,
     ).exclude(
-        Q(status='inactive') &
-        Q(separations__status='finalized') &
-        Q(separations__remove_from_adherence_date__lte=week_start)
+        pk__in=_closed_pay_window_pks(week_start)
     ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles', 'separations').distinct()
 
     data = _get_billable_weekly_data(list(agents), week_dates, settings)
@@ -636,9 +672,7 @@ def payroll_report(request):
         Q(status='inactive', separations__status='finalized',
           separations__remove_from_adherence_date__gt=week_start),
     ).exclude(
-        Q(status='inactive') &
-        Q(separations__status='finalized') &
-        Q(separations__remove_from_adherence_date__lte=week_start)
+        pk__in=_closed_pay_window_pks(week_start)
     ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles', 'separations').distinct()
 
     data = _get_billable_weekly_data(list(agents), week_dates, settings)
@@ -699,9 +733,7 @@ def payroll_export(request):
         Q(status='inactive', separations__status='finalized',
           separations__remove_from_adherence_date__gt=week_start),
     ).exclude(
-        Q(status='inactive') &
-        Q(separations__status='finalized') &
-        Q(separations__remove_from_adherence_date__lte=week_start)
+        pk__in=_closed_pay_window_pks(week_start)
     ).select_related('user', 'supervisor__user').prefetch_related('five9_profiles', 'separations').distinct()
 
     data = _get_billable_weekly_data(list(agents), week_dates, settings)

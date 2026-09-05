@@ -4,6 +4,7 @@ from decimal import Decimal
 from datetime import date, timedelta, time
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from django.contrib.auth.models import User
 
 import openpyxl
@@ -616,6 +617,215 @@ class PayrollReportSeparatedAgentTests(TestCase):
         ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
         names = [row[0] for row in ws.iter_rows(min_row=4, values_only=True)]
         self.assertNotIn(str(agent), names)
+
+
+class BillingReportSeparatedAgentTests(TestCase):
+    """billing_report and billing_export had no separation coverage at all. A separated
+    agent with a billable Five9 profile must still be billed for any week inside their pay
+    window, and drop off once remove_from_adherence_date arrives. Both views share the same
+    base filter and must stay in sync — the mirror of PayrollReportSeparatedAgentTests."""
+
+    def setUp(self):
+        self.boss = _make_agent('billingboss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+        self.client.login(username='billingboss', password='x')
+
+    def _make_separated(self, username, remove_from_adherence_date):
+        agent = _make_agent(username)
+        Five9Profile.objects.create(agent=agent, five9_username=f'{username}.f9',
+                                    is_primary=True, billable=True)
+        agent.status = 'inactive'
+        agent.track_attendance = False
+        agent.save()
+        AgentSeparation.objects.create(
+            agent=agent, status='finalized', separation_type='quit',
+            last_day_worked=_WEEK_START - timedelta(days=3),
+            remove_from_adherence_date=remove_from_adherence_date,
+        )
+        return agent
+
+    def _report_pks(self):
+        resp = self.client.get(reverse('billing_report') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        return [r['agent'].pk for g in resp.context['infinity_groups'] for r in g['rows']]
+
+    def _export_names(self):
+        resp = self.client.get(reverse('billing_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        return [row[0] for row in ws.iter_rows(min_row=4, values_only=True)]
+
+    def test_report_includes_agent_before_removal_date(self):
+        agent = self._make_separated('billsep1', _WEEK_START + timedelta(days=1))
+        self.assertIn(agent.pk, self._report_pks())
+
+    def test_report_excludes_agent_on_removal_date(self):
+        agent = self._make_separated('billsep2', _WEEK_START)
+        self.assertNotIn(agent.pk, self._report_pks())
+
+    def test_export_includes_agent_before_removal_date(self):
+        agent = self._make_separated('billsep3', _WEEK_START + timedelta(days=1))
+        self.assertIn(str(agent), self._export_names())
+
+    def test_export_excludes_agent_on_removal_date(self):
+        agent = self._make_separated('billsep4', _WEEK_START)
+        self.assertNotIn(str(agent), self._export_names())
+
+
+class PayWindowLatestSeparationTests(TestCase):
+    """HANDOFF item 39. The pay-window .exclude() in billing_report, billing_export,
+    payroll_report and payroll_export must judge an agent on the separation governing their
+    CURRENT employment — the latest non-cancelled one, exactly as Agent.separation resolves
+    it — not on any separation row they have ever had.
+
+    Django compiles the old three-Q exclude into two INDEPENDENT EXISTS subqueries, so the
+    'is finalized' test and the 'remove date has passed' test could be satisfied by two
+    DIFFERENT rows, and the date test carried no status filter at all. Two shapes reach it:
+    a rehired-then-reseparated agent (two finalized rows, supported since 219efca), and an
+    old CANCELLED row still carrying its remove date (the cancel path saves only status).
+    Both wrongly deleted the agent's row from their real final pay week."""
+
+    def setUp(self):
+        self.boss = _make_agent('paywindowboss', role='admin', role_type='supervisor')
+        self.boss.is_super_admin = True
+        self.boss.save()
+        self.client.login(username='paywindowboss', password='x')
+
+    def _separated_agent(self, username):
+        """The shape _finalize_separation leaves behind for someone who had a billable
+        Five9 account: inactive, untracked, still billable."""
+        agent = _make_agent(username)
+        Five9Profile.objects.create(agent=agent, five9_username=f'{username}.f9',
+                                    is_primary=True, billable=True)
+        agent.status = 'inactive'
+        agent.track_attendance = False
+        agent.save()
+        return agent
+
+    def _add_separation(self, agent, status, remove_date, days_ago, sep_type='quit'):
+        """processed_at is auto_now_add, so it is pinned afterwards — 'which row is latest'
+        must be explicit, not an accident of creation order within the test."""
+        sep = AgentSeparation.objects.create(
+            agent=agent, status=status, separation_type=sep_type,
+            last_day_worked=_WEEK_START - timedelta(days=days_ago + 2),
+            remove_from_adherence_date=remove_date,
+        )
+        AgentSeparation.objects.filter(pk=sep.pk).update(
+            processed_at=timezone.now() - timedelta(days=days_ago))
+        return sep
+
+    def _rehired_and_reseparated(self, username):
+        """Separated, rehired, separated again — two finalized rows on file. The OLD row's
+        remove date passed long ago; the CURRENT one is still in the future, so the agent is
+        inside their final pay window and must be paid and billed for this week."""
+        agent = self._separated_agent(username)
+        self._add_separation(agent, 'finalized', _WEEK_START - timedelta(days=70),
+                             days_ago=90)
+        self._add_separation(agent, 'finalized', _WEEK_START + timedelta(days=1),
+                             days_ago=3, sep_type='terminated')
+        return agent
+
+    def _cancelled_then_finalized(self, username):
+        """An in-progress separation carrying a remove date, later cancelled — the cancel
+        path saves only status, so the stale date survives — followed by the agent's real
+        finalized separation, still inside its window."""
+        agent = self._separated_agent(username)
+        self._add_separation(agent, 'cancelled', _WEEK_START - timedelta(days=30),
+                             days_ago=60)
+        self._add_separation(agent, 'finalized', _WEEK_START + timedelta(days=1),
+                             days_ago=3, sep_type='terminated')
+        return agent
+
+    def _inactive_without_separation(self, username):
+        """Set inactive on the Edit User form, no separation ever processed. These agents
+        are kept by the current exclude and must stay kept — the subquery returns NULL for
+        them, and a negated NULL would silently drop them from payroll."""
+        return self._separated_agent(username)
+
+    # ── the four surfaces ────────────────────────────────────────────────────
+    def _in_payroll_report(self, agent):
+        resp = self.client.get(reverse('payroll_report') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        return agent.pk in [r['agent'].pk for r in resp.context['infinity_rows']]
+
+    def _in_payroll_export(self, agent):
+        resp = self.client.get(reverse('payroll_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        return str(agent) in [row[0] for row in ws.iter_rows(min_row=4, values_only=True)]
+
+    def _in_billing_report(self, agent):
+        resp = self.client.get(reverse('billing_report') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        return agent.pk in [r['agent'].pk for g in resp.context['infinity_groups']
+                            for r in g['rows']]
+
+    def _in_billing_export(self, agent):
+        resp = self.client.get(reverse('billing_export') + f'?week={_WEEK_START.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
+        return str(agent) in [row[0] for row in ws.iter_rows(min_row=4, values_only=True)]
+
+    # ── item 39 repro: the rehired-then-reseparated agent ────────────────────
+    def test_rehired_agent_in_payroll_report(self):
+        agent = self._rehired_and_reseparated('rehirepay1')
+        self.assertTrue(self._in_payroll_report(agent))
+
+    def test_rehired_agent_in_payroll_export(self):
+        agent = self._rehired_and_reseparated('rehirepay2')
+        self.assertTrue(self._in_payroll_export(agent))
+
+    def test_rehired_agent_in_billing_report(self):
+        agent = self._rehired_and_reseparated('rehirebill1')
+        self.assertTrue(self._in_billing_report(agent))
+
+    def test_rehired_agent_in_billing_export(self):
+        agent = self._rehired_and_reseparated('rehirebill2')
+        self.assertTrue(self._in_billing_export(agent))
+
+    # ── the wider shape the SQL revealed: a stale CANCELLED row ──────────────
+    def test_cancelled_old_separation_does_not_remove_agent_from_payroll(self):
+        agent = self._cancelled_then_finalized('cancelpay1')
+        self.assertTrue(self._in_payroll_report(agent))
+
+    def test_cancelled_old_separation_does_not_remove_agent_from_billing(self):
+        agent = self._cancelled_then_finalized('cancelbill1')
+        self.assertTrue(self._in_billing_report(agent))
+
+    # ── must not regress: inactive, no separation history at all ─────────────
+    def test_inactive_without_separation_kept_in_payroll_report(self):
+        agent = self._inactive_without_separation('nosep1')
+        self.assertTrue(self._in_payroll_report(agent))
+
+    def test_inactive_without_separation_kept_in_payroll_export(self):
+        agent = self._inactive_without_separation('nosep2')
+        self.assertTrue(self._in_payroll_export(agent))
+
+    def test_inactive_without_separation_kept_in_billing_report(self):
+        agent = self._inactive_without_separation('nosep3')
+        self.assertTrue(self._in_billing_report(agent))
+
+    def test_inactive_without_separation_kept_in_billing_export(self):
+        agent = self._inactive_without_separation('nosep4')
+        self.assertTrue(self._in_billing_export(agent))
+
+    # ── must not regress: one finalized separation, window already closed ────
+    def test_single_closed_separation_still_excluded_everywhere(self):
+        agent = self._separated_agent('closedwindow1')
+        self._add_separation(agent, 'finalized', _WEEK_START, days_ago=10)
+        self.assertFalse(self._in_payroll_report(agent))
+        self.assertFalse(self._in_payroll_export(agent))
+        self.assertFalse(self._in_billing_report(agent))
+        self.assertFalse(self._in_billing_export(agent))
+
+    def test_finalized_separation_with_no_remove_date_kept_everywhere(self):
+        """remove_from_adherence_date is nullable. A NULL date never satisfied the old
+        date test, so the agent was kept; a negated NULL comparison would drop them."""
+        agent = self._separated_agent('noremovedate1')
+        self._add_separation(agent, 'finalized', None, days_ago=10)
+        self.assertTrue(self._in_payroll_report(agent))
+        self.assertTrue(self._in_billing_report(agent))
 
 
 V2_HEADERS = [
