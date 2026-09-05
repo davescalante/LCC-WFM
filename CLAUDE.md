@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **560**. The tests are the regression gate and double as executable specs for the
+Currently **594**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Three read-only management commands exist for diagnosis; none is reachable from a request
