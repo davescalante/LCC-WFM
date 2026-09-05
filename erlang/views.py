@@ -52,6 +52,9 @@ def _build_quit_mark_map(agent_ids, week_end, today):
       range, so that is common, not hypothetical. Marks themselves are NOT capped
       at today, because _auto_code_separation_week legitimately writes future-dated
       Quit days for the rest of the separation week.
+    * Reinstating evidence must also SHOW PRESENCE — real hours or a typed status.
+      A blank, zero-hour row is the Five9 upload's own record of an absence, not
+      proof the agent is back; see the activity query below.
     * Only an OPEN employment period counts as a floor, and an agent without one is
       never excluded. _finalize_separation is the one thing that closes a period, so
       "no open period" means separated-and-not-properly-re-onboarded — exactly the
@@ -61,7 +64,7 @@ def _build_quit_mark_map(agent_ids, week_end, today):
     if not agent_ids:
         return {}
 
-    from django.db.models import Max
+    from django.db.models import Max, Q
     from adherence.models import AdherenceRecord
     from scheduling.models import EmploymentPeriod
     from wfm.constants import SEPARATION_MARK_STATUSES
@@ -81,9 +84,17 @@ def _build_quit_mark_map(agent_ids, week_end, today):
     if not marks:
         return {}
 
-    # Latest real activity: any non-mark record from a day that already happened.
-    # A row carrying only Five9 hours with no typed status counts too — every
-    # extra restoring signal pushes the outcome toward counting the agent.
+    # Latest real activity: a non-mark record from a day that already happened
+    # AND carrying actual evidence of presence — real hours, or a status a human
+    # typed. A row with no status and no hours is NOT such evidence: that is what
+    # adherence.views._zero_missing_scheduled writes, on every Five9 upload, for
+    # every active agent scheduled but absent from the file. Its whole meaning is
+    # "did not show up". Counting it as activity read the signal backwards and
+    # out-dated the mark every single day, which switched the forward exclusion
+    # off for the current week for essentially every marked agent — a marked-but-
+    # not-yet-separated agent is still status='active', so the zero-fill targets
+    # exactly this population. Keep the filter BEFORE .values()/.annotate() or it
+    # silently becomes a HAVING on the aggregate.
     activity = {
         r['agent_id']: r['latest']
         for r in AdherenceRecord.objects.filter(
@@ -91,6 +102,8 @@ def _build_quit_mark_map(agent_ids, week_end, today):
             date__range=(window_start, min(today, week_end)),
         ).exclude(
             status__in=SEPARATION_MARK_STATUSES
+        ).filter(
+            Q(actual_hours__gt=0) | ~Q(status='')
         ).values('agent_id').annotate(latest=Max('date'))
     }
 

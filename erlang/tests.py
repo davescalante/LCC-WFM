@@ -388,6 +388,8 @@ class ScheduledMapStatusTagTests(TestCase):
         self.assertEqual(_summarize_statuses(entries), [('Absent', 2), ('T', 1)])
 
 
+from decimal import Decimal
+
 from scheduling.models import EmploymentPeriod, ScheduledRoleChange
 
 
@@ -577,3 +579,50 @@ class ScheduledMapQuitBajaExclusionTests(TestCase):
         reasons = [excluded_map[(day, 10)][0]['reason'] for day in self.DAY_NAMES]
         self.assertEqual(reasons, ['Baja', 'Baja', 'Quit', 'Quit',
                                    'Quit', 'Quit', 'Quit'])
+
+    # --- Five9 zero-fill is absence, not activity ----------------------------
+    # _zero_missing_scheduled writes actual_hours=0 with no status for every
+    # active agent scheduled but missing from the daily file. Those rows mean
+    # "did not show up", so they must not out-date a mark and restore the agent.
+
+    def _blank_row(self, day, hours):
+        AdherenceRecord.objects.update_or_create(
+            agent=self.agent, date=day,
+            defaults={'status': '', 'actual_hours': hours},
+        )
+
+    def test_a_zero_fill_row_does_not_restore_a_marked_agent(self):
+        self._mark(self.past_week + timedelta(days=2))
+        self._blank_row(self.past_week + timedelta(days=3), Decimal('0'))
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+    def test_small_real_hours_still_restore_the_agent(self):
+        # Guards the > 0 boundary next to the existing actual_hours=8 case.
+        self._mark(self.past_week + timedelta(days=2))
+        self._blank_row(self.past_week + timedelta(days=3), Decimal('0.25'))
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_a_typed_status_with_zero_hours_still_restores_the_agent(self):
+        # A human typed a status for that day, so the agent is still tracked.
+        # This is what stops anyone collapsing the rule to actual_hours > 0.
+        self._mark(self.past_week + timedelta(days=2))
+        AdherenceRecord.objects.update_or_create(
+            agent=self.agent, date=self.past_week + timedelta(days=3),
+            defaults={'status': 'Absent', 'actual_hours': Decimal('0')},
+        )
+        self.assertEqual(self._count(self.next_week, 'Monday'), 1)
+
+    def test_the_real_zero_fill_writer_does_not_restore_a_marked_agent(self):
+        # Couples the writer to the reader: run the ACTUAL upload routine rather
+        # than hand-rolling a row, so the two cannot drift apart again.
+        from adherence.views import _zero_missing_scheduled
+        self._mark(self.past_week + timedelta(days=2))
+        _zero_missing_scheduled(self.past_week + timedelta(days=3), set())
+        self.assertTrue(
+            AdherenceRecord.objects.filter(
+                agent=self.agent, date=self.past_week + timedelta(days=3),
+                status='', actual_hours=Decimal('0'),
+            ).exists(),
+            'the zero-fill routine did not write the row this test depends on',
+        )
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
