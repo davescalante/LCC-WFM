@@ -80,6 +80,22 @@ class Agent(models.Model):
         seps = [s for s in self.separations.all() if s.status != 'cancelled']
         return sorted(seps, key=lambda s: s.processed_at, reverse=True)[0] if seps else None
 
+    @property
+    def current_separation(self):
+        """The separation belonging to this employment, or None — used to decide whether
+        a new separation is blocked and whether the profile shows a separation banner.
+
+        Same as `separation`, except a finalized one stops counting once the agent is
+        active again. Finalizing always deactivates the agent, so finalized-plus-active
+        can only mean someone set them back to Active on the Edit User form — a rehire,
+        whose old separation is history. An in_progress one always counts: it coexists
+        with an active agent by design, and is the genuine duplicate worth blocking.
+        """
+        sep = self.separation
+        if sep and sep.status == 'finalized' and self.status == 'active':
+            return None
+        return sep
+
     def __str__(self):
         return self.agent_name or self.user.get_full_name() or self.user.username
 

@@ -1374,6 +1374,137 @@ class AgentSeparationMondayValidationTests(TestCase):
         self.assertEqual(sep.remove_from_adherence_date, self.TUESDAY)
 
 
+class AgentSeparationRehireTests(TestCase):
+    """We rehire people. A finalized separation from a previous employment must not block
+    a new one — but an in_progress separation is a genuine duplicate and must still send
+    the user to Update.
+
+    The signal is that finalizing always sets the agent inactive, so a finalized
+    separation on an *active* agent can only mean a human put them back to Active on the
+    Edit User form — i.e. a rehire. Old separation records are history and are never
+    touched: a rehired agent ends up with both rows on file."""
+
+    LAST_DAY_1 = date(2025, 1, 2)
+    MONDAY_1 = date(2025, 1, 6)
+    LAST_DAY_2 = date(2025, 5, 30)
+    MONDAY_2 = date(2025, 6, 2)
+
+    def setUp(self):
+        self.admin = _make_agent('rehiresup', role_type='supervisor')
+        self.client.login(username='rehiresup', password='pw')
+
+    def _post_separation(self, target, last_day, monday, sep_type='quit', status='finalized'):
+        payload = {
+            'separation_status': status,
+            'separation_type': sep_type,
+            'last_day_worked': last_day.isoformat(),
+            'confirm': 'on',
+        }
+        if monday:
+            payload['remove_from_adherence_date'] = monday.isoformat()
+        return self.client.post(reverse('process_separation', args=[target.pk]), payload,
+                                follow=True)
+
+    def _rehire(self, target):
+        """What the Edit User form does when someone comes back: Status → Active."""
+        target.status = 'active'
+        target.save(update_fields=['status'])
+
+    def _separated_and_rehired(self, username):
+        target = _make_agent(username, role='agent', role_type='regular_agent')
+        self._post_separation(target, self.LAST_DAY_1, self.MONDAY_1)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')      # finalize really ran
+        self._rehire(target)
+        return target
+
+    # ── the bug ──────────────────────────────────────────────────────────────
+    def test_rehired_agent_can_be_separated_again(self):
+        target = self._separated_and_rehired('rehired1')
+        self._post_separation(target, self.LAST_DAY_2, self.MONDAY_2, sep_type='terminated')
+
+        seps = list(AgentSeparation.objects.filter(agent=target).order_by('processed_at'))
+        self.assertEqual(len(seps), 2)
+        self.assertEqual(seps[1].status, 'finalized')
+        self.assertEqual(seps[1].separation_type, 'terminated')
+        self.assertEqual(seps[1].last_day_worked, self.LAST_DAY_2)
+        self.assertEqual(seps[1].remove_from_adherence_date, self.MONDAY_2)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')
+
+    def test_previous_separation_survives_intact(self):
+        target = self._separated_and_rehired('rehired2')
+        old = AgentSeparation.objects.get(agent=target)
+        before = (old.status, old.separation_type, old.last_day_worked,
+                  old.remove_from_adherence_date, old.processed_at, old.finalized_at)
+
+        self._post_separation(target, self.LAST_DAY_2, self.MONDAY_2, sep_type='terminated')
+
+        old.refresh_from_db()
+        after = (old.status, old.separation_type, old.last_day_worked,
+                 old.remove_from_adherence_date, old.processed_at, old.finalized_at)
+        self.assertEqual(before, after)
+        self.assertEqual(AgentSeparation.objects.filter(agent=target).count(), 2)
+
+    # ── what must still block ────────────────────────────────────────────────
+    def test_in_progress_separation_still_blocks_and_says_update(self):
+        target = _make_agent('rehireinprog', role='agent', role_type='regular_agent')
+        AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY_1, processed_by=self.admin.user,
+        )
+        resp = self._post_separation(target, self.LAST_DAY_2, self.MONDAY_2)
+        self.assertContains(resp, 'Use Update to modify it')
+        self.assertEqual(AgentSeparation.objects.filter(agent=target).count(), 1)
+
+    def test_finalized_but_not_rehired_still_blocks(self):
+        target = _make_agent('rehirenotback', role='agent', role_type='regular_agent')
+        self._post_separation(target, self.LAST_DAY_1, self.MONDAY_1)
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')      # never reactivated
+
+        resp = self._post_separation(target, self.LAST_DAY_2, self.MONDAY_2)
+        self.assertContains(resp, 'already has an active separation')
+        self.assertEqual(AgentSeparation.objects.filter(agent=target).count(), 1)
+
+    def test_agent_with_no_separation_history_unaffected(self):
+        target = _make_agent('rehirefresh', role='agent', role_type='regular_agent')
+        self._post_separation(target, self.LAST_DAY_1, self.MONDAY_1)
+
+        sep = AgentSeparation.objects.get(agent=target)
+        self.assertEqual(sep.status, 'finalized')
+        target.refresh_from_db()
+        self.assertEqual(target.status, 'inactive')
+
+    # ── the UI half: the button is hidden by the template, not just the view ──
+    # Assert on the modal ids, not the button text: the "<!-- Process Separation
+    # Modal -->" and "<!-- Finalize Separation Modal -->" comments sit outside their
+    # {% if %} blocks and render on every page, so matching that text proves nothing.
+    def test_rehired_agent_detail_offers_process_separation(self):
+        target = self._separated_and_rehired('rehireui')
+        resp = self.client.get(reverse('agent_detail', args=[target.pk]))
+        self.assertContains(resp, 'id="separation-modal"')
+        self.assertNotContains(resp, 'Agent Separated')
+
+    def test_separated_agent_detail_still_hides_process_separation(self):
+        target = _make_agent('rehireuiout', role='agent', role_type='regular_agent')
+        self._post_separation(target, self.LAST_DAY_1, self.MONDAY_1)
+        resp = self.client.get(reverse('agent_detail', args=[target.pk]))
+        self.assertContains(resp, 'Agent Separated')
+        self.assertNotContains(resp, 'id="separation-modal"')
+
+    def test_in_progress_agent_detail_still_offers_finalize(self):
+        target = _make_agent('rehireuiprog', role='agent', role_type='regular_agent')
+        AgentSeparation.objects.create(
+            agent=target, status='in_progress', separation_type='quit',
+            last_day_worked=self.LAST_DAY_1, processed_by=self.admin.user,
+        )
+        resp = self.client.get(reverse('agent_detail', args=[target.pk]))
+        self.assertContains(resp, 'id="finalize-modal"')
+        self.assertContains(resp, 'Separation In Progress')
+        self.assertNotContains(resp, 'id="separation-modal"')
+
+
 class AgentFormFinanceGatingTests(TestCase):
     """The Finance fields (pay/billing rate, admin bonus) and the Super Admin flag are
     stripped from the user form server-side for non-super-admins — not merely hidden."""

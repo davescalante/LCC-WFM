@@ -416,7 +416,7 @@ def agent_detail(request, pk):
         role_type__in=('supervisor', 'coordinator'), status='active'
     ).select_related('user').order_by('user__last_name', 'user__first_name')
 
-    agent_separation = agent.separation  # current separation (via property)
+    agent_separation = agent.current_separation  # this employment's separation, if any
 
     # Termination documentation tracker (for in_progress separations)
     tracker_data = None
@@ -448,6 +448,7 @@ def agent_detail(request, pk):
         'separation_type_choices': AgentSeparation.SEPARATION_TYPE_CHOICES,
         'monday_choices': get_monday_choices(),
         'tracker_data': tracker_data,
+        'current_separation': agent_separation,
     })
 
 
@@ -4253,8 +4254,9 @@ def process_separation(request, pk):
     except Exception:
         pass
 
-    # Already has a non-cancelled separation?
-    existing = agent.separation  # uses property
+    # Already has a separation for this employment? (a finalized one from a previous
+    # employment doesn't block — see Agent.current_separation)
+    existing = agent.current_separation
     if existing:
         messages.error(request, "This agent already has an active separation. Use Update to modify it.")
         return redirect('agent_detail', pk=pk)
