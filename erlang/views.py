@@ -243,7 +243,7 @@ def _build_scheduled_map(week_start):
     # could appear on this grid (regular schedule or OT) — ONE query, reused
     # for both the staffing-exclusion check and the popover's status tags.
     from adherence.models import AdherenceRecord
-    from wfm.constants import STAFFING_EXCLUDED_STATUSES
+    from wfm.constants import STAFFING_EXCLUDED_STATUSES, SEPARATION_MARK_STATUSES
     adherence_status_by_agent_date = {
         (r['agent_id'], r['date']): r['status']
         for r in AdherenceRecord.objects.filter(
@@ -284,11 +284,12 @@ def _build_scheduled_map(week_start):
 
     def _add_hours(date_, start_hour, end_hour, agent_id, entry_base, exclude):
         """Add hours for one shift/OT slot. entry_base has no 'status' key yet.
-        exclude=True lets a STAFFING_EXCLUDED_STATUSES status (that day) or a
-        standing Quit/Baja mark (that day and every day after it) divert the
-        agent into excluded_map instead of counting them; exclude=False (OT)
-        always counts — status is attached for display only, never used to
-        exclude, so a quit-marked agent's approved OT still counts as coverage."""
+        exclude=True lets a STAFFING_EXCLUDED_STATUSES status (that day), a day
+        literally coded Quit/Baja, or a standing Quit/Baja mark (every day after
+        it) divert the agent into excluded_map instead of counting them;
+        exclude=False (OT) always counts — status is attached for display only,
+        never used to exclude, so a quit-marked agent's approved OT still counts
+        as coverage."""
         day_name = date_.strftime('%A')
 
         def _place(day_name_, h, d):
@@ -297,9 +298,19 @@ def _build_scheduled_map(week_start):
             if exclude and status in STAFFING_EXCLUDED_STATUSES:
                 _exclude(day_name_, h, agent_id, entry_base['name'], status)
                 return
-            # Sticky from the mark date on. This also fires on the overnight
-            # spillover below (d is the next day, past week_end) — deliberate:
-            # an agent who has left shouldn't cover Monday 00:00–06:00 either.
+            # A day literally coded Quit/Baja is never coverage, independently of
+            # the mark map — which resolves ONE date per agent and so cannot speak
+            # for a whole marked run. Without this, a week marked Mon–Sun took its
+            # cutoff from the last marked day and counted Mon–Sat; marking more
+            # days excluded fewer. Keeping the two rules separate also makes the
+            # popover name each day's own status in a mixed Quit/Baja run.
+            if exclude and status in SEPARATION_MARK_STATUSES:
+                _exclude(day_name_, h, agent_id, entry_base['name'], status)
+                return
+            # Sticky from the mark date on — this is what carries the exclusion
+            # into later weeks holding no adherence data. It also fires on the
+            # overnight spillover below (d is the next day, past week_end) —
+            # deliberate: an agent who has left shouldn't cover Monday 00:00–06:00.
             if mark and d >= mark[0]:
                 _exclude(day_name_, h, agent_id, entry_base['name'], mark[1])
                 return

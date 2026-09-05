@@ -528,3 +528,52 @@ class ScheduledMapQuitBajaExclusionTests(TestCase):
         entries = excluded_map[('Monday', 10)]
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]['reason'], 'Quit')
+
+    # --- Multi-day mark runs -------------------------------------------------
+    # Every test above marks a single day, where "earliest mark" and "latest
+    # mark" are the same date. That is why the whole-week case shipped broken.
+
+    DAY_NAMES = ('Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                 'Friday', 'Saturday', 'Sunday')
+
+    def _mark_range(self, first_day, days, status='Baja'):
+        for i in range(days):
+            self._mark(first_day + timedelta(days=i), status=status)
+
+    def test_a_whole_week_marked_excludes_every_day_of_that_week(self):
+        # The reported bug: marked Baja Mon–Sun, still counted Mon–Sat because
+        # the cutoff was taken from the LAST marked day.
+        self._mark_range(self.past_week, 7)
+        for day in self.DAY_NAMES:
+            self.assertEqual(self._count(self.past_week, day), 0, day)
+
+    def test_a_whole_week_marked_still_excludes_the_following_week(self):
+        # Forward stickiness must survive the fix, not just the marked days.
+        self._mark_range(self.past_week, 7)
+        self.assertEqual(self._count(self.past_week + timedelta(days=7), 'Monday'), 0)
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+    def test_a_mark_spanning_several_weeks_excludes_all_of_them(self):
+        self._mark_range(self.past_week, 14)
+        for offset in (0, 7):
+            week = self.past_week + timedelta(days=offset)
+            for day in self.DAY_NAMES:
+                self.assertEqual(self._count(week, day), 0, f'{week} {day}')
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+    def test_no_counted_entry_ever_carries_a_separation_status_tag(self):
+        # The popover symptom stated as an invariant: if a day is coded Quit or
+        # Baja, the agent cannot be in the COUNTED list wearing that tag.
+        self._mark_range(self.past_week, 7)
+        _, agents_map, _ = _build_scheduled_map(self.past_week)
+        tagged = [e for entries in agents_map.values() for e in entries
+                  if e.get('status') in ('Quit', 'Baja')]
+        self.assertEqual(tagged, [])
+
+    def test_a_mixed_quit_and_baja_run_labels_each_day_with_its_own_status(self):
+        self._mark_range(self.past_week, 2, status='Baja')            # Mon, Tue
+        self._mark_range(self.past_week + timedelta(days=2), 5, status='Quit')
+        _, _, excluded_map = _build_scheduled_map(self.past_week)
+        reasons = [excluded_map[(day, 10)][0]['reason'] for day in self.DAY_NAMES]
+        self.assertEqual(reasons, ['Baja', 'Baja', 'Quit', 'Quit',
+                                   'Quit', 'Quit', 'Quit'])
