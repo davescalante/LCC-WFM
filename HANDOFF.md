@@ -63,8 +63,8 @@ URL mounts (`wfm/urls.py`): scheduling app at **site root** (and duplicated at `
 | Finance Dashboard | `/finance/` | Weekly summary cards: total final hours, estimated billing to LCC (USD), estimated payroll (MXN + USD), bonus totals, OT top-up totals, exchange rate |
 | Billing Report | `/finance/billing/` | Per-agent billing (Infinity → LCC), grouped by employer then role type, with subtotals; Excel export (`/finance/billing/export/`) |
 | Payroll Report | `/finance/payroll/` | Per-agent MXN payroll split Infinity vs LCC Direct; Excel export (`/finance/payroll/export/`) |
-| Admin Codings | `/finance/admin-codings/` | Weekly coded-time grid for Official Admins (`is_admin_coding=True` codings — invisible on the regular tabs) |
-| Admin Adherence | `/finance/admin-adherence/` | Adherence grid restricted to Official Admins; uses admin codings; bonus column shows the fixed admin bonus; Excel payroll export |
+| Admin Codings | `/admin-codings/` | Weekly coded-time grid for Official Admins (`is_admin_coding=True` codings — invisible on the regular tabs) |
+| Admin Adherence | `/admin-adherence/` | Adherence grid restricted to Official Admins; uses admin codings; bonus column shows the fixed admin bonus; Excel payroll export |
 | Settings | `/finance/settings/` | Edit all financial rates with **per-week effective dating** + change history (see §6.9) |
 
 ### Agent portal (agents + portal-admin types)
@@ -234,7 +234,7 @@ Two distinct formats:
 
 - Processed from the agent detail page; two modes:
   - **In Progress**: nothing changes — the agent stays active while termination documentation is collected (the detail page shows days-since-last-day and 30-day NCNS/Absent counts). Can later be finalized or cancelled.
-  - **Finalized** (requires `remove_from_adherence_date`, expected to be a Monday by convention only — the UI shows help text and Monday-snap shortcut buttons, but the date field is freely editable and nothing server-side rejects a non-Monday value): sets the agent inactive, stops attendance tracking, stamps the termination date, closes the open EmploymentPeriod with a mapped reason, **cancels all future pending OT shifts**, **auto-rejects pending requests**, **cancels future pending role changes**, and auto-codes the remainder of the last week (days after the last day worked): quit/terminated → `Quit`, abandonment → `NCNS`; contract-end and resigned-notice are not auto-coded.
+  - **Finalized** (requires `remove_from_adherence_date`, validated server-side as a Monday): sets the agent inactive, stops attendance tracking, stamps the termination date, closes the open EmploymentPeriod with a mapped reason, **cancels all future pending OT shifts**, **auto-rejects pending requests**, **cancels future pending role changes**, and auto-codes the remainder of the last week (days after the last day worked): quit/terminated → `Quit`, abandonment → `NCNS`; contract-end and resigned-notice are not auto-coded.
 - The agent remains on Adherence/billing until their `remove_from_adherence_date` week. Recently-separated agents still show on the adherence grid until that date passes.
 - Cancelling an in-progress separation keeps the agent active. **There is no un-finalize flow** — reversing a finalized separation is manual.
 - **A rehired agent can be processed for a new separation** (`219efca`). The blocking check and the agent-detail page both read `Agent.current_separation` rather than `Agent.separation` — same latest-non-cancelled row, except a `finalized` one stops counting once the agent is active again, which can only mean a rehire (finalizing always deactivates the agent). An `in_progress` separation still blocks and still routes to Update. Old separation records are never touched — a rehired agent carries both on file, and Records → Separations lists both. See §7 item 77.
