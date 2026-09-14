@@ -626,3 +626,457 @@ class ScheduledMapQuitBajaExclusionTests(TestCase):
             'the zero-fill routine did not write the row this test depends on',
         )
         self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
+
+# ── Skills Phase 3 groundwork: agent_id on every agents_map/excluded_map entry ──
+# _build_scheduled_map's return tuple is unchanged (still 3 values); only the
+# entry dicts gain a key, which is why every existing 3-value unpack above still
+# works untouched.
+
+class ScheduledMapAgentIdTests(TestCase):
+    """The skill column narrows agents_map/excluded_map by agent — it needs to
+    know WHICH agent each entry is, without a second query to find out."""
+
+    def setUp(self):
+        self.agent = _staff('sk_id1', role_type='regular_agent')
+        self.agent.role = 'agent'
+        self.agent.save()
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.monday = self.week_start
+        ShiftTemplate.objects.create(
+            agent=self.agent, day_of_week=0,
+            start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+        )
+
+    def test_scheduled_entry_carries_agent_id(self):
+        _, agents_map, _ = _build_scheduled_map(self.week_start)
+        entry = agents_map[('Monday', 10)][0]
+        self.assertEqual(entry['agent_id'], self.agent.pk)
+
+    def test_ot_entry_carries_agent_id(self):
+        OvertimeShift.objects.create(agent=self.agent, date=self.monday,
+                                     start_time=time(20, 0), end_time=time(22, 0))
+        _, agents_map, _ = _build_scheduled_map(self.week_start)
+        entry = agents_map[('Monday', 20)][0]
+        self.assertEqual(entry['agent_id'], self.agent.pk)
+
+    def test_excluded_entry_carries_agent_id(self):
+        AdherenceRecord.objects.update_or_create(
+            agent=self.agent, date=self.monday, defaults={'status': 'V'},
+        )
+        _, _, excluded_map = _build_scheduled_map(self.week_start)
+        entry = excluded_map[('Monday', 10)][0]
+        self.assertEqual(entry['agent_id'], self.agent.pk)
+
+
+from scheduling.models import Skill
+
+
+class StaffingSkillColumnTests(TestCase):
+    """Skills Phase 3 — the skill coverage count on the Staffing tab.
+
+    _build_skill_maps narrows _build_scheduled_map's OWN agents_map/excluded_map
+    by agent_id — it re-expresses none of _build_scheduled_map's exclusion rules,
+    so the count is a strict subset of Scheduled Staff by construction.
+    """
+
+    def setUp(self):
+        self.bilingual = Skill.objects.create(name='Bilingual')
+        self.intake = Skill.objects.create(name='Intake')
+
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.monday = self.week_start
+
+        # both      — holds Bilingual AND Intake
+        # only_one  — holds Bilingual only (must be excluded by an AND filter)
+        # neither   — holds no skills
+        self.both = self._scheduled('sk_both', [self.bilingual, self.intake])
+        self.only_one = self._scheduled('sk_only_one', [self.bilingual])
+        self.neither = self._scheduled('sk_neither', [])
+
+    def _scheduled(self, username, skills):
+        agent = _staff(username, role_type='regular_agent')
+        agent.role = 'agent'
+        agent.save()
+        ShiftTemplate.objects.create(
+            agent=agent, day_of_week=0,  # Monday
+            start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+        )
+        if skills:
+            agent.skills.set(skills)
+        return agent
+
+    def _skill_count(self, hour, skill_ids):
+        from scheduling.views import _agents_with_all_skills
+        from erlang.views import _build_skill_maps
+        _, agents_map, excluded_map = _build_scheduled_map(self.week_start)
+        qualifying = _agents_with_all_skills(skill_ids)
+        skill_scheduled, _, _ = _build_skill_maps(agents_map, excluded_map, qualifying)
+        return skill_scheduled.get(('Monday', hour), 0)
+
+    # ── AND semantics, the way an Excel filter narrows ──
+    def test_and_semantics_requires_every_selected_skill(self):
+        self.assertEqual(
+            self._skill_count(10, [self.bilingual.pk, self.intake.pk]), 1
+        )  # only sk_both holds both
+
+    def test_one_skill_selected_counts_every_holder(self):
+        self.assertEqual(self._skill_count(10, [self.bilingual.pk]), 2)  # both + only_one
+
+    def test_zero_coverage_when_nobody_qualifies(self):
+        lonely = Skill.objects.create(name='Lonely')
+        self.assertEqual(self._skill_count(10, [lonely.pk]), 0)
+
+    # ── Strict subset of Scheduled Staff, in both directions ──
+    def test_count_never_exceeds_scheduled_staff(self):
+        scheduled, agents_map, excluded_map = _build_scheduled_map(self.week_start)
+        from scheduling.views import _agents_with_all_skills
+        from erlang.views import _build_skill_maps
+        qualifying = _agents_with_all_skills([self.bilingual.pk])
+        skill_scheduled, _, _ = _build_skill_maps(agents_map, excluded_map, qualifying)
+        self.assertLessEqual(
+            skill_scheduled.get(('Monday', 10), 0), scheduled.get(('Monday', 10), 0)
+        )
+
+    def test_scheduled_staff_count_is_unaffected_by_the_skill_filter(self):
+        # The Staffing roster itself must not move because a skill is selected.
+        scheduled_before, _, _ = _build_scheduled_map(self.week_start)
+        self._skill_count(10, [self.bilingual.pk, self.intake.pk])  # exercised, discarded
+        scheduled_after, _, _ = _build_scheduled_map(self.week_start)
+        self.assertEqual(scheduled_before, scheduled_after)
+
+    # ── Reuses _build_scheduled_map's own exclusion rules, does not re-express them ──
+    def test_excluded_adherence_status_removes_agent_from_skill_count_too(self):
+        AdherenceRecord.objects.update_or_create(
+            agent=self.both, date=self.monday, defaults={'status': 'V'},
+        )
+        self.assertEqual(self._skill_count(10, [self.bilingual.pk, self.intake.pk]), 0)
+
+    def test_quit_marked_agent_stays_excluded_from_the_skill_count(self):
+        from scheduling.models import EmploymentPeriod
+        EmploymentPeriod.objects.create(
+            agent=self.both, start_date=self.week_start - timedelta(days=365),
+        )
+        AdherenceRecord.objects.update_or_create(
+            agent=self.both, date=self.monday + timedelta(days=1),
+            defaults={'status': 'Quit'},
+        )
+        next_week = self.week_start + timedelta(days=7)
+        skill_count = self._skill_count_for_week(next_week, 'Monday', 10,
+                                                  [self.bilingual.pk, self.intake.pk])
+        self.assertEqual(skill_count, 0)
+
+    def _skill_count_for_week(self, week_start, day_name, hour, skill_ids):
+        from scheduling.views import _agents_with_all_skills
+        from erlang.views import _build_skill_maps
+        _, agents_map, excluded_map = _build_scheduled_map(week_start)
+        qualifying = _agents_with_all_skills(skill_ids)
+        skill_scheduled, _, _ = _build_skill_maps(agents_map, excluded_map, qualifying)
+        return skill_scheduled.get((day_name, hour), 0)
+
+    # ── The deliberate OT divergence: Scheduled Staff counts any OT agent;
+    #    the skill column counts an OT agent only if they hold the skill. ──
+    def test_ot_agent_without_the_skill_counts_in_scheduled_staff_but_not_skill(self):
+        ot_agent = _staff('sk_ot_noskill', role_type='regular_agent')
+        ot_agent.role = 'agent'
+        ot_agent.save()
+        OvertimeShift.objects.create(agent=ot_agent, date=self.monday,
+                                     start_time=time(20, 0), end_time=time(22, 0))
+        scheduled, agents_map, excluded_map = _build_scheduled_map(self.week_start)
+        self.assertEqual(scheduled.get(('Monday', 20), 0), 1)
+        self.assertEqual(self._skill_count(20, [self.bilingual.pk]), 0)
+
+    def test_ot_agent_with_the_skill_counts_in_both(self):
+        ot_agent = self._scheduled('sk_ot_skilled', [self.bilingual])
+        OvertimeShift.objects.create(agent=ot_agent, date=self.monday,
+                                     start_time=time(20, 0), end_time=time(22, 0))
+        scheduled, agents_map, excluded_map = _build_scheduled_map(self.week_start)
+        self.assertEqual(scheduled.get(('Monday', 20), 0), 1)
+        self.assertEqual(self._skill_count(20, [self.bilingual.pk]), 1)
+
+
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
+
+class StaffingSkillFilterViewTests(TestCase):
+    """The Staffing tab's own Filters panel, at the request layer. Shape mirrors
+    AdherenceSkillFilterTests (adherence/tests.py) — Staffing has no supervisor
+    filter, and uses its own session key ('erlang_skill_filter') so a skill chosen
+    here never narrows Adherence, and vice versa (scheduling.views._resolve_skill_filter).
+    """
+
+    def setUp(self):
+        self.viewer = _staff('sk_viewer')
+        self.client.login(username='sk_viewer', password='pw')
+
+        self.bilingual = Skill.objects.create(name='Bilingual')
+        self.intake = Skill.objects.create(name='Intake')
+        self.retired = Skill.objects.create(name='Retired Skill', is_active=False)
+
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        self.monday = self.week_start
+        ErlangCallRow.objects.create(week_start=self.week_start, day='Monday', hour=10,
+                                     total_calls=100, avg_calls=100)
+
+        self.both = self._scheduled('sk_both', [self.bilingual, self.intake])
+        self.only_one = self._scheduled('sk_only_one', [self.bilingual])
+        self.neither = self._scheduled('sk_neither', [])
+
+    def _scheduled(self, username, skills):
+        agent = _staff(username, role_type='regular_agent')
+        agent.role = 'agent'
+        agent.save()
+        ShiftTemplate.objects.create(
+            agent=agent, day_of_week=0,
+            start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+        )
+        if skills:
+            agent.skills.set(skills)
+        return agent
+
+    def _monday_row(self, query=''):
+        url = reverse('erlang_calculator') + f'?week_start={self.week_start.isoformat()}{query}'
+        resp = self.client.get(url)
+        monday = next(d for d in resp.context['days'] if d['name'] == 'Monday')
+        return resp, monday['rows'][0]
+
+    def test_no_skill_selected_has_no_skill_count(self):
+        _, row = self._monday_row()
+        self.assertNotIn('skill_count', row)
+
+    def test_and_semantics_via_the_view(self):
+        _, row = self._monday_row(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        self.assertEqual(row['skill_count'], 1)
+
+    def test_one_skill_counts_every_holder_via_the_view(self):
+        _, row = self._monday_row(f'&skills={self.bilingual.pk}')
+        self.assertEqual(row['skill_count'], 2)
+
+    def test_retired_skill_in_session_stops_filtering(self):
+        self.both.skills.add(self.retired)
+        self._monday_row(f'&skills={self.retired.pk}')   # sets the session
+        _, row = self._monday_row()                       # falls back to session
+        self.assertNotIn('skill_count', row)
+
+    def test_garbage_skill_value_is_ignored_not_fatal(self):
+        resp, row = self._monday_row('&skills=notanumber')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('skill_count', row)
+
+    def test_unknown_skill_pk_is_ignored(self):
+        resp, row = self._monday_row('&skills=99999')
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn('skill_count', row)
+
+    def test_filter_survives_week_navigation_with_no_param(self):
+        self._monday_row(f'&skills={self.bilingual.pk}')   # sets the session
+        next_week = self.week_start + timedelta(days=7)
+        ErlangCallRow.objects.create(week_start=next_week, day='Monday', hour=10,
+                                     total_calls=100, avg_calls=100)
+        url = reverse('erlang_calculator') + f'?week_start={next_week.isoformat()}'
+        resp = self.client.get(url)
+        monday = next(d for d in resp.context['days'] if d['name'] == 'Monday')
+        self.assertIn('skill_count', monday['rows'][0])
+
+    def test_explicit_empty_param_clears_the_session_filter(self):
+        self._monday_row(f'&skills={self.bilingual.pk}')
+        _, row = self._monday_row('&skills=')
+        self.assertNotIn('skill_count', row)
+
+    def test_session_key_is_isolated_from_adherence(self):
+        self._monday_row(f'&skills={self.bilingual.pk}')
+        self.assertNotIn('adh_skill_filter', self.client.session)
+        self.assertIn('erlang_skill_filter', self.client.session)
+
+
+class StaffingSkillFilterQueryCountTests(TestCase):
+    """Measured, not estimated: the skill filter's query cost must be flat in
+    the number of skills selected and the number of agents on the roster, and
+    zero when the filter isn't in use. Mirrors
+    AdherenceSkillFilterTests' query-count tests (adherence/tests.py)."""
+
+    def setUp(self):
+        self.viewer = _staff('sk_qviewer')
+        self.client.login(username='sk_qviewer', password='pw')
+        self.bilingual = Skill.objects.create(name='Bilingual')
+        self.intake = Skill.objects.create(name='Intake')
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        ErlangCallRow.objects.create(week_start=self.week_start, day='Monday', hour=10,
+                                     total_calls=100, avg_calls=100)
+        self.both = self._scheduled('sq_both', [self.bilingual, self.intake])
+
+    def _scheduled(self, username, skills):
+        agent = _staff(username, role_type='regular_agent')
+        agent.role = 'agent'
+        agent.save()
+        ShiftTemplate.objects.create(
+            agent=agent, day_of_week=0,
+            start_time=time(9, 0), end_time=time(17, 0), is_off=False,
+        )
+        if skills:
+            agent.skills.set(skills)
+        return agent
+
+    def _url(self, query=''):
+        return reverse('erlang_calculator') + f'?week_start={self.week_start.isoformat()}{query}'
+
+    def _query_count(self, query=''):
+        self.client.get(self._url(query))     # warm up: session row, BillingSettings, etc.
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            self.client.get(self._url(query))
+        return len(ctx)
+
+    def test_filtering_adds_a_flat_two_queries_over_the_unfiltered_page(self):
+        """The Filters panel's checkbox list is rendered every page load, filter
+        active or not — that fixed cost (one query, materializing active_skills
+        for the picker) is paid either way, exactly like Adherence's own full
+        page view. Turning a filter ON must add exactly two more on top of that:
+        one validating the requested ids, one resolving the AND into a pk set.
+        That +2 delta — not an absolute count — is the invariant that must stay
+        flat regardless of how many skills or agents are involved."""
+        unfiltered = self._query_count()
+        filtered = self._query_count(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        self.assertEqual(filtered, unfiltered + 2)
+
+    def test_query_count_does_not_grow_with_the_number_of_skills(self):
+        third = Skill.objects.create(name='Third')
+        self.both.skills.add(third)
+        two = self._query_count(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        three = self._query_count(
+            f'&skills={self.bilingual.pk}&skills={self.intake.pk}&skills={third.pk}'
+        )
+        self.assertEqual(two, three)
+
+    def test_query_count_does_not_grow_with_the_number_of_agents(self):
+        small = self._query_count(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        for i in range(10):
+            self._scheduled(f'sq_bulk_{i}', [])
+        big = self._query_count(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        self.assertEqual(small, big)
+
+
+class StaffingSkillColumnRenderTests(TestCase):
+    """What actually reaches the browser: the column, its header, the red-zero
+    highlight, and — the load-bearing check — that the new column never
+    touches the .staffing-display class the day badge, summary bar and
+    Variance all select on."""
+
+    def setUp(self):
+        self.viewer = _staff('sk_render_viewer')
+        self.client.login(username='sk_render_viewer', password='pw')
+
+        self.bilingual = Skill.objects.create(name='Bilingual')
+        self.intake = Skill.objects.create(name='Intake')
+
+        today = date.today()
+        self.week_start = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        ErlangCallRow.objects.create(week_start=self.week_start, day='Monday', hour=10,
+                                     total_calls=500, avg_calls=500)
+        ErlangCallRow.objects.create(week_start=self.week_start, day='Monday', hour=11,
+                                     total_calls=500, avg_calls=500)
+
+        # Covers hour 10 only (09:00-11:00) — hour 11 has zero skill coverage
+        # even though the roster still has scheduled staff there via the
+        # uncovered agent below.
+        self.covered = self._scheduled('sk_r_covered', [self.bilingual],
+                                        start=time(9, 0), end=time(11, 0))
+        self.uncovered = self._scheduled('sk_r_uncovered', [],
+                                          start=time(9, 0), end=time(12, 0))
+
+    def _scheduled(self, username, skills, start, end):
+        agent = _staff(username, role_type='regular_agent')
+        agent.role = 'agent'
+        agent.save()
+        ShiftTemplate.objects.create(
+            agent=agent, day_of_week=0, start_time=start, end_time=end, is_off=False,
+        )
+        if skills:
+            agent.skills.set(skills)
+        return agent
+
+    def _get(self, query=''):
+        url = reverse('erlang_calculator') + f'?week_start={self.week_start.isoformat()}{query}'
+        return self.client.get(url)
+
+    def test_column_absent_with_no_skill_selected(self):
+        # #skill-popover and its JS always exist in the DOM (inert, same as
+        # #filters-popover) — nothing to trigger them when the column carrying
+        # their onclick doesn't exist. What must actually be absent is any
+        # rendered CELL for the column: no per-hour id, no hover CSS for it.
+        resp = self._get()
+        self.assertNotContains(resp, 'skillcov-')
+        self.assertNotContains(resp, '.skill-coverage-display:hover')
+
+    def test_column_present_when_a_skill_is_selected(self):
+        resp = self._get(f'&skills={self.bilingual.pk}')
+        self.assertContains(resp, 'skill-coverage-display')
+        self.assertContains(resp, 'id="skill-popover"')
+        self.assertContains(resp, 'skillcov-Monday-10')
+
+    def test_header_shows_the_single_selected_skill_name(self):
+        resp = self._get(f'&skills={self.bilingual.pk}')
+        self.assertContains(resp, 'Bilingual')
+
+    def test_header_shortens_for_multiple_selected_skills(self):
+        resp = self._get(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        self.assertContains(resp, '+1')
+
+    def test_zero_coverage_cell_is_colored_red(self):
+        resp = self._get(f'&skills={self.bilingual.pk}')
+        html = resp.content.decode()
+        segment = html[html.index('id="skillcov-Monday-11"'):][:400]
+        self.assertIn('#dc2626', segment)
+
+    def test_covered_cell_is_not_colored_red(self):
+        resp = self._get(f'&skills={self.bilingual.pk}')
+        html = resp.content.decode()
+        segment = html[html.index('id="skillcov-Monday-10"'):][:400]
+        self.assertNotIn('#dc2626', segment)
+
+    def test_staffing_display_count_is_unaffected_by_the_skill_filter(self):
+        """The .staffing-display landmine: the day badge, summary bar and
+        Variance all select on this class. Turning the skill filter on must
+        not change how many elements carry it."""
+        unfiltered_count = self._get().content.decode().count('staffing-display')
+        filtered_count = self._get(f'&skills={self.bilingual.pk}').content.decode().count('staffing-display')
+        self.assertEqual(unfiltered_count, filtered_count)
+        self.assertGreater(unfiltered_count, 0)
+
+    def test_no_element_carries_both_classes(self):
+        html = self._get(f'&skills={self.bilingual.pk}').content.decode()
+        self.assertNotIn('staffing-display skill-coverage-display', html)
+        self.assertNotIn('skill-coverage-display staffing-display', html)
+
+    def test_existing_staff_popover_data_is_unaffected_by_the_skill_filter(self):
+        """SCHEDULED_AGENTS / EXCLUDED_AGENTS / STATUS_SUMMARY — the existing
+        Scheduled Staff popover's own data — must be byte-identical whether or
+        not the skill filter is active."""
+        def extract(html, name):
+            marker = f'const {name} = '
+            start = html.index(marker) + len(marker)
+            end = html.index(';\n', start)
+            return html[start:end]
+
+        unfiltered_html = self._get().content.decode()
+        filtered_html = self._get(f'&skills={self.bilingual.pk}').content.decode()
+        for name in ('SCHEDULED_AGENTS', 'EXCLUDED_AGENTS', 'STATUS_SUMMARY'):
+            self.assertEqual(
+                extract(unfiltered_html, name), extract(filtered_html, name),
+                f'{name} changed when the skill filter was applied',
+            )
+
+    def test_skill_popover_data_lists_only_skill_holders(self):
+        resp = self._get(f'&skills={self.bilingual.pk}')
+        html = resp.content.decode()
+        marker = 'const SKILL_AGENTS = '
+        start = html.index(marker) + len(marker)
+        end = html.index(';\n', start)
+        payload = html[start:end]
+        self.assertIn(self.covered.agent_name, payload)
+        self.assertNotIn(self.uncovered.agent_name, payload)

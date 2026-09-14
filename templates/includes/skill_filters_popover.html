@@ -1,0 +1,82 @@
+{% comment %}
+Anchored "Filters" popover — a skill picker today, built as one titled section
+per filter so a later filter adds a section here without any template change.
+Toggled by a page-local "Filters" button that carries class "skill-filters-btn"
+and calls toggleFilters(this); this include defines toggleFilters/closeFilters/
+filtersClearAll and the click-outside-to-close listener as globals, so a page
+needs nothing else to make its button work. Each page still writes its own
+Escape-key handling (Adherence already closes its note popover the same way),
+since that composes with whatever OTHER popovers the page has — not this
+include's concern.
+
+Required context: active_skills, selected_skill_ids, week_start (date object).
+Optional context: supervisor_id (only Adherence has a supervisor filter to
+preserve across the panel's own GET submit).
+{% endcomment %}
+<div id="filters-popover" style="display:none;position:fixed;z-index:10000;width:300px;max-width:calc(100vw - 20px);background:white;border:1px solid #ddd;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);flex-direction:column;overflow:hidden;">
+    <div style="padding:10px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;background:#f8f9fa;">
+        <div style="font-size:13px;font-weight:700;color:#1a3a5c;">Filters</div>
+        <button type="button" onclick="closeFilters()"
+            style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa;line-height:1;padding:0 2px;">&times;</button>
+    </div>
+    <form method="get" style="display:flex;flex-direction:column;overflow:hidden;margin:0;">
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        {% if supervisor_id %}<input type="hidden" name="supervisor" value="{{ supervisor_id }}">{% endif %}
+        {% comment %}
+        Always submitted, so unchecking every box still clears the filter instead of
+        leaving the param absent and falling back to the stored session value.
+        {% endcomment %}
+        <input type="hidden" name="skills" value="">
+        <div style="padding:10px 14px;overflow-y:auto;max-height:260px;">
+            <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Skill</div>
+            {% for skill in active_skills %}
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;cursor:pointer;padding:3px 0;margin:0;">
+                <input type="checkbox" name="skills" value="{{ skill.pk }}" class="skill-filter-cb"
+                    style="width:15px;height:15px;margin:0;flex:none;"
+                    {% if skill.pk in selected_skill_ids %}checked{% endif %}>
+                <span>{{ skill.name }}</span>
+            </label>
+            {% empty %}
+            <span style="font-size:12px;color:#888;">No skills defined yet.</span>
+            {% endfor %}
+        </div>
+        <div style="padding:10px 14px;border-top:1px solid #eee;background:#fafafa;display:flex;justify-content:space-between;align-items:center;">
+            <button type="button" onclick="filtersClearAll()" class="btn btn-cancel" style="padding:4px 12px;font-size:12px;">Clear</button>
+            <button type="submit" class="btn btn-primary" style="padding:5px 16px;font-size:13px;">Apply</button>
+        </div>
+    </form>
+</div>
+
+<script>
+// Anchored under its button, positioned the same way openNotes() positions the note
+// popover on the Adherence tab: measure the trigger, flip above if it would overflow.
+function toggleFilters(btn) {
+    const pop = document.getElementById('filters-popover');
+    if (pop.style.display !== 'none') { closeFilters(); return; }
+    pop.style.display = 'flex';
+    const rect = btn.getBoundingClientRect();
+    const pw = 300, ph = pop.offsetHeight || 320, vw = window.innerWidth, vh = window.innerHeight;
+    let left = rect.right - pw, top = rect.bottom + 6;
+    if (left < 10) left = 10;
+    if (left + pw > vw - 10) left = Math.max(10, vw - pw - 10);
+    if (top + ph > vh) top = Math.max(10, rect.top - ph - 6);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+}
+
+function closeFilters() {
+    const pop = document.getElementById('filters-popover');
+    if (pop) pop.style.display = 'none';
+}
+
+function filtersClearAll() {
+    document.querySelectorAll('.skill-filter-cb').forEach(function(cb) { cb.checked = false; });
+}
+
+document.addEventListener('click', function(e) {
+    const pop = document.getElementById('filters-popover');
+    const btn = document.querySelector('.skill-filters-btn');
+    if (!pop || pop.style.display === 'none') return;
+    if (!pop.contains(e.target) && btn && !btn.contains(e.target)) closeFilters();
+});
+</script>

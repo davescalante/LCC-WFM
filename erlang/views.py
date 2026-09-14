@@ -31,6 +31,52 @@ def _get_week_start(request):
     return ws
 
 
+def _get_skill_filter(request):
+    """Returns (skill_ids, active_skills_qs) for the Staffing tab's own skill
+    Filters panel. The read/validate/reconcile rules live in
+    scheduling.views._resolve_skill_filter, shared with the identical panel on
+    the Adherence tab. The session key ('erlang_skill_filter') is Staffing-only
+    — kept separate from Adherence's 'adh_skill_filter' so a skill chosen on
+    one tab never silently narrows the other."""
+    from scheduling.views import _resolve_skill_filter
+    return _resolve_skill_filter(request, 'erlang_skill_filter')
+
+
+def _staffing_filter_url(week_start, skill_ids):
+    """Query string for the Staffing tab preserving week + the given skills.
+    An empty skill list emits the bare `skills=` clear sentinel, so removing the
+    last pill actually clears the filter instead of falling through to the
+    stored session value. Mirrors adherence._adherence_filter_url, minus the
+    supervisor param Staffing doesn't have."""
+    parts = [f'week_start={week_start.isoformat()}']
+    if skill_ids:
+        parts.extend(f'skills={pk}' for pk in skill_ids)
+    else:
+        parts.append('skills=')
+    return '?' + '&'.join(parts)
+
+
+def _staffing_filter_pills(week_start, skill_ids, active_skills):
+    """The active-filter pills, as a generic list so a future filter added to
+    the panel contributes pills without touching the template. `active_skills`
+    is expected already-evaluated (a list, not a lazy queryset) — the caller
+    materializes it once for the picker checkboxes and reuses it here so this
+    doesn't cost a second query."""
+    by_pk = {s.pk: s for s in active_skills}
+    pills = []
+    for pk in skill_ids:
+        skill = by_pk.get(pk)
+        if skill is None:
+            continue
+        remaining = [other for other in skill_ids if other != pk]
+        pills.append({
+            'label': 'Skill',
+            'value': skill.name,
+            'remove_url': _staffing_filter_url(week_start, remaining),
+        })
+    return pills
+
+
 # How far back the Staffing Calculator looks for a Quit/Baja mark. A generous
 # ceiling on how long a separation can sit unprocessed; a mark older than this
 # lapses and the agent counts again, which is the safe direction.
@@ -293,7 +339,9 @@ def _build_scheduled_map(week_start):
         if (day_name, h, agent_id) in excluded_seen:
             return
         excluded_seen.add((day_name, h, agent_id))
-        excluded_map.setdefault((day_name, h), []).append({'name': name, 'reason': reason})
+        excluded_map.setdefault((day_name, h), []).append(
+            {'name': name, 'reason': reason, 'agent_id': agent_id}
+        )
 
     def _add_hours(date_, start_hour, end_hour, agent_id, entry_base, exclude):
         """Add hours for one shift/OT slot. entry_base has no 'status' key yet.
@@ -358,7 +406,8 @@ def _build_scheduled_map(week_start):
         name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         _add_hours(s['date'], s['start_time'].hour, s['end_time'].hour,
-                   s['agent_id'], {'name': name, 'time': label, 'ot': False}, exclude=True)
+                   s['agent_id'], {'name': name, 'time': label, 'ot': False, 'agent_id': s['agent_id']},
+                   exclude=True)
 
     # Recurring templates — resolved per (agent, date) with the same shared
     # rule the Shifts/Adherence tabs and agent portal use (_best_shift_template:
@@ -380,7 +429,8 @@ def _build_scheduled_map(week_start):
             name = agent_names.get(agent_id, f"Agent {agent_id}")
             label = f"{t.start_time.strftime('%H:%M')}–{t.end_time.strftime('%H:%M')}"
             _add_hours(day_date, t.start_time.hour, t.end_time.hour,
-                       agent_id, {'name': name, 'time': label, 'ot': False}, exclude=True)
+                       agent_id, {'name': name, 'time': label, 'ot': False, 'agent_id': agent_id},
+                       exclude=True)
 
     # Pending role changes with a new schedule — count them for planning before effective date applies
     # This lets coordinators see next week's staffing with graduating agents already counted.
@@ -401,7 +451,8 @@ def _build_scheduled_map(week_start):
             name = agent_names.get(p['agent_id'], f"Agent {p['agent_id']}")
             label = f"{start_t.strftime('%H:%M')}–{end_t.strftime('%H:%M')}"
             _add_hours(day_date, start_t.hour, end_t.hour,
-                       p['agent_id'], {'name': name, 'time': label, 'ot': False}, exclude=True)
+                       p['agent_id'], {'name': name, 'time': label, 'ot': False, 'agent_id': p['agent_id']},
+                       exclude=True)
 
     # OT shifts — all agents regardless of role; cancelled excluded. Never
     # excluded by adherence status — non-cancelled OT counts as coverage
@@ -411,9 +462,41 @@ def _build_scheduled_map(week_start):
         name = agent_names.get(s['agent_id'], f"Agent {s['agent_id']}")
         label = f"{s['start_time'].strftime('%H:%M')}–{s['end_time'].strftime('%H:%M')}"
         _add_hours(s['date'], s['start_time'].hour, s['end_time'].hour,
-                   s['agent_id'], {'name': name, 'time': label, 'ot': True}, exclude=False)
+                   s['agent_id'], {'name': name, 'time': label, 'ot': True, 'agent_id': s['agent_id']},
+                   exclude=False)
 
     return scheduled, agents_map, excluded_map
+
+
+def _build_skill_maps(agents_map, excluded_map, qualifying_pks):
+    """Narrow the already-built scheduled/excluded maps to agents holding the
+    selected skill(s). Pure Python filtering over data _build_scheduled_map
+    already produced — no new queries. `qualifying_pks` is the one-query
+    AND-across-skills pk set the caller resolves via
+    scheduling.views._agents_with_all_skills.
+
+    Every exclusion _build_scheduled_map already applied (STAFFING_EXCLUDED_STATUSES,
+    the Quit/Baja mark, the per-cell agent dedupe) is inherited for free: an
+    excluded agent was never put in agents_map to begin with, so filtering that
+    list can only ever narrow it further. The skill count is therefore a strict
+    subset of Scheduled Staff by construction — not a second implementation of
+    any of those rules.
+
+    Returns (skill_scheduled, skill_agents_map, skill_excluded_map), the same
+    shapes _build_scheduled_map itself returns for the first three."""
+    skill_scheduled = {}
+    skill_agents_map = {}
+    skill_excluded_map = {}
+    for key, entries in agents_map.items():
+        matched = [e for e in entries if e.get('agent_id') in qualifying_pks]
+        if matched:
+            skill_scheduled[key] = len(matched)
+            skill_agents_map[key] = matched
+    for key, entries in excluded_map.items():
+        matched = [e for e in entries if e.get('agent_id') in qualifying_pks]
+        if matched:
+            skill_excluded_map[key] = matched
+    return skill_scheduled, skill_agents_map, skill_excluded_map
 
 
 def _build_open_ot_map(week_start):
@@ -506,8 +589,15 @@ def _parse_five9_csv(file):
     return rows
 
 
-def _build_days(calculated_rows, params, scheduled_map, actual_map, weeks_by_day=None):
-    """Group calculated rows by day and compute per-day summary stats."""
+def _build_days(calculated_rows, params, scheduled_map, actual_map, weeks_by_day=None,
+                 skill_scheduled_map=None):
+    """Group calculated rows by day and compute per-day summary stats.
+
+    skill_scheduled_map is None whenever the Staffing tab's skill Filters panel
+    has nothing selected — in that case no 'skill_count' key is added to any
+    row at all, which is what keeps the new column's template guard
+    (`{% if selected_skill_ids %}`) and this function's cost in sync: no
+    selection, no column, no per-row work for it."""
     by_day = {d: [] for d in DAYS_ORDER}
     for row in calculated_rows:
         if row['day'] in by_day:
@@ -524,6 +614,8 @@ def _build_days(calculated_rows, params, scheduled_map, actual_map, weeks_by_day
         for row in rows:
             row['scheduled_staff'] = scheduled_map.get((day_name, row['hour']), 0)
             row['actual_agents'] = actual_map.get((day_name, row['hour']), None)
+            if skill_scheduled_map is not None:
+                row['skill_count'] = skill_scheduled_map.get((day_name, row['hour']), 0)
 
         total_shrink = sum(r['agents_shrinkage'] for r in rows)
         peak = max(rows, key=lambda r: r['agents_shrinkage'])
@@ -641,10 +733,29 @@ def erlang_calculator(request):
         'weeks_by_day': _weeks_by_day,
     }
 
+    # Skills Phase 3: the Staffing tab's own skill Filters panel. Resolved
+    # unconditionally so the panel, its pills and (once a skill is selected)
+    # the coverage column all work even before a CSV has been uploaded.
+    # active_skills is materialized ONCE here — the picker's checkbox list
+    # needs the full objects regardless of filter state (same fixed cost
+    # Adherence's own panel already pays), so evaluating it eagerly and
+    # reusing the same list for the pills and the column header avoids
+    # querying it a second time.
+    skill_ids, active_skills = _get_skill_filter(request)
+    active_skills = list(active_skills)
+    selected_skills = [s for s in active_skills if s.pk in skill_ids]
+    active_skill_filter_pills = (
+        _staffing_filter_pills(week_start, skill_ids, active_skills) if skill_ids else []
+    )
+    clear_skill_filter_url = _staffing_filter_url(week_start, [])
+
     days = []
     agents_map_json = '{}'
     excluded_map_json = '{}'
     status_summary_json = '{}'
+    skill_agents_map_json = '{}'
+    skill_excluded_map_json = '{}'
+    skill_status_summary_json = '{}'
     if raw_rows:
         calculated = calculate_staffing(
             raw_rows,
@@ -654,11 +765,28 @@ def erlang_calculator(request):
             params['aht_seconds'],
         )
         scheduled_map, agents_map, excluded_map = _build_scheduled_map(week_start)
+
+        # Narrow the map _build_scheduled_map already built — no new queries per
+        # cell, and every exclusion rule it already applied is inherited for
+        # free (see _build_skill_maps). skill_scheduled_map stays None (not an
+        # empty dict) when nothing is selected, which is what keeps 'skill_count'
+        # off every row and the column hidden — no work done for a column
+        # nobody asked to see.
+        skill_scheduled_map = None
+        skill_agents_map, skill_excluded_map = {}, {}
+        if skill_ids:
+            from scheduling.views import _agents_with_all_skills
+            qualifying_pks = _agents_with_all_skills(skill_ids)
+            skill_scheduled_map, skill_agents_map, skill_excluded_map = _build_skill_maps(
+                agents_map, excluded_map, qualifying_pks
+            )
+
         days = _build_days(
             calculated, params,
             scheduled_map,
             _build_actual_map(week_start),
             weeks_by_day=_weeks_by_day,
+            skill_scheduled_map=skill_scheduled_map,
         )
 
         # OT posting visibility: open/filled counts per hour and the real
@@ -697,6 +825,24 @@ def erlang_calculator(request):
             if pairs:
                 status_summary[f"{day}:{hour}"] = pairs
         status_summary_json = json.dumps(status_summary)
+
+        if skill_ids:
+            skill_agents_map_json = json.dumps({
+                f"{day}:{hour}": sorted(entries, key=lambda e: e['name'])
+                for (day, hour), entries in skill_agents_map.items()
+            })
+            skill_excluded_map_json = json.dumps({
+                f"{day}:{hour}": sorted(entries, key=lambda e: e['name'])
+                for (day, hour), entries in skill_excluded_map.items()
+            })
+            # Computed over the FILTERED entries, deliberately not reusing
+            # status_summary above — that one describes the unfiltered cell.
+            skill_status_summary = {}
+            for (day, hour), entries in skill_agents_map.items():
+                pairs = _summarize_statuses(entries)
+                if pairs:
+                    skill_status_summary[f"{day}:{hour}"] = pairs
+            skill_status_summary_json = json.dumps(skill_status_summary)
 
     prev_week = week_start - timedelta(days=7)
     next_week = week_start + timedelta(days=7)
@@ -737,6 +883,14 @@ def erlang_calculator(request):
         'agents_map_json': agents_map_json,
         'excluded_map_json': excluded_map_json,
         'status_summary_json': status_summary_json,
+        'active_skills': active_skills,
+        'selected_skill_ids': skill_ids,
+        'selected_skills': selected_skills,
+        'active_skill_filter_pills': active_skill_filter_pills,
+        'clear_skill_filter_url': clear_skill_filter_url,
+        'skill_agents_map_json': skill_agents_map_json,
+        'skill_excluded_map_json': skill_excluded_map_json,
+        'skill_status_summary_json': skill_status_summary_json,
     })
 
 

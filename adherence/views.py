@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 from django.template.loader import render_to_string
 
-from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, Skill, log_action
+from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 from wfm.constants import BONUS_QUALIFYING as _BONUS_QUALIFYING, BONUS_DISQUALIFYING as _BONUS_DISQUALIFYING, SCHED_HOURS_ZEROING_STATUSES
 from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
@@ -975,46 +975,15 @@ def _apply_supervisor_filter(agents_qs, supervisor_id):
 def _get_skill_filter(request):
     """Returns (skill_ids, active_skills_qs) for the Adherence tab's skill filter.
 
-    Same shape as _get_supervisor_filter: reads the GET param (saving to session),
-    or falls back to session — that fallback is what carries the filter across week
-    navigation, since the week links carry only week_start.
-
-    Two things here are deliberate:
-
-    * The session key is Adherence-only. 'supervisor_filter' is shared on purpose
-      across scheduling/ and adherence/ so one supervisor choice follows the user
-      between tabs; this one must NOT, or picking a skill here would silently narrow
-      Codings, Daily Hours and the payroll screen too.
-    * Retired skills are dropped on read and the reconciled list written back. A skill
-      retired while it sits in someone's session would otherwise keep narrowing the
-      grid while offering no checkbox and no pill to explain it — an empty tab with no
-      visible cause, surviving every week change.
-
-    A bare `skills=` (present but empty) is the explicit "cleared" signal, as opposed
-    to the param being absent, which means "use whatever the session holds".
+    The read/validate/reconcile rules live in scheduling.views._resolve_skill_filter,
+    shared with every other tab that offers the same Filters panel. All this adds is
+    the session key, and that key is the point: it is Adherence-only. 'supervisor_filter'
+    is shared on purpose across scheduling/ and adherence/ so one supervisor choice
+    follows the user between tabs; this one must NOT, or picking a skill here would
+    silently narrow Codings, Daily Hours and the payroll screen too.
     """
-    active_skills = Skill.objects.filter(is_active=True).order_by('name')
-
-    if 'skills' in request.GET:
-        requested = []
-        for raw in request.GET.getlist('skills'):
-            try:
-                requested.append(int(raw))
-            except (ValueError, TypeError):
-                continue    # never raise: this runs inside the rows endpoint's try,
-                            # where an exception marks every group failed on screen
-    else:
-        requested = request.session.get('adh_skill_filter', []) or []
-
-    # Only pay for the validation lookup when something was actually requested — the
-    # unfiltered tab (the common case, once per supervisor group) must cost nothing extra.
-    valid = set(active_skills.values_list('pk', flat=True)) if requested else set()
-    skill_ids = [pk for pk in requested if pk in valid]
-
-    if skill_ids != request.session.get('adh_skill_filter', []):
-        request.session['adh_skill_filter'] = skill_ids
-
-    return skill_ids, active_skills
+    from scheduling.views import _resolve_skill_filter
+    return _resolve_skill_filter(request, 'adh_skill_filter')
 
 
 def _adherence_filter_url(week_start, supervisor_id, skill_ids):
@@ -1052,23 +1021,20 @@ def _adherence_filter_pills(week_start, supervisor_id, skill_ids, active_skills)
 def _apply_skill_filter(agents_qs, skill_ids):
     """Narrow to agents holding ALL of skill_ids (an Excel filter, not 'any of').
 
-    Display-side only, and deliberately kept off the caller's queryset: the AND is
-    built as one .filter(skills__id=...) per skill on a separate, unordered queryset
-    and collapsed to a pk set. Chaining those joins onto the caller's queryset would
-    need .distinct(), and that queryset is ordered on related fields
-    (supervisor__user__last_name, ...) — the DISTINCT + ORDER BY combination
-    _get_adherence_agent_pks documents as a PostgreSQL failure. `pk__in` adds no join,
-    so the ordering survives untouched.
-
-    One query, whatever the roster size; extra skills become extra joins inside it,
-    not extra queries.
+    Display-side only. The AND itself is scheduling.views._agents_with_all_skills,
+    which resolves it on a separate unordered queryset and hands back a pk set —
+    see there for why it must not be chained onto this queryset. The reason it
+    matters HERE specifically: this queryset is ordered on related fields
+    (supervisor__user__last_name, ...), and chaining the joins would need
+    .distinct(), which is the DISTINCT + ORDER BY combination
+    _get_adherence_agent_pks documents as a PostgreSQL failure. `pk__in` adds no
+    join, so the ordering survives untouched.
     """
-    if not skill_ids:
+    from scheduling.views import _agents_with_all_skills
+    matching_pks = _agents_with_all_skills(skill_ids)
+    if matching_pks is None:
         return agents_qs
-    matching = Agent.objects.all()
-    for skill_id in skill_ids:
-        matching = matching.filter(skills__id=skill_id)
-    return agents_qs.filter(pk__in=set(matching.values_list('pk', flat=True).distinct()))
+    return agents_qs.filter(pk__in=matching_pks)
 
 
 # ── Official Admin edit-scope guard ───────────────────────────────────────────

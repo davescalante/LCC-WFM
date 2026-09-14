@@ -16,10 +16,32 @@
         <a href="?week_start={{ current_week|date:'Y-m-d' }}"
             style="padding:6px 14px;border:1px solid #3b82f6;border-radius:4px;font-size:12px;color:#3b82f6;text-decoration:none;">Today</a>
         {% endif %}
+        <button type="button" id="erl-filters-btn" class="btn btn-cancel skill-filters-btn" onclick="toggleFilters(this)"
+            style="padding:6px 14px;font-size:13px;display:inline-flex;align-items:center;gap:6px;">
+            Filters
+            {% if active_skill_filter_pills %}
+            <span class="badge badge-blue" style="padding:1px 7px;font-size:11px;">{{ active_skill_filter_pills|length }}</span>
+            {% endif %}
+        </button>
         <a href="{% url 'erlang_reports' %}"
             style="padding:6px 14px;border:1px solid #ddd;border-radius:4px;font-size:12px;color:#555;text-decoration:none;background:#f9fafb;">Saved Reports</a>
     </div>
 </div>
+
+{% if active_skill_filter_pills %}
+<!-- Active filters. One pill per filter, so a future filter in the panel needs no
+     change here — it just contributes another entry to active_skill_filter_pills. -->
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-12px 0 16px;">
+    {% for pill in active_skill_filter_pills %}
+    <span class="badge badge-blue" style="display:inline-flex;align-items:center;gap:6px;">
+        {{ pill.label }}: {{ pill.value }}
+        <a href="{{ pill.remove_url }}" title="Remove this filter"
+            style="color:#0c5460;text-decoration:none;font-weight:700;line-height:1;">&times;</a>
+    </span>
+    {% endfor %}
+    <a href="{{ clear_skill_filter_url }}" style="font-size:12px;color:#888;text-decoration:none;">Clear all</a>
+</div>
+{% endif %}
 
 {% if error %}
 <div style="background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;padding:12px 16px;border-radius:6px;margin-bottom:16px;font-size:14px;">
@@ -225,6 +247,14 @@
                     <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">Agents Required</th>
                     <th style="padding:10px 10px;text-align:right;border-bottom:2px solid #ddd;white-space:nowrap;">+ Shrinkage</th>
                     <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;white-space:nowrap;border-left:2px solid #e5e7eb;">Scheduled Staff</th>
+                    {% if selected_skill_ids %}
+                    <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;max-width:160px;"
+                        title="Scheduled agents holding {% for s in selected_skills %}{{ s.name }}{% if not forloop.last %}, {% endif %}{% endfor %}">
+                        <span style="display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;">
+                            {{ selected_skills.0.name }}{% if selected_skills|length > 1 %} +{{ selected_skills|length|add:"-1" }}{% endif %}
+                        </span>
+                    </th>
+                    {% endif %}
                     <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;white-space:nowrap;">Actual Agents</th>
                     <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;">Variance</th>
                     <th style="padding:10px 10px;text-align:center;border-bottom:2px solid #ddd;white-space:nowrap;">OT Posted</th>
@@ -254,6 +284,22 @@
                             {{ row.scheduled_staff }}
                         </span>
                     </td>
+                    {% if selected_skill_ids %}
+                    <td style="padding:8px 10px;text-align:center;">
+                        <span class="skill-coverage-display"
+                            id="skillcov-{{ day.name }}-{{ row.hour }}"
+                            data-day="{{ day.name }}"
+                            data-hour="{{ row.hour }}"
+                            data-hour-label="{{ row.hour_label }}"
+                            onclick="openSkillPopover(this)"
+                            style="display:inline-block;min-width:40px;font-size:14px;font-weight:700;
+                                {% if row.skill_count == 0 %}color:#dc2626;{% else %}color:#1a3a5c;{% endif %}
+                                cursor:{% if row.skill_count %}pointer{% else %}default{% endif %};"
+                            title="{% if row.skill_count %}Click to see who's covering{% endif %}">
+                            {{ row.skill_count }}
+                        </span>
+                    </td>
+                    {% endif %}
                     <td style="padding:6px 10px;text-align:center;">
                         <input type="number" min="0"
                             class="actual-input"
@@ -563,8 +609,26 @@ function syncWeekInputs(val) {
     <div id="sp-excluded" style="display:none;padding:6px 16px 10px;font-size:11px;color:#94a3b8;border-top:1px solid #f0f4f8;"></div>
 </div>
 
+<!-- Skill-coverage popover. A separate element from #staff-popover, working the same
+     way, listing only the agents holding the selected skill(s) — the existing
+     Scheduled Staff popover above is not touched by this. -->
+<div id="skill-popover"
+     style="display:none;position:fixed;z-index:9000;background:white;border:1px solid #e2e8f0;
+            border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.14);width:280px;
+            max-height:360px;overflow:hidden;flex-direction:column;">
+    <div style="padding:12px 16px;border-bottom:1px solid #f0f4f8;background:#f8fafc;">
+        <div id="skp-title" style="font-size:13px;font-weight:700;color:#1a3a5c;"></div>
+        <div id="skp-count" style="font-size:11px;color:#94a3b8;margin-top:2px;"></div>
+    </div>
+    <div id="skp-list" style="overflow-y:auto;max-height:280px;padding:8px 0;"></div>
+    <div id="skp-excluded" style="display:none;padding:6px 16px 10px;font-size:11px;color:#94a3b8;border-top:1px solid #f0f4f8;"></div>
+</div>
+
+{% include 'includes/skill_filters_popover.html' with active_skills=active_skills selected_skill_ids=selected_skill_ids week_start=week_start %}
+
 <style>
 .staffing-display:hover { text-decoration: underline dotted #1a3a5c; }
+{% if selected_skill_ids %}.skill-coverage-display:hover { text-decoration: underline dotted #1a3a5c; }{% endif %}
 </style>
 
 <script>
@@ -652,8 +716,95 @@ document.addEventListener('click', function(e) {
         closeStaffPopover();
     }
 });
+
+// ── Skill-coverage popover — same shape as openStaffPopover above, over its own
+// data (SKILL_AGENTS/SKILL_EXCLUDED/SKILL_STATUS_SUMMARY, filtered server-side to
+// the selected skill's holders), so it can never be confused with or alter the
+// Scheduled Staff popover.
+const SKILL_AGENTS = {{ skill_agents_map_json|safe }};
+const SKILL_EXCLUDED = {{ skill_excluded_map_json|safe }};
+const SKILL_STATUS_SUMMARY = {{ skill_status_summary_json|safe }};
+
+function openSkillPopover(el) {
+    const day = el.dataset.day;
+    const hour = el.dataset.hour;
+    const label = el.dataset.hourLabel;
+    const key = day + ':' + hour;
+    const entries = SKILL_AGENTS[key] || [];
+    const excluded = SKILL_EXCLUDED[key] || [];
+    const summaryPairs = SKILL_STATUS_SUMMARY[key] || [];
+
+    const pop = document.getElementById('skill-popover');
+    if (pop.style.display === 'flex' && pop._sourceEl === el) {
+        closeSkillPopover();
+        return;
+    }
+    pop._sourceEl = el;
+
+    document.getElementById('skp-title').textContent = day + ' · ' + label;
+    const countText =
+        entries.length === 0 ? 'No agents covering'
+        : entries.length === 1 ? '1 agent covering'
+        : entries.length + ' agents covering';
+    const summaryText = summaryPairs.map(p => p[1] + ' ' + p[0]).join(', ');
+    document.getElementById('skp-count').textContent = countText + (summaryText ? ' · ' + summaryText : '');
+
+    const list = document.getElementById('skp-list');
+    list.innerHTML = '';
+    if (entries.length === 0) {
+        list.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8;font-size:13px;">—</div>';
+    } else {
+        entries.forEach(e => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 16px;gap:8px;';
+            row.innerHTML = `
+                <span style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+                    <span style="font-size:13px;color:#1e293b;font-weight:${e.ot ? '400' : '500'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                          title="${e.name}">${e.name}</span>
+                    ${e.status ? `<span style="font-size:9px;font-weight:700;background:#f1f5f9;color:#64748b;padding:1px 5px;border-radius:3px;flex-shrink:0;">${e.status}</span>` : ''}
+                </span>
+                <span style="font-size:11px;color:#64748b;white-space:nowrap;flex-shrink:0;">${e.time}</span>
+                ${e.ot ? '<span style="font-size:9px;font-weight:700;background:#ede9fe;color:#6d28d9;padding:1px 5px;border-radius:3px;flex-shrink:0;">OT</span>' : ''}
+            `;
+            list.appendChild(row);
+        });
+    }
+
+    const excludedEl = document.getElementById('skp-excluded');
+    if (excluded.length) {
+        excludedEl.textContent = 'Also scheduled: ' + excluded.map(e => e.name + ' (' + e.reason + ')').join(', ');
+        excludedEl.style.display = 'block';
+    } else {
+        excludedEl.textContent = '';
+        excludedEl.style.display = 'none';
+    }
+
+    pop.style.display = 'flex';
+    const rect = el.getBoundingClientRect();
+    const popH = Math.min(360, 80 + entries.length * 36 + (excluded.length ? 28 : 0));
+    const popW = 280;
+    let left = rect.left + rect.width / 2 - popW / 2;
+    let top = rect.bottom + 8;
+    if (left + popW > window.innerWidth - 12) left = window.innerWidth - popW - 12;
+    if (left < 8) left = 8;
+    if (top + popH > window.innerHeight - 12) top = rect.top - popH - 8;
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+}
+
+function closeSkillPopover() {
+    const pop = document.getElementById('skill-popover');
+    pop.style.display = 'none';
+    pop._sourceEl = null;
+}
+
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('#skill-popover') && !e.target.classList.contains('skill-coverage-display')) {
+        closeSkillPopover();
+    }
+});
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeStaffPopover();
+    if (e.key === 'Escape') { closeStaffPopover(); closeSkillPopover(); closeFilters(); }
 });
 </script>
 

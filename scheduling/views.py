@@ -2959,6 +2959,87 @@ def _find_skill_collision(name, exclude_pk=None):
     return None
 
 
+# ── Shared skill-filter primitives ────────────────────────────────────────────
+# Used by every tab that offers a skill Filters panel (Adherence, Staffing). Kept
+# here, beside the other Skill helpers, so the rules below exist once rather than
+# once per tab. Imported function-locally by the other apps, matching how
+# _best_shift_template is already imported across apps.
+
+def _active_skills():
+    """The skills any picker or filter may offer. Deliberately returns the LAZY
+    queryset: a caller that never touches it must not pay for it, which is what
+    AdherenceSkillFilterTests.test_unfiltered_tab_runs_no_skill_queries_at_all
+    pins (zero Skill queries on an unfiltered grid)."""
+    return Skill.objects.filter(is_active=True).order_by('name')
+
+
+def _agents_with_all_skills(skill_ids):
+    """Pks of the agents holding EVERY skill in skill_ids — an Excel filter, not
+    "any of". One query however many skills are passed; each extra skill is an
+    extra join inside that query, never another query.
+
+    Returns None for an empty input ("no filter"), which is NOT the same as an
+    empty set ("matches nobody") — callers must be able to tell those apart.
+
+    The AND is built on its own unordered queryset rather than chained onto the
+    caller's, because chaining needs .distinct(), and DISTINCT combined with an
+    ordering on related fields is the PostgreSQL failure
+    adherence._get_adherence_agent_pks documents. A pk set narrows the caller
+    with no join at all, so their ordering survives untouched.
+    """
+    if not skill_ids:
+        return None
+    matching = Agent.objects.all()
+    for skill_id in skill_ids:
+        matching = matching.filter(skills__id=skill_id)
+    return set(matching.values_list('pk', flat=True).distinct())
+
+
+def _resolve_skill_filter(request, session_key):
+    """Returns (skill_ids, active_skills_qs) for a GET-driven skill Filters panel.
+
+    Reads the `skills` GET param, saving to session, or falls back to session —
+    that fallback is what carries the filter across week navigation, since the
+    week links carry only week_start.
+
+    Three things here are deliberate:
+
+    * `session_key` is a parameter, and every tab passes its own. 'supervisor_filter'
+      is shared on purpose across scheduling/ and adherence/ so one supervisor choice
+      follows the user between tabs; a skill choice must NOT, or picking a skill on
+      one tab would silently narrow the others.
+    * Retired skills are dropped on read and the reconciled list written back. A skill
+      retired while it sits in someone's session would otherwise keep narrowing the
+      screen while offering no checkbox and no pill to explain it — surviving every
+      week change with no visible cause.
+    * The validation lookup is paid for ONLY when something was actually requested,
+      so the unfiltered screen costs nothing extra.
+
+    A bare `skills=` (present but empty) is the explicit "cleared" signal, as opposed
+    to the param being absent, which means "use whatever the session holds".
+    """
+    active_skills = _active_skills()
+
+    if 'skills' in request.GET:
+        requested = []
+        for raw in request.GET.getlist('skills'):
+            try:
+                requested.append(int(raw))
+            except (ValueError, TypeError):
+                continue    # never raise: this runs inside the rows endpoint's try,
+                            # where an exception marks every group failed on screen
+    else:
+        requested = request.session.get(session_key, []) or []
+
+    valid = set(active_skills.values_list('pk', flat=True)) if requested else set()
+    skill_ids = [pk for pk in requested if pk in valid]
+
+    if skill_ids != request.session.get(session_key, []):
+        request.session[session_key] = skill_ids
+
+    return skill_ids, active_skills
+
+
 @login_required
 def skill_list(request):
     from django.db.models import Count
