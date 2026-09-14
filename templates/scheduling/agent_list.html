@@ -12,6 +12,9 @@
     <div style="display:flex;gap:8px;align-items:center;">
         <button type="button" onclick="document.getElementById('exportModal').style.display='flex'"
            class="btn btn-primary" style="padding:5px 14px;font-size:12px;">Export Excel</button>
+        {% if request.has_finance_access or request.user.is_superuser %}
+        <a href="{% url 'skill_list' %}" class="btn btn-cancel" style="padding:5px 14px;font-size:12px;">Skills</a>
+        {% endif %}
         <a href="{% url 'agent_create' %}" class="btn btn-primary">+ Add User</a>
     </div>
 </div>

@@ -118,6 +118,18 @@
                     {% endif %}
                 </td>
             </tr>
+            <tr>
+                <td><strong>Skills</strong></td>
+                <td>
+                    {% for s in agent.skills.all %}
+                        {% if s.is_active %}
+                        <span class="badge badge-blue"{% if s.description %} title="{{ s.description }}" style="cursor:help;"{% endif %}>{{ s.name }}{% if s.description %} <span style="font-size:10px;">&#9432;</span>{% endif %}</span>
+                        {% else %}
+                        <span class="badge" style="background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;{% if s.description %}cursor:help;{% endif %}"{% if s.description %} title="{{ s.description }}"{% endif %}>{{ s.name }} (retired){% if s.description %} <span style="font-size:10px;">&#9432;</span>{% endif %}</span>
+                        {% endif %}
+                    {% empty %}—{% endfor %}
+                </td>
+            </tr>
             <tr><td><strong>Status</strong></td><td>{% if agent.status == 'active' %}<span class="badge badge-green">Active</span>{% else %}<span class="badge badge-red">Inactive</span>{% endif %}</td></tr>
             <tr><td><strong>Supervisor</strong></td><td>{{ agent.supervisor|default:"—" }}</td></tr>
         </table>

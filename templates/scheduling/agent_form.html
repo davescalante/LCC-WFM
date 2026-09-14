@@ -41,6 +41,42 @@
             <label>Role Type</label>
             <select name="role_type" id="id_role_type"></select>
             <p style="margin:-6px 0 10px;font-size:12px;color:#6b7280;">Changing this role now will take effect starting today. To schedule a future role change instead, use <strong>Schedule Role Change</strong> from the agent profile.</p>
+            <label>Skills</label>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                <div id="skills-summary" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"></div>
+                <button type="button" class="btn btn-cancel" style="padding:5px 14px;font-size:12px;"
+                    onclick="document.getElementById('skills-modal').style.display='flex'">Edit Skills</button>
+            </div>
+
+            <!-- Skills picker modal. The checkboxes below are the real `skills`
+                 form field — this overlay only changes how they're presented,
+                 so they still submit with the rest of this page's form. -->
+            <div id="skills-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:#fff;border-radius:10px;max-width:560px;width:92%;max-height:80vh;overflow:auto;padding:22px 24px;box-shadow:0 10px 40px rgba(0,0,0,.25);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <h2 style="margin:0;font-size:18px;color:#1a3a5c;">Choose Skills</h2>
+                        <button type="button" onclick="closeSkillsModal()"
+                                style="background:none;border:none;font-size:24px;line-height:1;cursor:pointer;color:#888;">&times;</button>
+                    </div>
+                    <p style="font-size:12px;color:#888;margin:0 0 12px;">Only active skills are shown here — retired skills this agent already has are kept automatically.</p>
+                    <div style="margin-bottom:10px;display:flex;gap:8px;">
+                        <button type="button" onclick="skillsToggle(true)" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Select all</button>
+                        <button type="button" onclick="skillsToggle(false)" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Clear</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px 18px;">
+                        {% for cb in agent_form.skills %}
+                        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;cursor:pointer;">
+                            {{ cb.tag }}<span>{{ cb.choice_label }}</span>
+                        </label>
+                        {% empty %}
+                        <span style="font-size:12px;color:#888;">No skills defined yet.</span>
+                        {% endfor %}
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+                        <button type="button" class="btn btn-primary" onclick="closeSkillsModal()">Done</button>
+                    </div>
+                </div>
+            </div>
             <label>Status</label>
             {{ agent_form.status }}
             <label>Supervisor</label>
@@ -494,6 +530,48 @@ if (officialAdminCb && adminBonusRow) {
     });
 }
 
+// Skills picker: the modal only changes presentation — the checkboxes inside
+// it are the real `skills` field and submit with the rest of this form.
+var SKILLS_SUMMARY_MAX = 8;
+
+function updateSkillsSummary() {
+    var summary = document.getElementById('skills-summary');
+    if (!summary) return;
+    var checked = Array.prototype.slice.call(
+        document.querySelectorAll('#skills-modal input[name="skills"]:checked')
+    );
+    summary.innerHTML = '';
+    if (checked.length === 0) {
+        summary.innerHTML = '<span style="font-size:13px;color:#888;">No skills assigned</span>';
+        return;
+    }
+    checked.slice(0, SKILLS_SUMMARY_MAX).forEach(function(cb) {
+        var span = cb.parentElement.querySelector('span');
+        var pill = document.createElement('span');
+        pill.className = 'badge badge-blue';
+        pill.textContent = span ? span.textContent : '';
+        summary.appendChild(pill);
+    });
+    if (checked.length > SKILLS_SUMMARY_MAX) {
+        var more = document.createElement('span');
+        more.style.cssText = 'font-size:12px;color:#888;';
+        more.textContent = '+' + (checked.length - SKILLS_SUMMARY_MAX) + ' more';
+        summary.appendChild(more);
+    }
+}
+
+function skillsToggle(val) {
+    document.querySelectorAll('#skills-modal input[name="skills"]').forEach(function(cb) {
+        cb.checked = val;
+    });
+    updateSkillsSummary();
+}
+
+function closeSkillsModal() {
+    document.getElementById('skills-modal').style.display = 'none';
+    updateSkillsSummary();
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('input[type="password"]').forEach(applyPwToggle);
     updateRoleTypes();
@@ -509,6 +587,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (usernameEl) usernameEl.setAttribute('autocomplete', 'off');
     if (passwordEl) passwordEl.setAttribute('autocomplete', 'new-password');
     {% endif %}
+
+    updateSkillsSummary();
+    document.querySelectorAll('#skills-modal input[name="skills"]').forEach(function(cb) {
+        cb.addEventListener('change', updateSkillsSummary);
+    });
 });
 </script>
 {% endblock %}

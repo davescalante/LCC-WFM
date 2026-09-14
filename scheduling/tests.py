@@ -12,6 +12,7 @@ from .models import (
     Agent, AgentRequest, OvertimeShift,
     OpenOTShift, OTShiftClaimRequest, OTCancellationRequest,
     Shift, ShiftBlock, ShiftTemplate, ShiftTemplateBlock,
+    Skill, AgentSkillChange, SkillRenameHistory,
 )
 
 
@@ -3233,3 +3234,631 @@ class AvailableOtOwnSlotMarkerTests(TestCase):
         board = self._board(self.agent)
         self.assertFalse(board[other_posting.pk].my_pending_elsewhere)
         self.assertFalse(board[other_posting.pk].my_assigned_elsewhere)
+
+
+class SkillManagementAccessTests(TestCase):
+    """/skills/ (create/rename/retire/restore) is super-admin only, gated
+    server-side — a non-super-admin's POST is redirected and changes nothing,
+    matching the NominaAccessTests / AdminTabsAccessTests pattern."""
+
+    def setUp(self):
+        self.super_admin = _make_agent('skillsuper', role_type='supervisor')
+        self.super_admin.is_super_admin = True
+        self.super_admin.save(update_fields=['is_super_admin'])
+        self.plain_staff = _make_agent('skillstaff', role_type='supervisor')
+        self.skill = Skill.objects.create(name='Only the Best')
+
+    def test_super_admin_can_open(self):
+        self.client.login(username='skillsuper', password='pw')
+        resp = self.client.get(reverse('skill_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_non_super_admin_denied(self):
+        self.client.login(username='skillstaff', password='pw')
+        resp = self.client.get(reverse('skill_list'))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_anonymous_denied(self):
+        resp = self.client.get(reverse('skill_list'))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_django_superuser_without_agent_profile_can_open(self):
+        User.objects.create_superuser('barebones_super', password='pw')
+        self.client.login(username='barebones_super', password='pw')
+        resp = self.client.get(reverse('skill_list'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_non_super_admin_create_post_denied_and_no_op(self):
+        self.client.login(username='skillstaff', password='pw')
+        resp = self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Spanish'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(Skill.objects.filter(name='Spanish').exists())
+
+    def test_non_super_admin_retire_post_denied_and_no_op(self):
+        self.client.login(username='skillstaff', password='pw')
+        resp = self.client.post(reverse('skill_list'), {'action': 'retire', 'pk': self.skill.pk})
+        self.assertEqual(resp.status_code, 302)
+        self.skill.refresh_from_db()
+        self.assertTrue(self.skill.is_active)
+
+    def test_non_super_admin_edit_post_denied_and_no_op(self):
+        self.client.login(username='skillstaff', password='pw')
+        resp = self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': self.skill.pk, 'name': 'Hacked Name', 'description': 'hacked',
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.skill.refresh_from_db()
+        self.assertEqual(self.skill.name, 'Only the Best')
+        self.assertEqual(self.skill.description, '')
+
+    def test_anonymous_post_denied(self):
+        resp = self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Spanish'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(Skill.objects.filter(name='Spanish').exists())
+
+
+class SkillManagementTests(TestCase):
+    """Create/rename/retire/restore behavior for the super-admin Skills page."""
+
+    def setUp(self):
+        self.super_admin = _make_agent('skillmgr', role_type='supervisor')
+        self.super_admin.is_super_admin = True
+        self.super_admin.save(update_fields=['is_super_admin'])
+        self.client.login(username='skillmgr', password='pw')
+
+    def test_create_skill(self):
+        self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Only the Best'})
+        self.assertTrue(Skill.objects.filter(name='Only the Best', is_active=True).exists())
+
+    def test_create_blank_name_rejected(self):
+        self.client.post(reverse('skill_list'), {'action': 'create', 'name': '   '})
+        self.assertEqual(Skill.objects.count(), 0)
+
+    def test_create_blank_name_shows_visible_error(self):
+        # Regression: the page never rendered {% if messages %}, so
+        # messages.error() fired but nothing appeared on screen — the box
+        # just silently cleared. Assert the message actually reaches the page.
+        resp = self.client.post(reverse('skill_list'), {'action': 'create', 'name': '   '}, follow=True)
+        msgs = [str(m) for m in resp.context['messages']]
+        self.assertIn('Enter a skill name.', msgs)
+        self.assertContains(resp, 'Enter a skill name.')
+
+    def test_create_duplicate_case_insensitive_rejected(self):
+        Skill.objects.create(name='Only the Best')
+        self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'only the best'})
+        self.assertEqual(Skill.objects.filter(name__iexact='only the best').count(), 1)
+
+    def test_create_duplicate_error_names_the_actual_existing_skill(self):
+        # Regression: the error used to echo back whatever the submitter typed
+        # ("only the best"), not the real stored name ("Only the Best") — so a
+        # near-duplicate attempt didn't tell the user what already exists.
+        Skill.objects.create(name='Only the Best')
+        resp = self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'only the best'}, follow=True)
+        msgs = [str(m) for m in resp.context['messages']]
+        self.assertIn('A skill named "Only the Best" already exists.', msgs)
+
+    def test_create_rejects_name_missing_the_dollar_sort_prefix(self):
+        # "$" is a Five9 sort-order prefix (forces a skill to the top of the
+        # list), not part of the skill's identity — the same skill can never
+        # exist both with and without it.
+        Skill.objects.create(name='$ Only the BEST TIB')
+        resp = self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Only the BEST TIB'}, follow=True)
+        self.assertEqual(Skill.objects.count(), 1)
+        msgs = [str(m) for m in resp.context['messages']]
+        self.assertIn('A skill named "$ Only the BEST TIB" already exists.', msgs)
+
+    def test_create_rejects_name_missing_the_y_sort_prefix(self):
+        # "Y " is the bottom-of-list Five9 sort prefix, same rule as "$".
+        Skill.objects.create(name='Overflow TIB')
+        resp = self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Y Overflow TIB'}, follow=True)
+        self.assertEqual(Skill.objects.count(), 1)
+        msgs = [str(m) for m in resp.context['messages']]
+        self.assertIn('A skill named "Overflow TIB" already exists.', msgs)
+
+    def test_create_does_not_treat_a_leading_y_word_as_a_sort_prefix(self):
+        # "Y" is only a sort prefix when followed by a space — a name that
+        # simply starts with the letter (an ordinary word) is unaffected, so
+        # it must NOT collide with an unrelated skill missing that first letter.
+        Skill.objects.create(name='outh Injury Intake')
+        self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Youth Injury Intake'})
+        self.assertEqual(Skill.objects.count(), 2)
+        self.assertTrue(Skill.objects.filter(name='Youth Injury Intake').exists())
+
+    def test_create_stores_the_dollar_prefix_exactly_when_no_collision(self):
+        # The prefix is ignored for comparison only — never stripped from
+        # what gets saved.
+        self.client.post(reverse('skill_list'), {'action': 'create', 'name': '$ Brand New Skill'})
+        self.assertTrue(Skill.objects.filter(name='$ Brand New Skill').exists())
+
+    def test_create_with_description(self):
+        self.client.post(reverse('skill_list'), {
+            'action': 'create', 'name': 'Only the Best',
+            'description': 'Routes premium legal-intake calls.',
+        })
+        skill = Skill.objects.get(name='Only the Best')
+        self.assertEqual(skill.description, 'Routes premium legal-intake calls.')
+
+    def test_id_is_stable_and_never_reused_by_a_rename(self):
+        skill = Skill.objects.create(name='Spanish')
+        original_pk = skill.pk
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Spanish Line', 'description': '',
+        })
+        skill.refresh_from_db()
+        self.assertEqual(skill.pk, original_pk)
+
+    def test_edit_renames_skill(self):
+        skill = Skill.objects.create(name='Spanish')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Spanish Line', 'description': '',
+        })
+        skill.refresh_from_db()
+        self.assertEqual(skill.name, 'Spanish Line')
+
+    def test_edit_to_existing_name_rejected(self):
+        Skill.objects.create(name='Spanish')
+        other = Skill.objects.create(name='English')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': other.pk, 'name': 'spanish', 'description': '',
+        })
+        other.refresh_from_db()
+        self.assertEqual(other.name, 'English')
+
+    def test_edit_duplicate_error_names_the_actual_existing_skill(self):
+        Skill.objects.create(name='Spanish')
+        other = Skill.objects.create(name='English')
+        resp = self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': other.pk, 'name': 'spanish', 'description': '',
+        }, follow=True)
+        msgs = [str(m) for m in resp.context['messages']]
+        self.assertIn('A skill named "Spanish" already exists.', msgs)
+
+    def test_edit_blank_name_shows_visible_error(self):
+        skill = Skill.objects.create(name='Spanish')
+        resp = self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': '', 'description': '',
+        }, follow=True)
+        self.assertContains(resp, 'Enter a skill name.')
+        skill.refresh_from_db()
+        self.assertEqual(skill.name, 'Spanish')
+
+    def test_edit_updates_description_without_renaming(self):
+        skill = Skill.objects.create(name='Spanish', description='old text')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Spanish', 'description': 'new text',
+        })
+        skill.refresh_from_db()
+        self.assertEqual(skill.description, 'new text')
+
+    def test_edit_can_rename_and_change_description_together(self):
+        skill = Skill.objects.create(name='Spanish', description='old text')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Spanish Line', 'description': 'new text',
+        })
+        skill.refresh_from_db()
+        self.assertEqual(skill.name, 'Spanish Line')
+        self.assertEqual(skill.description, 'new text')
+
+    def test_rename_writes_permanent_rename_history(self):
+        skill = Skill.objects.create(name='Spanish')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Spanish Line', 'description': '',
+        })
+        entry = SkillRenameHistory.objects.get(skill=skill)
+        self.assertEqual(entry.old_name, 'Spanish')
+        self.assertEqual(entry.new_name, 'Spanish Line')
+        self.assertEqual(entry.changed_by, self.super_admin.user)
+
+    def test_multiple_renames_accumulate_history_in_order(self):
+        skill = Skill.objects.create(name='A')
+        self.client.post(reverse('skill_list'), {'action': 'edit', 'pk': skill.pk, 'name': 'B', 'description': ''})
+        self.client.post(reverse('skill_list'), {'action': 'edit', 'pk': skill.pk, 'name': 'C', 'description': ''})
+        history = list(SkillRenameHistory.objects.filter(skill=skill))
+        self.assertEqual(len(history), 2)
+        # Meta.ordering = ['-changed_at'] — most recent first
+        self.assertEqual(history[0].old_name, 'B')
+        self.assertEqual(history[0].new_name, 'C')
+        self.assertEqual(history[1].old_name, 'A')
+        self.assertEqual(history[1].new_name, 'B')
+
+    def test_description_only_edit_writes_no_rename_history(self):
+        skill = Skill.objects.create(name='Spanish', description='old')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Spanish', 'description': 'new',
+        })
+        self.assertEqual(SkillRenameHistory.objects.filter(skill=skill).count(), 0)
+
+    def test_rename_history_survives_retiring_the_skill(self):
+        skill = Skill.objects.create(name='Spanish')
+        self.client.post(reverse('skill_list'), {'action': 'edit', 'pk': skill.pk, 'name': 'Spanish Line', 'description': ''})
+        self.client.post(reverse('skill_list'), {'action': 'retire', 'pk': skill.pk})
+        self.assertEqual(SkillRenameHistory.objects.filter(skill=skill).count(), 1)
+
+    def test_existing_history_stays_attached_to_the_same_skill_after_rename(self):
+        # Proves history is linked by the skill's database ID, not its name:
+        # a foreign key to a renamed row still resolves to the same row.
+        agent = _make_agent('skillhistorylink', role='agent', role_type='regular_agent')
+        skill = Skill.objects.create(name='$ Only the BEST TIB')
+        change = AgentSkillChange.objects.create(agent=agent, skill=skill, action='added')
+        self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': skill.pk, 'name': 'Only the Best', 'description': '',
+        })
+        change.refresh_from_db()
+        self.assertEqual(change.skill_id, skill.pk)
+        self.assertEqual(change.skill.name, 'Only the Best')
+
+    def test_retire_moves_skill_to_retired_list(self):
+        skill = Skill.objects.create(name='Spanish')
+        resp = self.client.post(reverse('skill_list'), {'action': 'retire', 'pk': skill.pk}, follow=True)
+        skill.refresh_from_db()
+        self.assertFalse(skill.is_active)
+        self.assertIn(skill, resp.context['retired_skills'])
+        self.assertNotIn(skill, resp.context['active_skills'])
+
+    def test_restore_moves_skill_back_to_active(self):
+        skill = Skill.objects.create(name='Spanish', is_active=False)
+        resp = self.client.post(reverse('skill_list'), {'action': 'restore', 'pk': skill.pk}, follow=True)
+        skill.refresh_from_db()
+        self.assertTrue(skill.is_active)
+        self.assertIn(skill, resp.context['active_skills'])
+
+    def test_create_writes_audit_log(self):
+        from .models import AuditLog
+        self.client.post(reverse('skill_list'), {'action': 'create', 'name': 'Spanish'})
+        self.assertTrue(AuditLog.objects.filter(action='Created skill').exists())
+
+    def test_retire_writes_audit_log(self):
+        from .models import AuditLog
+        skill = Skill.objects.create(name='Spanish')
+        self.client.post(reverse('skill_list'), {'action': 'retire', 'pk': skill.pk})
+        self.assertTrue(AuditLog.objects.filter(action='Retired skill').exists())
+
+    def test_restore_writes_audit_log(self):
+        from .models import AuditLog
+        skill = Skill.objects.create(name='Spanish', is_active=False)
+        self.client.post(reverse('skill_list'), {'action': 'restore', 'pk': skill.pk})
+        self.assertTrue(AuditLog.objects.filter(action='Restored skill').exists())
+
+    def test_rename_writes_audit_log(self):
+        from .models import AuditLog
+        skill = Skill.objects.create(name='Spanish')
+        self.client.post(reverse('skill_list'), {'action': 'edit', 'pk': skill.pk, 'name': 'Spanish Line', 'description': ''})
+        self.assertTrue(AuditLog.objects.filter(action='Renamed skill').exists())
+
+    def test_description_only_edit_writes_its_own_audit_log(self):
+        from .models import AuditLog
+        skill = Skill.objects.create(name='Spanish', description='old')
+        self.client.post(reverse('skill_list'), {'action': 'edit', 'pk': skill.pk, 'name': 'Spanish', 'description': 'new'})
+        self.assertTrue(AuditLog.objects.filter(action='Updated skill description').exists())
+
+    def test_edit_rejects_rename_into_a_name_missing_the_dollar_prefix(self):
+        Skill.objects.create(name='$ Only the BEST TIB')
+        other = Skill.objects.create(name='Spanish')
+        resp = self.client.post(reverse('skill_list'), {
+            'action': 'edit', 'pk': other.pk, 'name': 'Only the BEST TIB', 'description': '',
+        }, follow=True)
+        other.refresh_from_db()
+        self.assertEqual(other.name, 'Spanish')
+        msgs = [str(m) for m in resp.context['messages']]
+        self.assertIn('A skill named "$ Only the BEST TIB" already exists.', msgs)
+
+
+class SkillDedupeKeyTests(TestCase):
+    """Direct tests on the Five9-sort-prefix-aware duplicate comparison.
+    This normalization is used only to detect collisions — it never touches
+    what gets stored or displayed."""
+
+    def test_dollar_prefix_ignored_with_or_without_a_space(self):
+        from scheduling.views import _skill_dedupe_key
+        self.assertEqual(_skill_dedupe_key('$ Only the Best'), _skill_dedupe_key('Only the Best'))
+        self.assertEqual(_skill_dedupe_key('$Only the Best'), _skill_dedupe_key('Only the Best'))
+
+    def test_y_prefix_ignored_only_when_followed_by_a_space(self):
+        from scheduling.views import _skill_dedupe_key
+        self.assertEqual(_skill_dedupe_key('Y Overflow TIB'), _skill_dedupe_key('Overflow TIB'))
+        self.assertEqual(_skill_dedupe_key('y overflow tib'), _skill_dedupe_key('Overflow TIB'))
+        # "Youth..." is an ordinary word, not "Y" + a sort prefix — must NOT
+        # be stripped down to "outh...".
+        self.assertNotEqual(_skill_dedupe_key('Youth Injury Intake'), _skill_dedupe_key('outh Injury Intake'))
+        self.assertEqual(_skill_dedupe_key('Youth Injury Intake'), 'youth injury intake')
+
+    def test_case_and_whitespace_still_ignored_on_top_of_prefix_stripping(self):
+        from scheduling.views import _skill_dedupe_key
+        self.assertEqual(_skill_dedupe_key('  $ Only the BEST tib  '), _skill_dedupe_key('only the best TIB'))
+
+
+class SkillProtectionTests(TestCase):
+    """Skills can never be hard-deleted once they have history — enforced at
+    the database level via on_delete=PROTECT on AgentSkillChange.skill."""
+
+    def test_delete_blocked_once_history_exists(self):
+        from django.db.models import ProtectedError
+        agent = _make_agent('skillprotectee', role='agent', role_type='regular_agent')
+        skill = Skill.objects.create(name='Spanish')
+        AgentSkillChange.objects.create(agent=agent, skill=skill, action='added')
+        with self.assertRaises(ProtectedError):
+            skill.delete()
+
+
+def _agent_edit_payload(target, **overrides):
+    """Minimal valid AgentForm/AgentUserForm payload for editing `target`.
+    Matches the shape already proven to work in AgentFormAutoCodeGatingTests —
+    fields not listed here are optional/blank=True and are fine omitted."""
+    payload = {
+        'username': target.user.username,
+        'email': target.user.email or f'{target.user.username}@example.com',
+        'legal_name': target.agent_name or 'Test Agent',
+        'password': '',
+        'agent_name': target.agent_name or 'Test Agent',
+        'employee_id': '',
+        'role': target.role,
+        'role_type': target.role_type,
+        'status': 'active',
+        'employer': 'Infinity',
+        'billing_status': 'Not Billed',
+        'phone_country_code': '+1',
+        'phone_number': '',
+        'teams_password': '',
+        'hourly_rate': '62.50',
+        'billing_rate_usd': '',
+        'admin_bonus_mxn': '',
+        'notes': '',
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _agent_create_payload(username, **overrides):
+    payload = {
+        'username': username,
+        'email': f'{username}@example.com',
+        'legal_name': 'Test Agent',
+        'password': 'testpass123',
+        'agent_name': 'Test Agent',
+        'employee_id': '',
+        'role': 'agent',
+        'role_type': 'regular_agent',
+        'status': 'active',
+        'employer': 'Infinity',
+        'billing_status': 'Not Billed',
+        'phone_country_code': '+1',
+        'phone_number': '',
+        'teams_password': '',
+        'hourly_rate': '62.50',
+        'billing_rate_usd': '',
+        'admin_bonus_mxn': '',
+        'notes': '',
+    }
+    payload.update(overrides)
+    return payload
+
+
+class SkillAssignmentNotGatedTests(TestCase):
+    """Assigning/removing skills on the Edit User form is deliberately NOT
+    super-admin-gated (unlike creating/renaming/retiring skills) — any staff
+    admin can do it, on both agent_create and agent_edit."""
+
+    def setUp(self):
+        # A plain, non-super-admin staff account — proves the gate is absent.
+        self.plain_staff = _make_agent('skillassignstaff', role_type='supervisor')
+        self.skill_a = Skill.objects.create(name='Skill A')
+        self.skill_b = Skill.objects.create(name='Skill B')
+        self.client.login(username='skillassignstaff', password='pw')
+
+    def test_non_super_admin_assigns_skills_on_create(self):
+        payload = _agent_create_payload(
+            'newskillagent', skills=[str(self.skill_a.pk), str(self.skill_b.pk)]
+        )
+        resp = self.client.post(reverse('agent_create'), payload)
+        self.assertRedirects(resp, reverse('agent_list'))
+        agent = Agent.objects.get(user__username='newskillagent')
+        self.assertEqual(
+            set(agent.skills.values_list('name', flat=True)), {'Skill A', 'Skill B'}
+        )
+
+    def test_non_super_admin_assigns_skills_on_edit(self):
+        target = _make_agent('editskillagent', role='agent', role_type='regular_agent')
+        payload = _agent_edit_payload(target, skills=[str(self.skill_a.pk)])
+        resp = self.client.post(reverse('agent_edit', kwargs={'pk': target.pk}), payload)
+        self.assertRedirects(resp, reverse('agent_detail', kwargs={'pk': target.pk}))
+        target.refresh_from_db()
+        self.assertEqual(list(target.skills.values_list('name', flat=True)), ['Skill A'])
+
+    def test_non_super_admin_removes_a_skill_on_edit(self):
+        target = _make_agent('removeskillagent', role='agent', role_type='regular_agent')
+        target.skills.set([self.skill_a, self.skill_b])
+        payload = _agent_edit_payload(target, skills=[str(self.skill_a.pk)])
+        self.client.post(reverse('agent_edit', kwargs={'pk': target.pk}), payload)
+        target.refresh_from_db()
+        self.assertEqual(list(target.skills.values_list('name', flat=True)), ['Skill A'])
+
+
+class SkillAssignmentHistoryTests(TestCase):
+    """AgentSkillChange recording rules: added/removed rows with the right
+    changed_by, no rows for a no-op save, retired-skill preservation writes
+    no bogus history, and retiring a skill never touches assignments."""
+
+    def setUp(self):
+        self.staff = _make_agent('skillhiststaff', role_type='supervisor')
+        self.target = _make_agent('skillhisttarget', role='agent', role_type='regular_agent')
+        self.skill_a = Skill.objects.create(name='Skill A')
+        self.skill_b = Skill.objects.create(name='Skill B')
+        self.client.login(username='skillhiststaff', password='pw')
+
+    def test_adding_writes_added_row_with_correct_changed_by(self):
+        payload = _agent_edit_payload(self.target, skills=[str(self.skill_a.pk)])
+        self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        change = AgentSkillChange.objects.get(agent=self.target, skill=self.skill_a)
+        self.assertEqual(change.action, 'added')
+        self.assertEqual(change.changed_by, self.staff.user)
+
+    def test_removing_writes_removed_row(self):
+        self.target.skills.set([self.skill_a])
+        payload = _agent_edit_payload(self.target, skills=[])
+        self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        change = AgentSkillChange.objects.get(agent=self.target, skill=self.skill_a)
+        self.assertEqual(change.action, 'removed')
+        self.assertEqual(change.changed_by, self.staff.user)
+
+    def test_noop_save_writes_no_history_rows(self):
+        self.target.skills.set([self.skill_a])
+        payload = _agent_edit_payload(self.target, skills=[str(self.skill_a.pk)])
+        self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        self.assertEqual(AgentSkillChange.objects.filter(agent=self.target).count(), 0)
+
+    def test_retired_skill_survives_unrelated_edit_with_no_new_history(self):
+        retired = Skill.objects.create(name='Retired One', is_active=False)
+        self.target.skills.set([self.skill_a, retired])
+        # The picker only offers active skills, so a real form submission can
+        # only resubmit skill_a — retired is never in the POST at all.
+        payload = _agent_edit_payload(
+            self.target, notes='unrelated change to force a real save', skills=[str(self.skill_a.pk)]
+        )
+        self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        self.target.refresh_from_db()
+        self.assertEqual(
+            set(self.target.skills.values_list('name', flat=True)), {'Skill A', 'Retired One'}
+        )
+        self.assertEqual(AgentSkillChange.objects.filter(agent=self.target).count(), 0)
+
+    def test_retiring_a_skill_changes_no_assignments_and_writes_no_skill_history(self):
+        self.target.skills.set([self.skill_a])
+        super_admin = _make_agent('retiresuperadmin', role_type='supervisor')
+        super_admin.is_super_admin = True
+        super_admin.save(update_fields=['is_super_admin'])
+        self.client.logout()
+        self.client.login(username='retiresuperadmin', password='pw')
+        self.client.post(reverse('skill_list'), {'action': 'retire', 'pk': self.skill_a.pk})
+        self.skill_a.refresh_from_db()
+        self.assertFalse(self.skill_a.is_active)
+        self.assertEqual(list(self.target.skills.values_list('name', flat=True)), ['Skill A'])
+        self.assertEqual(AgentSkillChange.objects.filter(agent=self.target).count(), 0)
+
+
+class SkillFormQuerysetTests(TestCase):
+    """The Edit User picker offers active skills only, enforced by the form's
+    queryset — not just hidden in the template. A crafted POST naming a
+    retired skill's pk fails validation server-side, matching the same
+    'strip/reject, don't just hide' convention as USER_EXPORT_FINANCIAL and
+    the can_grant_admin_tabs fields."""
+
+    def setUp(self):
+        self.staff = _make_agent('queryteststaff', role_type='supervisor')
+        self.target = _make_agent('querytesttarget', role='agent', role_type='regular_agent')
+        self.active = Skill.objects.create(name='Active One')
+        self.retired = Skill.objects.create(name='Retired One', is_active=False)
+        self.client.login(username='queryteststaff', password='pw')
+
+    def test_picker_queryset_excludes_retired_skills(self):
+        from scheduling.forms import AgentForm
+        form = AgentForm(instance=self.target, can_grant_admin_tabs=False)
+        offered = set(form.fields['skills'].queryset.values_list('pk', flat=True))
+        self.assertIn(self.active.pk, offered)
+        self.assertNotIn(self.retired.pk, offered)
+
+    def test_crafted_post_naming_retired_skill_pk_is_rejected(self):
+        payload = _agent_edit_payload(
+            self.target, agent_name='Sneaky Rename', skills=[str(self.retired.pk)]
+        )
+        resp = self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        # The whole form fails validation — nothing saves, not just skills.
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('skills', resp.context['agent_form'].errors)
+        self.target.refresh_from_db()
+        self.assertNotEqual(self.target.agent_name, 'Sneaky Rename')
+        self.assertEqual(self.target.skills.count(), 0)
+
+
+class SkillHistoryDisplayTests(TestCase):
+    """Skill changes render on /agents/<pk>/history/ and log to the
+    Activity Log via the existing log_action helper."""
+
+    def setUp(self):
+        self.staff = _make_agent('skilldisplaystaff', role_type='supervisor')
+        self.target = _make_agent('skilldisplaytarget', role='agent', role_type='regular_agent')
+        self.skill = Skill.objects.create(name='Displayed Skill')
+        self.client.login(username='skilldisplaystaff', password='pw')
+
+    def test_history_rows_render_on_agent_history_page(self):
+        payload = _agent_edit_payload(self.target, skills=[str(self.skill.pk)])
+        self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        resp = self.client.get(reverse('agent_history', kwargs={'pk': self.target.pk}))
+        self.assertContains(resp, 'Skills History')
+        self.assertContains(resp, 'Displayed Skill')
+        self.assertContains(resp, 'Added')
+        self.assertEqual(len(resp.context['skill_history']), 1)
+
+    def test_updated_agent_skills_activity_log_row_is_written(self):
+        from .models import AuditLog
+        payload = _agent_edit_payload(self.target, skills=[str(self.skill.pk)])
+        self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        log = AuditLog.objects.get(action='Updated agent skills', agent=self.target)
+        self.assertIn('Displayed Skill', log.detail)
+        self.assertEqual(log.user, self.staff.user)
+
+
+class AgentEditSkillsCommitPinTests(TestCase):
+    """Pins agent_edit's commit=False + explicit _sync_agent_skills call as
+    the only path that may write Agent.skills.
+
+    Empirically verified before writing this test (then reverted): reverting
+    agent_edit to the default `agent_form.save()` (commit=True) does NOT
+    change the final observable skills state or the AgentSkillChange rows
+    written, because _sync_agent_skills always recomputes the final skill
+    set from form.cleaned_data and the `before` set captured earlier in the
+    view — never from whatever Django's own automatic M2M save left in the
+    database — and unconditionally overwrites it via .set(). So this is not
+    a test that a wrong final state would be produced; it is a test that
+    Django's automatic M2M save (BaseModelForm._save_m2m, which commit=True
+    triggers internally) never runs at all, keeping _sync_agent_skills as
+    the single, sole writer of this table rather than two writers that
+    happen to agree today. A future change to _sync_agent_skills that reads
+    live DB state instead of the explicit `before` set would silently start
+    disagreeing with a reintroduced commit=True — this test is what would
+    catch that combination early, before it could happen.
+    """
+
+    def setUp(self):
+        self.staff = _make_agent('commitpinstaff', role_type='supervisor')
+        self.target = _make_agent('commitpintarget', role='agent', role_type='regular_agent')
+        self.client.login(username='commitpinstaff', password='pw')
+
+    def test_agent_edit_never_triggers_djangos_automatic_m2m_save(self):
+        from unittest import mock
+        payload = _agent_edit_payload(self.target, notes='trigger a real save')
+        with mock.patch('django.forms.models.BaseModelForm._save_m2m') as mocked:
+            self.client.post(reverse('agent_edit', kwargs={'pk': self.target.pk}), payload)
+        mocked.assert_not_called()
+
+
+class SkillInfoIconRenderingTests(TestCase):
+    """The (i) mark on the agent detail page appears only for a skill that
+    has a description; a skill without one renders completely unchanged."""
+
+    def setUp(self):
+        self.staff = _make_agent('infoiconstaff', role_type='supervisor')
+        self.target = _make_agent('infoicontarget', role='agent', role_type='regular_agent')
+        self.described = Skill.objects.create(
+            name='Described Skill', description='Explains what this skill is for.'
+        )
+        self.plain = Skill.objects.create(name='Plain Skill')
+        self.target.skills.set([self.described, self.plain])
+        self.client.login(username='infoiconstaff', password='pw')
+
+    def test_info_mark_renders_only_for_described_skill(self):
+        import re
+        resp = self.client.get(reverse('agent_detail', kwargs={'pk': self.target.pk}))
+        content = resp.content.decode()
+        described_span = re.search(r'<span class="badge[^>]*>Described Skill.*?</span>\s*</span>', content).group(0)
+        plain_span = re.search(r'<span class="badge[^"]*"\s*>Plain Skill</span>', content).group(0)
+        self.assertIn('&#9432;', described_span)
+        self.assertIn('title="Explains what this skill is for."', described_span)
+        self.assertIn('cursor:help', described_span)
+        self.assertNotIn('&#9432;', plain_span)
+        self.assertNotIn('cursor:help', plain_span)
+
+    def test_info_mark_absent_when_no_skill_has_a_description(self):
+        self.described.description = ''
+        self.described.save(update_fields=['description'])
+        resp = self.client.get(reverse('agent_detail', kwargs={'pk': self.target.pk}))
+        self.assertNotContains(resp, '&#9432;')

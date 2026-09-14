@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Agent, Shift
+from .models import Agent, Shift, Skill
 
 
 class AgentUserForm(forms.ModelForm):
@@ -42,6 +42,12 @@ class AgentForm(forms.ModelForm):
         self.fields['supervisor'].queryset = Agent.objects.filter(
             role_type__in=('supervisor', 'coordinator')
         ).select_related('user').order_by('user__last_name', 'user__first_name')
+        # Deliberately NOT gated by can_grant_admin_tabs — any staff admin may
+        # assign or remove skills, unlike creating/renaming/retiring them
+        # (super-admin only, enforced in scheduling.views.skill_list). Only
+        # non-retired skills are offered; a retired skill an agent already
+        # holds is preserved by _sync_agent_skills, not by this queryset.
+        self.fields['skills'].queryset = Skill.objects.filter(is_active=True)
         if not can_grant_admin_tabs:
             self.fields.pop('can_access_admin_tabs', None)
             self.fields.pop('can_manage_loans', None)
@@ -64,12 +70,13 @@ class AgentForm(forms.ModelForm):
             'teams_password', 'hourly_rate', 'billing_rate_usd',
             'is_official_admin', 'admin_bonus_mxn', 'adherence_bonus_max_mxn', 'is_super_admin',
             'can_access_admin_tabs', 'can_manage_loans', 'can_auto_code_requests',
-            'adherence_start_date', 'notes',
+            'adherence_start_date', 'skills', 'notes',
         ]
         widgets = {
             'teams_password': forms.PasswordInput(render_value=True),
             'notes': forms.Textarea(attrs={'rows': 4}),
             'adherence_start_date': forms.DateInput(attrs={'type': 'date'}),
+            'skills': forms.CheckboxSelectMultiple,
         }
         labels = {
             'agent_name': 'Agent Name',

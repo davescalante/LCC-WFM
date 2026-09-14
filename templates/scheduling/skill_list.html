@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+{% block title %} - Skills{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h1 style="margin:0;">Skills</h1>
+    <a href="{% url 'agent_list' %}" class="btn" style="background:#888;color:white;">&#8592; Users</a>
+</div>
+
+{% if messages %}{% for msg in messages %}<div class="alert {% if 'error' in msg.tags %}alert-error{% elif 'warning' in msg.tags %}alert-warning{% endif %}">{{ msg }}</div>{% endfor %}{% endif %}
+
+<div class="card" style="padding:10px 16px;margin-bottom:16px;background:#f0f7ff;">
+    <p style="margin:0;font-size:13px;color:#334;">Skill names should match Five9 exactly (e.g. "Only the Best", "Answer Now Only the Best"). Retiring a skill removes it from the Edit User picker for future assignment — it does not remove it from any agent who already has it, and it can never be deleted. The ID stays fixed for a skill's lifetime even if it's later renamed.</p>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>Add a skill</h2>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create">
+            <label>Skill name</label>
+            <input type="text" name="name" placeholder="e.g. Only the Best" required>
+            <label>Description <span style="font-weight:400;color:#999;">(optional)</span></label>
+            <textarea name="description" rows="2" placeholder="What this skill is for and which calls route to it"></textarea>
+            <button type="submit" class="btn btn-primary" style="margin-top:10px;">Save skill</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>Active skills</h2>
+        {% if active_skills %}
+        <table style="width:100%;font-size:13px;">
+            <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Agents</th><th></th></tr></thead>
+            <tbody>
+            {% for s in active_skills %}
+            <tr>
+                <td style="color:#999;font-variant-numeric:tabular-nums;">{{ s.pk }}</td>
+                <td style="font-weight:600;">
+                    {{ s.name }}
+                    {% if s.rename_history.all %}
+                    <span class="badge" style="background:#eef2ff;color:#4338ca;cursor:help;margin-left:4px;font-size:10px;font-weight:600;"
+                        title="Previously named:&#10;{% for h in s.rename_history.all %}{{ h.old_name }} → {{ h.new_name }} ({{ h.changed_at|date:'M j, Y' }}, by {{ h.changed_by.get_full_name|default:h.changed_by.username|default:"—" }}){% if not forloop.last %}&#10;{% endif %}{% endfor %}">renamed</span>
+                    {% endif %}
+                </td>
+                <td style="color:#666;max-width:260px;">{{ s.description|default:"—" }}</td>
+                <td style="color:#666;">{{ s.agent_count }}</td>
+                <td style="text-align:right;white-space:nowrap;">
+                    <button type="button" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;"
+                        data-skill-pk="{{ s.pk }}" data-skill-name="{{ s.name }}" data-skill-description="{{ s.description }}"
+                        onclick="openEdit(this)">Edit</button>
+                    <form method="post" style="display:inline;" onsubmit="return confirm('Retire &quot;{{ s.name|escapejs }}&quot;? It will disappear from the Edit User picker but stay assigned to any agent who already has it.');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="retire">
+                        <input type="hidden" name="pk" value="{{ s.pk }}">
+                        <button type="submit" class="btn btn-danger" style="padding:3px 10px;font-size:12px;">Retire</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:#888;font-size:13px;">No skills defined yet.</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card" style="margin-top:16px;">
+    <h2>Retired skills</h2>
+    {% if retired_skills %}
+    <table style="width:100%;font-size:13px;">
+        <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Agents</th><th></th></tr></thead>
+        <tbody>
+        {% for s in retired_skills %}
+        <tr>
+            <td style="color:#999;font-variant-numeric:tabular-nums;">{{ s.pk }}</td>
+            <td><span class="badge" style="background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;">{{ s.name }}</span></td>
+            <td style="color:#999;max-width:260px;">{{ s.description|default:"—" }}</td>
+            <td style="color:#666;">{{ s.agent_count }}</td>
+            <td style="text-align:right;">
+                <form method="post" style="display:inline;" onsubmit="return confirm('Restore &quot;{{ s.name|escapejs }}&quot;? It will reappear in the Edit User picker.');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="restore">
+                    <input type="hidden" name="pk" value="{{ s.pk }}">
+                    <button type="submit" class="btn btn-cancel" style="padding:3px 10px;font-size:12px;">Restore</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:#888;font-size:13px;">No retired skills.</p>
+    {% endif %}
+</div>
+
+<!-- Edit modal (rename + description) -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:10px;max-width:440px;width:92%;padding:22px 24px;box-shadow:0 10px 40px rgba(0,0,0,.25);">
+        <h2 style="margin:0 0 14px;font-size:18px;color:#1a3a5c;">Edit Skill</h2>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="pk" id="edit-pk">
+            <label>Skill name</label>
+            <input type="text" name="name" id="edit-name" required>
+            <label>Description <span style="font-weight:400;color:#999;">(optional)</span></label>
+            <textarea name="description" id="edit-description" rows="2"></textarea>
+            <p style="margin:-6px 0 10px;font-size:12px;color:#6b7280;">Renaming keeps a permanent record of the old name — nothing else about the skill changes.</p>
+            <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:10px;">
+                <button type="button" class="btn" style="background:#e5e7eb;color:#374151;" onclick="document.getElementById('edit-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEdit(btn) {
+    document.getElementById('edit-pk').value = btn.dataset.skillPk;
+    document.getElementById('edit-name').value = btn.dataset.skillName;
+    document.getElementById('edit-description').value = btn.dataset.skillDescription;
+    document.getElementById('edit-modal').style.display = 'flex';
+}
+</script>
+
+{% endblock %}

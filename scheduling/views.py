@@ -10,7 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateformat import format as date_format
 from django.views.decorators.http import require_POST
-from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, OpenOTShift, OTShiftClaimRequest, OTCancellationRequest, log_action
+from .models import Agent, Shift, ShiftBlock, EmploymentPeriod, Five9Profile, ShiftTemplate, ShiftTemplateBlock, OvertimeShift, RoleHistory, ScheduledRoleChange, LoginLogoutUpload, AgentLoginSession, OTShiftVerification, AgentRequest, AgentSeparation, OpenOTShift, OTShiftClaimRequest, OTCancellationRequest, Skill, AgentSkillChange, SkillRenameHistory, log_action
 from .forms import AgentUserForm, AgentForm, ShiftForm
 from wfm.utils import get_monday_choices
 
@@ -486,6 +486,39 @@ def _save_five9_profiles(request, agent):
         i += 1
 
 
+def _sync_agent_skills(request, agent, form, before):
+    """Apply the skills picked on the Edit User form and record every change.
+
+    This is the ONLY path that may change agent.skills. A direct .add()/
+    .remove()/.set() on the M2M writes no AgentSkillChange record and no
+    Activity Log entry — the same rule as never calling Coding.objects.create()
+    directly (see adherence.views.create_coding).
+
+    `before` is the set of Skill objects the agent held before this save.
+    The form's queryset offers active skills only, so a retired skill the
+    agent already holds would otherwise be silently dropped on save — it is
+    re-attached here instead, and because it's always re-attached it can
+    never appear in `removed`, so retiring a skill never writes a history row.
+    """
+    chosen = set(form.cleaned_data.get('skills') or [])
+    after = chosen | {s for s in before if not s.is_active}
+    agent.skills.set(after)
+    added = sorted(after - before, key=lambda s: s.name)
+    removed = sorted(before - after, key=lambda s: s.name)
+    if not added and not removed:
+        return
+    AgentSkillChange.objects.bulk_create(
+        [AgentSkillChange(agent=agent, skill=s, action='added', changed_by=request.user) for s in added]
+        + [AgentSkillChange(agent=agent, skill=s, action='removed', changed_by=request.user) for s in removed]
+    )
+    parts = []
+    if added:
+        parts.append('added ' + ', '.join(s.name for s in added))
+    if removed:
+        parts.append('removed ' + ', '.join(s.name for s in removed))
+    log_action(request.user, 'Updated agent skills', f'{agent} — ' + '; '.join(parts), agent=agent)
+
+
 @login_required
 def agent_create(request):
     user_form = AgentUserForm(request.POST or None)
@@ -503,6 +536,7 @@ def agent_create(request):
             agent = agent_form.save(commit=False)
             agent.user = user
             agent.save()
+            _sync_agent_skills(request, agent, agent_form, set())
             from django.utils import timezone as _tz
             RoleHistory.objects.create(
                 agent=agent,
@@ -575,7 +609,16 @@ def agent_edit(request, pk):
                     'employer': agent.employer, 'billing_status': agent.billing_status,
                     'agent_name': agent.agent_name,
                 }
-                agent = agent_form.save()
+                # skills is Agent's only M2M field. agent_form.save() with the
+                # default commit=True would call Django's own save_m2m() and
+                # silently overwrite agent.skills from cleaned_data, bypassing
+                # _sync_agent_skills entirely (no history row, no Activity Log
+                # entry, and a retired-but-assigned skill would be dropped) —
+                # so this saves the instance only and skills goes exclusively
+                # through _sync_agent_skills below, same as agent_create.
+                _old_skills = set(agent.skills.all())
+                agent = agent_form.save(commit=False)
+                agent.save()
                 # Record role history if tracked fields changed
                 _new = {
                     'role': agent.role, 'role_type': agent.role_type,
@@ -640,6 +683,7 @@ def agent_edit(request, pk):
                     i += 1
 
                 _save_five9_profiles(request, agent)
+                _sync_agent_skills(request, agent, agent_form, _old_skills)
             # Build detailed change description
             _change_parts = []
             _new_user = {
@@ -2747,6 +2791,9 @@ def agent_history(request, pk):
         )
         role_history = list(agent.role_history.select_related('supervisor__user', 'changed_by').all())
 
+    # Skills history — permanent, not date-range filtered (rare, low-volume record)
+    skill_history = list(agent.skill_changes.select_related('skill', 'changed_by').all())
+
     # Schedule history: ShiftTemplates grouped by effective_from
     from collections import defaultdict, OrderedDict
     templates = list(ShiftTemplate.objects.filter(agent=agent).order_by('-effective_from', 'day_of_week'))
@@ -2862,6 +2909,7 @@ def agent_history(request, pk):
     return render(request, 'scheduling/agent_history.html', {
         'agent': agent,
         'role_history': role_history,
+        'skill_history': skill_history,
         'schedule_history': schedule_history,
         'attendance_weeks': attendance_weeks,
         'codings': codings_qs,
@@ -2871,6 +2919,117 @@ def agent_history(request, pk):
         'five_years_ago': five_years_ago,
         'today': today,
         'days_abbr': DAYS_ABBR,
+    })
+
+
+# ── Skills ─────────────────────────────────────────────────────────────────────
+
+def _skill_dedupe_key(name):
+    """Normalize a skill name for duplicate comparison ONLY — never used for
+    storage or display, which always keep the exact typed string.
+
+    Five9 uses two leading sort-order prefixes that are not part of a skill's
+    real identity: "$" forces a skill to the top of its alphabetical list,
+    "Y " (the letter followed by a space) forces it to the bottom. Both are
+    ignored here, on top of the existing case-insensitive/whitespace-trimmed
+    comparison. A "Y" that begins an ordinary word (e.g. "Youth Injury
+    Intake") is left alone — only "Y" followed by whitespace is a prefix.
+    """
+    import re
+    s = name.strip()
+    if s.startswith('$'):
+        s = s[1:].lstrip()
+    s = re.sub(r'^[Yy]\s+', '', s)
+    return s.strip().casefold()
+
+
+def _find_skill_collision(name, exclude_pk=None):
+    """Return the existing Skill `name` collides with under _skill_dedupe_key,
+    or None. Small roster → compare in Python rather than express the prefix
+    stripping as a SQL filter."""
+    target = _skill_dedupe_key(name)
+    if not target:
+        return None
+    qs = Skill.objects.all()
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    for s in qs:
+        if _skill_dedupe_key(s.name) == target:
+            return s
+    return None
+
+
+@login_required
+def skill_list(request):
+    from django.db.models import Count
+
+    # getattr, not request.has_finance_access: AgentAccessMiddleware swallows its own
+    # exceptions, so the attribute can be missing. Fail closed — deny, never raise.
+    if not (request.user.is_superuser or getattr(request, 'has_finance_access', False)):
+        messages.error(request, "Access denied.")
+        return redirect('dashboard')
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        if action == 'create':
+            name = request.POST.get('name', '').strip()
+            description = request.POST.get('description', '').strip()
+            existing = _find_skill_collision(name) if name else None
+            if not name:
+                messages.error(request, "Enter a skill name.")
+            elif existing:
+                messages.error(request, f'A skill named "{existing.name}" already exists.')
+            else:
+                Skill.objects.create(name=name, description=description)
+                log_action(request.user, 'Created skill', f'Created "{name}"')
+                messages.success(request, f'Skill "{name}" created.')
+        elif action == 'edit':
+            # Renaming and editing the description share one modal/action. A
+            # permanent SkillRenameHistory row is written only when the name
+            # actually changed — description-only edits are not history-tracked,
+            # matching what item 5 asked to make permanent (renames) vs. not.
+            skill = get_object_or_404(Skill, pk=request.POST.get('pk'))
+            name = request.POST.get('name', '').strip()
+            description = request.POST.get('description', '').strip()
+            existing = _find_skill_collision(name, exclude_pk=skill.pk) if name else None
+            if not name:
+                messages.error(request, "Enter a skill name.")
+            elif existing:
+                messages.error(request, f'A skill named "{existing.name}" already exists.')
+            else:
+                old_name = skill.name
+                name_changed = (old_name != name)
+                desc_changed = (skill.description != description)
+                skill.name = name
+                skill.description = description
+                skill.save(update_fields=['name', 'description'])
+                if name_changed:
+                    SkillRenameHistory.objects.create(
+                        skill=skill, old_name=old_name, new_name=name, changed_by=request.user
+                    )
+                    log_action(request.user, 'Renamed skill', f'{old_name} → {name}')
+                elif desc_changed:
+                    log_action(request.user, 'Updated skill description', f'"{skill.name}"')
+                messages.success(request, f'Skill "{skill.name}" saved.')
+        elif action == 'retire':
+            skill = get_object_or_404(Skill, pk=request.POST.get('pk'))
+            skill.is_active = False
+            skill.save(update_fields=['is_active'])
+            log_action(request.user, 'Retired skill', f'Retired "{skill.name}"')
+            messages.success(request, f'Skill "{skill.name}" retired.')
+        elif action == 'restore':
+            skill = get_object_or_404(Skill, pk=request.POST.get('pk'))
+            skill.is_active = True
+            skill.save(update_fields=['is_active'])
+            log_action(request.user, 'Restored skill', f'Restored "{skill.name}"')
+            messages.success(request, f'Skill "{skill.name}" restored.')
+        return redirect('skill_list')
+
+    skills = Skill.objects.annotate(agent_count=Count('agents')) \
+        .prefetch_related('rename_history__changed_by').order_by('name')
+    return render(request, 'scheduling/skill_list.html', {
+        'active_skills': [s for s in skills if s.is_active],
+        'retired_skills': [s for s in skills if not s.is_active],
     })
 
 

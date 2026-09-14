@@ -73,6 +73,11 @@ class Agent(models.Model):
     can_manage_loans = models.BooleanField(default=False, help_text="Access to the Nómina Loans module — add loans and mark repayments; super admins always have access")
     can_auto_code_requests = models.BooleanField(default=False, help_text="Approving this agent's coding request automatically creates the coding — bypasses manual entry on the Codings tab")
     notes = models.TextField(blank=True)
+    # Never call .add()/.remove()/.set() on this directly — go through
+    # scheduling.views._sync_agent_skills, the only path that also writes the
+    # AgentSkillChange record and Activity Log entry a direct M2M write skips.
+    # Same rule as never calling Coding.objects.create() directly (see create_coding).
+    skills = models.ManyToManyField('Skill', blank=True, related_name='agents')
 
     @property
     def separation(self):
@@ -534,6 +539,72 @@ class RoleHistory(models.Model):
     def __str__(self):
         to = self.effective_to.strftime('%b %d, %Y') if self.effective_to else 'Present'
         return f"{self.agent} — {self.role} from {self.effective_from.strftime('%b %d, %Y')} to {to}"
+
+
+class Skill(models.Model):
+    """A named Five9 skill. Free text so the name can match Five9 exactly (e.g.
+    "Only the Best", "Answer Now Only the Best"). Skills are never hard-deleted —
+    retiring (is_active=False) hides a skill from assignment and future filters
+    without touching any existing agent's assignment or history.
+
+    The name can change (Five9 renames skills over time); every record that
+    references a skill does so via this row's primary key (see AgentSkillChange
+    and SkillRenameHistory below), so a rename never disconnects existing history —
+    it only changes what `name` currently reads."""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, help_text="What this skill is for and which calls route to it")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class SkillRenameHistory(models.Model):
+    """Permanent record of a skill being renamed. Written only by
+    scheduling.views.skill_list's 'edit' action. Rows are never rewritten or
+    deleted. Same shape as AgentSkillChange/RoleHistory: the row that changed,
+    the before/after values, who did it, and when."""
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name='rename_history')
+    old_name = models.CharField(max_length=100)
+    new_name = models.CharField(max_length=100)
+    changed_by = models.ForeignKey(
+        'auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-changed_at']
+
+    def __str__(self):
+        return f'{self.old_name} → {self.new_name} on {self.changed_at.strftime("%b %d, %Y")}'
+
+
+class AgentSkillChange(models.Model):
+    """Permanent record of a skill being added to or removed from an agent.
+    Written only by scheduling.views._sync_agent_skills — see the comment on
+    Agent.skills. Rows are never rewritten or deleted, including when the
+    skill is later retired (on_delete=PROTECT on `skill` enforces this)."""
+    ACTION_CHOICES = [
+        ('added', 'Added'),
+        ('removed', 'Removed'),
+    ]
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='skill_changes')
+    skill = models.ForeignKey(Skill, on_delete=models.PROTECT, related_name='+')
+    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+    changed_by = models.ForeignKey(
+        'auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-changed_at']
+
+    def __str__(self):
+        return f"{self.agent} — {self.action} {self.skill} on {self.changed_at.strftime('%b %d, %Y')}"
 
 
 class AgentRequest(models.Model):
