@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **675**. The tests are the regression gate and double as executable specs for the
+Currently **703**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Three read-only management commands exist for diagnosis; none is reachable from a request
@@ -395,6 +395,8 @@ Full map in `SYSTEM-SUMMARY.md` §13.
 Skills (Phase 1, `c902cfc`, migration `0054`) — `Skill`, `Agent.skills` (M2M), `AgentSkillChange`
 (permanent add/remove history), `SkillRenameHistory` (permanent rename history) in
 `scheduling/models.py`. Management page at `/skills/`; assignment happens on the Edit User form.
+Phase 2 (`03cb7fa`) added a Filters panel to the Adherence tab, beside the existing supervisor
+dropdown, that narrows the grid by skill.
 
 - **`_sync_agent_skills` in `scheduling/views.py` is the single write path for `Agent.skills`.**
   A direct `.add()`/`.remove()`/`.set()` anywhere else writes no `AgentSkillChange` row and no
@@ -430,6 +432,56 @@ Skills (Phase 1, `c902cfc`, migration `0054`) — `Skill`, `Agent.skills` (M2M),
 - **Known limitation, decided deliberately: Skills has no history of who held a skill on a past
   date.** `AgentSkillChange` records *when* a skill was added or removed, but no screen
   reconstructs a past week's roster for a skill — there is no "who had Skill X on date Y" view.
+- **The Adherence tab's skill filter (Phase 2, `03cb7fa`) narrows AFTER `_get_adherence_agent_pks`
+  resolves — in `_apply_skill_filter`, the same display layer as `_apply_supervisor_filter` — and
+  it must never move into the roster query.** Filtering is AND ("holds all selected skills"), not
+  OR, and it stacks with the supervisor filter. The natural way to write "holds all" is one
+  `.filter(skills__id=...)` per skill chained onto the caller's queryset, but that needs
+  `.distinct()` to collapse the joins, and DISTINCT combined with that queryset's ordering on
+  related fields (`supervisor__user__last_name`, ...) is the exact PostgreSQL failure
+  `_get_adherence_agent_pks`'s own docstring already warns about (see the roster landmine above).
+  `_apply_skill_filter` sidesteps it by building the AND on a separate, unordered `Agent`
+  queryset and narrowing the caller's queryset with `pk__in` instead — no join, so the ordering
+  survives untouched. `AdherenceSkillFilterTests.test_roster_pks_identical_with_and_without_a_skill_filter`
+  pins that `_get_adherence_agent_pks` returns an identical pk set whether or not a skill filter is
+  active. `adherence_week`'s POST branch (the one that writes `AdherenceRecord` rows) is
+  deliberately NOT narrowed by it — a display filter must never change which agents a write path
+  visits.
+- **Only active skills are offered in the Filters panel, and a retired id sitting in someone's
+  session is dropped on read and the reconciled list written back.** Without that, a skill retired
+  while it was selected in someone's session would keep narrowing their grid forever — no
+  checkbox, no pill, no visible cause, surviving every week change — instead of simply stopping.
+- **A bad `skills=` value is skipped, never raised.** `_get_skill_filter` swallows a non-numeric or
+  unknown skill id rather than throwing, because an exception inside `adherence_rows_fragment`
+  marks every supervisor group as failed on screen, not just the one bad value.
+- **Removing the last skill pill emits an explicit empty `skills=` sentinel, not an absent
+  param.** The view's fallback for "no `skills` param at all" is the session's stored filter, so
+  clearing the last pill has to say "empty" out loud (`skills=`) or the old filter would silently
+  reassert itself from the session on the very next load.
+- **A supervisor group whose whole team lacks the selected skill(s) disappears entirely, header
+  included — this is intended, and it is NOT the same as a group that failed to load.** A failed
+  group always renders its own marker row with a Retry link (pre-existing, untouched by this
+  work); an empty-because-filtered group renders nothing at all. The "no agents match" message
+  itself only ever comes from the full-table request or from the progressive loader noticing every
+  group loaded (none failed) and nothing matched.
+- **The skill filter's session key (`adh_skill_filter`) is Adherence-only, deliberately not shared
+  with `supervisor_filter`'s session key**, which several other pages reuse on purpose so one
+  supervisor choice follows the user between tabs. Sharing the skill key would let a skill picked
+  on Adherence silently narrow Codings, Daily Hours or Payroll too.
+- **Measured cost: the skill filter adds exactly 2 queries when active (one to validate the
+  requested ids against active skills, one to resolve the AND into a pk set), and 0 when not** —
+  flat in both the number of skills selected and the size of the roster.
+  `AdherenceSkillFilterTests` pins all three (unfiltered tab runs no skill queries at all; query
+  count doesn't grow with more skills selected; doesn't grow with more agents on the roster).
+- **Pre-existing issue found during this work, deliberately NOT fixed: the Adherence tab's
+  30-second poll never establishes a baseline on a week with zero `AdherenceRecord`/`Coding`
+  activity.** `adherence_poll` returns `latest: null` for such a week; the client's `_startPoll` only
+  compares once `_adhLastTimestamp` is non-null, so on an empty week it keeps re-arming the
+  "establish baseline" branch every tick instead of ever comparing — the first piece of activity
+  that actually populates the week is the one the poll silently misses (later changes poll
+  normally, since the timestamp is non-null after that). This affects the unfiltered tab and the
+  supervisor filter identically, predates the Skills work, and is unrelated to the skill filter
+  itself.
 
 ## Conventions
 

@@ -13,7 +13,7 @@
 - **Key deps** (`requirements.txt`): Django 4.2.30, gunicorn 23, whitenoise 6.11, psycopg2-binary, dj-database-url, openpyxl 3.1.5 (all Excel exports).
 - **Frontend**: server-rendered Django templates, inline CSS, vanilla JS. No SPA framework, no build step. Small AJAX/JSON endpoints handle in-place updates (status pills, cell edits, live-poll badges via `/poll/` and `/adherence/poll/`).
 - **Auth**: stock `django.contrib.auth`, login at `/accounts/login/`. Custom `SessionTimeoutMiddleware` (4h inactivity / 16h absolute) and `AgentAccessMiddleware` (role-based routing + badge counts) in `wfm/middleware.py`.
-- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 675/675 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
+- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 703/703 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 - **Diagnostics**: three read-only management commands, none reachable from a request path and none writing anything — `verify_adherence_roster` (roster pk-set parity, `--weeks` default 8, exits 1 on a mismatch), `verify_ot_topups` (OT incentive top-up parity — the frozen pre-dedupe plain-`+=` summation against the current deduped one, `--weeks` default 12, exits 1 on any difference) and `schedule_data_inventory` (row counts, date ranges, future-dated counts for the schedule/adherence tables, plus exact-duplicate OT slots, their priced money exposure per week, and the write path that created them). See §10's `e2509eb` (roster parity), `1874540`/`370a2de` (OT top-up parity) and `6877c40`/`ccb64cf` (data inventory, including the OT-duplicate sections) — cited by hash now, since two rounds of ordinal renumbering had already broken this reference when it pointed at items by number.
 - **URL mounts** (`wfm/urls.py`): scheduling at site root (duplicated at `/scheduling/`), `/adherence/`, `/erlang/`, `/finance/`, plus `admin-codings/` and `admin-adherence/` mounted directly off the **root** urlconf (not under `/finance/` — see §4), Django admin at `/admin/`, auth at `/accounts/`.
 
@@ -827,3 +827,59 @@ the skill's own pk on Edit.
 **Known limitation, decided deliberately: there is no reconstruction of a past roster.** The
 history records *when* a skill was added or removed for an agent, but no screen answers "who held
 Skill X on date Y" — only the sequence of change events exists.
+
+### 14.6 Phase 2 (`03cb7fa`): filtering the Adherence tab by skill
+
+Adds a **Filters panel** to the Adherence tab (`templates/adherence/dashboard.html`), reached from
+a "Filters" button next to the existing supervisor dropdown. Built as a generic panel — one
+titled section per filter, one pill per active filter — so a future filter added to the panel
+needs no template redesign; today it holds only the Skill section.
+
+- **Semantics**: AND, not OR — an agent must hold *every* selected skill to show
+  (`adherence.views._apply_skill_filter`). It stacks with the supervisor filter (intersection of
+  both).
+- **Read/write path**: `adherence.views._get_skill_filter(request)` reads `skills` from the GET
+  params (present-but-empty means "cleared"; absent means "fall back to session"), validates each
+  id against `Skill.objects.filter(is_active=True)`, drops anything that doesn't validate
+  (unknown pk, retired skill, non-numeric value), and writes the reconciled list back to
+  `request.session['adh_skill_filter']` — a key kept separate from `supervisor_filter`'s session
+  key so a skill choice on Adherence never leaks into Codings/Daily Hours/Payroll.
+- **Where the narrowing happens, and why it can't move**: `_apply_skill_filter` runs on the
+  already-resolved roster queryset, in the same place `_apply_supervisor_filter` narrows —
+  never inside `_get_adherence_agent_pks`. It builds the "holds all" AND on a separate, unordered
+  `Agent` queryset (one `.filter(skills__id=...)` per skill) and narrows the caller's queryset with
+  `pk__in` on the resulting pk set. The natural alternative — chaining those same filters directly
+  onto the caller's queryset — needs `.distinct()` to collapse the joins, and DISTINCT combined
+  with that queryset's ordering on related fields is the exact PostgreSQL failure
+  `_get_adherence_agent_pks`'s own docstring already warns about ("fails on PostgreSQL, works on
+  SQLite but not in production"); `pk__in` adds no join, so the ordering is untouched.
+  `AdherenceSkillFilterTests.test_roster_pks_identical_with_and_without_a_skill_filter` pins that
+  `_get_adherence_agent_pks` returns the identical pk set whether or not a skill filter is active.
+  `adherence_week`'s POST branch (writes `AdherenceRecord` rows) is deliberately not narrowed —
+  a display filter must not change which agents a write path visits.
+- **Failure handling**: a bad `skills` value is skipped, not raised — `adherence_rows_fragment`
+  runs inside a try whose except marks every supervisor group as failed on screen, so one bad
+  value must not take down the whole tab.
+- **Pills and the clear sentinel**: `_adherence_filter_pills` builds one removable pill per active
+  skill; `_adherence_filter_url` builds each pill's remove-link and the "Clear all" link. Removing
+  the last skill emits an explicit `skills=` (present, empty) rather than omitting the param —
+  otherwise the view would read "param absent" and fall back to the very session value the user
+  just tried to clear.
+- **Empty states, and how they stay distinguishable from a failure**: a full-table request with no
+  matches renders "No agents match the current filters." instead of "No active agents found."
+  (`filters_active` in the template context). A supervisor group whose whole team lacks the
+  selected skill(s) renders nothing at all — same as an empty group with no filter — which is what
+  keeps it distinguishable from a group that **failed** to load, since a failed group always
+  renders its own marker row with a Retry link (pre-existing, unchanged by this work). The
+  client-side "no agents match" message for the progressive (per-group) loader only fires once
+  every group has finished with zero failures and the table is still empty.
+- **Query cost, measured**: the filter adds exactly 2 queries when active (validating the
+  requested ids, then resolving the AND to a pk set) and 0 when not, regardless of how many skills
+  are selected or how large the roster is. `AdherenceSkillFilterTests` pins all three shapes.
+- **Pre-existing issue found during this work, not fixed**: the Adherence tab's 30-second poll
+  (`adherence_poll`, §4/§6) returns `latest: null` for a week with zero `AdherenceRecord`/`Coding`
+  rows. The client only compares once its local timestamp is non-null, so on such a week it keeps
+  re-arming the "establish baseline" branch every tick instead of comparing — the first activity
+  that populates the week is the one poll cycle it silently misses; every change after that polls
+  normally. Identical on the unfiltered tab and under the supervisor filter; predates Skills
+  entirely.
