@@ -13,7 +13,7 @@
 - **Key deps** (`requirements.txt`): Django 4.2.30, gunicorn 23, whitenoise 6.11, psycopg2-binary, dj-database-url, openpyxl 3.1.5 (all Excel exports).
 - **Frontend**: server-rendered Django templates, inline CSS, vanilla JS. No SPA framework, no build step. Small AJAX/JSON endpoints handle in-place updates (status pills, cell edits, live-poll badges via `/poll/` and `/adherence/poll/`).
 - **Auth**: stock `django.contrib.auth`, login at `/accounts/login/`. Custom `SessionTimeoutMiddleware` (4h inactivity / 16h absolute) and `AgentAccessMiddleware` (role-based routing + badge counts) in `wfm/middleware.py`.
-- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 618/618 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
+- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 675/675 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 - **Diagnostics**: three read-only management commands, none reachable from a request path and none writing anything — `verify_adherence_roster` (roster pk-set parity, `--weeks` default 8, exits 1 on a mismatch), `verify_ot_topups` (OT incentive top-up parity — the frozen pre-dedupe plain-`+=` summation against the current deduped one, `--weeks` default 12, exits 1 on any difference) and `schedule_data_inventory` (row counts, date ranges, future-dated counts for the schedule/adherence tables, plus exact-duplicate OT slots, their priced money exposure per week, and the write path that created them). See §10's `e2509eb` (roster parity), `1874540`/`370a2de` (OT top-up parity) and `6877c40`/`ccb64cf` (data inventory, including the OT-duplicate sections) — cited by hash now, since two rounds of ordinal renumbering had already broken this reference when it pointed at items by number.
 - **URL mounts** (`wfm/urls.py`): scheduling at site root (duplicated at `/scheduling/`), `/adherence/`, `/erlang/`, `/finance/`, plus `admin-codings/` and `admin-adherence/` mounted directly off the **root** urlconf (not under `/finance/` — see §4), Django admin at `/admin/`, auth at `/accounts/`.
 
@@ -67,6 +67,14 @@ Multiple Five9 logins per agent: `five9_username`/`five9_password`, `label`, `ro
 ### `AgentSeparation` (scheduling/models.py)
 `separation_type` (`quit`/`terminated`/`abandonment`/`contract_end`/`resigned_notice`), `status` (`in_progress`/`finalized`/`cancelled`), `last_day_worked`, `remove_from_adherence_date` (the week the agent stops appearing on Adherence/billing/payroll; must be a Monday, **enforced server-side** in `process_separation` and `update_separation` as of `d167897` via a server-rendered dropdown of labeled Mondays rather than a free date input — legacy rows written before `d167897` can still hold a non-Monday value and continue to load and save unchanged), audit fields (`processed_by`, `finalized_by`). Finalizing cascades: sets agent inactive, closes the `EmploymentPeriod`, cancels future OT/role-changes, auto-rejects pending requests, auto-codes the remainder of the last week (Quit/NCNS depending on type). No un-finalize flow exists.
 
+### `Skill` / `AgentSkillChange` / `SkillRenameHistory` (scheduling/models.py)
+`Skill` — a named Five9 skill (`name` unique, free text so it can match Five9 exactly), plus
+`description` and `is_active` (retiring sets this `False`; a skill is never hard-deleted).
+`Agent.skills` is a `ManyToManyField('Skill')`; every referencing row points at the skill's pk, so
+a rename never disconnects history. `AgentSkillChange` is a permanent add/removed record per
+agent/skill/change; `SkillRenameHistory` is a permanent old-name/new-name record. Migration `0054`.
+**Fully documented in §14.**
+
 ### `BillingSettings` / `BillingSettingsHistory` (finance/models.py)
 `BillingSettings` is a **singleton** (`BillingSettings.get()`) holding every rate: `billing_rate_usd` (15.00), `usd_to_mxn` (17.0), `nr_cap_regular_hours` (6.00), `nr_cap_kill_team_hours` (7.00), `default_admin_bonus_mxn` (500.00), `adherence_bonus_max_mxn` (400.00), `adherence_bonus_full_hours` (40.00), `nr_ratio` (0.1250), `default_tardy_hours` (0.25). Saving from Finance → Settings snapshots the current values into `BillingSettingsHistory` keyed by an effective Monday; `BillingSettings.get_for_week(week_start)` returns the most-recent snapshot at or before that week (falling back to the singleton), so historical weeks always recompute with the rates in force at the time.
 
@@ -82,6 +90,7 @@ Everyone has exactly one `User` + one `Agent`. Access is entirely by `role`/`rol
 |---|---|---|---|
 | Dashboard | `/` | Staff | `scheduling.views.dashboard` — pending requests, today's attendance tallies, missing-adherence agents |
 | Users | `/agents/` | Staff | `scheduling.views.agent_list` — add/edit/delete, detail page `/agents/<pk>/`, history `/agents/<pk>/history/`. Excel export via `?export=1` with a **column-picker popup** (see §7) |
+| Skills | `/skills/` | Super admins only | `scheduling.views.skill_list` — create/rename/retire/restore skills; no delete control anywhere. Assigning a skill to an agent happens on the Edit User form instead, and is **not** gated to super admins. See §14 |
 | Shifts | `/shifts/` , `/shifts/week/` | Staff | `shift_list`, `shift_week` — weekly grid + per-agent editor, templates/overrides/date-ranges |
 | OT Shifts | `/overtime/` , `/overtime/week/` | Staff | `overtime_list`/`overtime_week` — assigned OT grid, Open Shifts posting, claim/cancel approvals |
 | Available OT / My OT Shifts | `/agent/available-ot/`, `/agent/my-ot-shifts/` | Portal | Agent-side OT claim board + own OT list with cancel-request |
@@ -726,3 +735,95 @@ directly through `_build_maps` / `_scheduled_hours`, so holiday not-worked pay i
 - Change the `V` writers (request approval, `save_adherence_cell`, the bulk grid POST) → changes
   both the vacation balance and Agent Nómina vacation pay, since `'V'` rows are the only source of
   either.
+
+---
+
+## 14. Skills (Phase 1)
+
+Shipped `c902cfc`, migration `0054_skill_skillrenamehistory_agentskillchange_and_more`, entirely in
+`scheduling`. Lets a skill be created once, assigned to any number of agents, renamed without
+losing history, and retired without ever being deleted.
+
+### 14.1 Models
+
+- **`Skill`** (`scheduling/models.py`) — `name` (unique, free text, stored byte-for-byte as typed
+  so it can match a Five9 skill name exactly), `description` (optional), `is_active` (default
+  `True`; retiring sets this `False` — never hard-deleted), `created_at`.
+- **`Agent.skills`** — `ManyToManyField('Skill', blank=True, related_name='agents')`.
+- **`AgentSkillChange`** — permanent row per skill add/remove on an agent: `agent`, `skill`
+  (`on_delete=PROTECT`, so a skill can never be deleted out from under its own history), `action`
+  (`added`/`removed`), `changed_by`, `changed_at`.
+- **`SkillRenameHistory`** — permanent row per rename: `skill`, `old_name`, `new_name`,
+  `changed_by`, `changed_at`.
+
+### 14.2 The `/skills/` management page
+
+`scheduling.views.skill_list`, template `templates/scheduling/skill_list.html`. **Super admins
+only** (`request.user.is_superuser or getattr(request, 'has_finance_access', False)` — `getattr`
+so a middleware failure denies access rather than raising, since `AgentAccessMiddleware` swallows
+its own exceptions). Four POST actions, each writing an Activity Log entry:
+
+- **Create** — rejects a blank name or a name that collides under the dedupe key (§14.4).
+- **Edit** — renames and/or edits the description in one modal/action. A `SkillRenameHistory` row
+  is written only when the name actually changed; a description-only edit logs to the Activity Log
+  but writes no history row.
+- **Retire** — sets `is_active=False`. Writes no `AgentSkillChange` row and changes no agent's
+  assignment — see §14.3.
+- **Restore** — sets `is_active=True` again.
+
+**There is no delete control anywhere** — in this view, in the template, or in any other view.
+Retire/restore is the only lifecycle a skill has once created.
+
+### 14.3 Assignment: `_sync_agent_skills` is the only write path
+
+Skills are assigned on the Edit User form (`AgentForm.skills`, `CheckboxSelectMultiple`), offered
+from `Skill.objects.filter(is_active=True)` — **deliberately not gated by `can_grant_admin_tabs`**,
+so any staff admin who can edit a user can assign or remove skills, unlike super-admin-only fields
+such as `can_access_admin_tabs`.
+
+`scheduling.views._sync_agent_skills(request, agent, form, before)` is the **single** function that
+may write `Agent.skills`. It is called from both `agent_create` and `agent_edit`, always after the
+`Agent` row itself is saved:
+
+1. Computes `after = chosen | {retired skills the agent already held}` — a retired skill isn't in
+   the form's queryset, so without this step saving the form would silently drop it.
+2. `agent.skills.set(after)`.
+3. Diffs `after` against `before` and bulk-creates one `AgentSkillChange` row per added/removed
+   skill, then writes one Activity Log entry naming all of them together.
+
+**`agent_edit` calls `agent_form.save(commit=False)` and saves the instance itself, specifically so
+Django's own `BaseModelForm._save_m2m()` never runs.** The default `commit=True` path would call
+`save_m2m()` internally, which writes `cleaned_data['skills']` straight to the M2M table with no
+history row, no Activity Log entry, and no protection for an already-retired skill. `_sync_agent_skills`
+is called explicitly afterward instead. `AgentEditSkillsCommitPinTests` pins this by mocking
+`django.forms.models.BaseModelForm._save_m2m` and asserting it is never invoked by a real
+`agent_edit` POST.
+
+Because a retired skill is always re-attached from the `before` set rather than ever appearing in
+`chosen`, it can never appear in the `removed` diff — **retiring a skill never writes an
+`AgentSkillChange` row, and an agent who already holds a retired skill has no way to remove it
+through the UI** (no checkbox renders for it; only a direct DB write or the Django admin can).
+
+### 14.4 Duplicate-name detection (`_skill_dedupe_key` / `_find_skill_collision`)
+
+Comparison-only — `Skill.name` itself is always stored and displayed exactly as typed. Before the
+usual case-insensitive, whitespace-trimmed comparison, the key strips two Five9 sort-order
+prefixes that aren't part of a skill's real identity: a leading `$` (forces a skill to the top of
+its Five9 list) and a leading `Y` followed by whitespace (forces it to the bottom) — so "Only the
+Best" and "$Only the Best" collide as the same skill, while "Youth Injury Intake" is untouched
+(only "Y" followed by whitespace counts as the prefix). Checked on both Create and Edit, excluding
+the skill's own pk on Edit.
+
+### 14.5 History surfaces
+
+- **Agent History** (`/agents/<pk>/history/`) gained a "Skills History" panel listing every
+  `AgentSkillChange` for that agent — date, added/removed, skill name, changed by. Permanent, not
+  date-range filtered.
+- The Skills page itself shows a "renamed" badge on any skill with `SkillRenameHistory` rows,
+  with the old→new names and dates in a tooltip.
+- Agent Detail shows the agent's current skills as badges (retired ones marked "(retired)"), each
+  with a hover tooltip of its description when one exists.
+
+**Known limitation, decided deliberately: there is no reconstruction of a past roster.** The
+history records *when* a skill was added or removed for an agent, but no screen answers "who held
+Skill X on date Y" — only the sequence of change events exists.

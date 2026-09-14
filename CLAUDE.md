@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **618**. The tests are the regression gate and double as executable specs for the
+Currently **675**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Three read-only management commands exist for diagnosis; none is reachable from a request
@@ -389,6 +389,47 @@ Full map in `SYSTEM-SUMMARY.md` §13.
   Django admin both write with no finalize check and no `log_action`; a finalized week is safe
   only because it renders from its `PayrollRun` snapshot. Any open week recomputes on the next
   page load.
+
+## Skills landmines
+
+Skills (Phase 1, `c902cfc`, migration `0054`) — `Skill`, `Agent.skills` (M2M), `AgentSkillChange`
+(permanent add/remove history), `SkillRenameHistory` (permanent rename history) in
+`scheduling/models.py`. Management page at `/skills/`; assignment happens on the Edit User form.
+
+- **`_sync_agent_skills` in `scheduling/views.py` is the single write path for `Agent.skills`.**
+  A direct `.add()`/`.remove()`/`.set()` anywhere else writes no `AgentSkillChange` row and no
+  Activity Log entry — same rule as never calling `Coding.objects.create()` directly (see
+  `create_coding`). `agent_edit` calls `agent_form.save(commit=False)` specifically so Django's
+  own `BaseModelForm._save_m2m()` never runs as a second, silent writer of this field; `save_m2m()`
+  would apply `cleaned_data['skills']` straight from the POST with no history row, no Activity Log
+  entry, and no protection for a retired-but-assigned skill. `AgentEditSkillsCommitPinTests` pins
+  this by mocking `_save_m2m` and asserting it is never called.
+- **`/skills/` (create/rename/retire/restore) is super-admin only, and the gate fails closed.**
+  `skill_list` checks `request.user.is_superuser or getattr(request, 'has_finance_access', False)`
+  — `getattr`, not `request.has_finance_access` directly, because `AgentAccessMiddleware` swallows
+  its own exceptions and the attribute can be missing; a missing attribute denies access rather
+  than raising. There is no delete control anywhere in the UI or view — only retire/restore.
+- **Assigning skills to an agent on the Edit User form is deliberately NOT super-admin-gated.**
+  Unlike `can_access_admin_tabs`/`can_manage_loans`/`can_auto_code_requests` (popped from the form
+  for non-super-admins), the `skills` field is left on `AgentForm` for everyone — any staff admin
+  who can edit a user can add or remove their skills.
+- **Retiring a skill (`is_active=False`) never touches any agent's assignment and never writes an
+  `AgentSkillChange` row.** The Edit User picker's queryset only offers active skills
+  (`Skill.objects.filter(is_active=True)`), so a retired skill an agent already holds has no
+  checkbox to uncheck — `_sync_agent_skills` re-attaches it from the pre-save `before` set every
+  time that agent is saved, and because it's always re-attached it can never land in `removed`.
+  Practical effect: once a skill is retired, an agent who already had it can no longer have it
+  removed through the UI at all (Django admin or a direct DB write are the only ways out).
+- **The duplicate-name check ignores two Five9 sort-order prefixes, but storage/display always
+  keep the exact typed string.** `_skill_dedupe_key` strips a leading `$` and a leading `Y`
+  followed by whitespace (Five9 uses `$` to force a skill to the top of its list and `Y ` to force
+  it to the bottom) before the usual case-insensitive/whitespace-trimmed comparison — so "Only the
+  Best" and "$Only the Best" collide as duplicates, but a real word starting with "Y" (e.g.
+  "Youth Injury Intake") is untouched since only "Y" followed by whitespace counts as a prefix.
+  This function is comparison-only; `Skill.name` is never rewritten to a normalized form.
+- **Known limitation, decided deliberately: Skills has no history of who held a skill on a past
+  date.** `AgentSkillChange` records *when* a skill was added or removed, but no screen
+  reconstructs a past week's roster for a skill — there is no "who had Skill X on date Y" view.
 
 ## Conventions
 
