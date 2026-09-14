@@ -113,6 +113,6 @@
 
 {% empty %}
 {% if not is_group_request %}
-<tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">No active agents found.</td></tr>
+<tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">{% if filters_active %}No agents match the current filters.{% else %}No active agents found.{% endif %}</td></tr>
 {% endif %}
 {% endfor %}

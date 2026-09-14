@@ -15,7 +15,7 @@ from django.utils import timezone
 from django.http import HttpResponse, JsonResponse
 from django.template.loader import render_to_string
 
-from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, log_action
+from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, Skill, log_action
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 from wfm.constants import BONUS_QUALIFYING as _BONUS_QUALIFYING, BONUS_DISQUALIFYING as _BONUS_DISQUALIFYING, SCHED_HOURS_ZEROING_STATUSES
 from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
@@ -972,6 +972,105 @@ def _apply_supervisor_filter(agents_qs, supervisor_id):
     return agents_qs
 
 
+def _get_skill_filter(request):
+    """Returns (skill_ids, active_skills_qs) for the Adherence tab's skill filter.
+
+    Same shape as _get_supervisor_filter: reads the GET param (saving to session),
+    or falls back to session — that fallback is what carries the filter across week
+    navigation, since the week links carry only week_start.
+
+    Two things here are deliberate:
+
+    * The session key is Adherence-only. 'supervisor_filter' is shared on purpose
+      across scheduling/ and adherence/ so one supervisor choice follows the user
+      between tabs; this one must NOT, or picking a skill here would silently narrow
+      Codings, Daily Hours and the payroll screen too.
+    * Retired skills are dropped on read and the reconciled list written back. A skill
+      retired while it sits in someone's session would otherwise keep narrowing the
+      grid while offering no checkbox and no pill to explain it — an empty tab with no
+      visible cause, surviving every week change.
+
+    A bare `skills=` (present but empty) is the explicit "cleared" signal, as opposed
+    to the param being absent, which means "use whatever the session holds".
+    """
+    active_skills = Skill.objects.filter(is_active=True).order_by('name')
+
+    if 'skills' in request.GET:
+        requested = []
+        for raw in request.GET.getlist('skills'):
+            try:
+                requested.append(int(raw))
+            except (ValueError, TypeError):
+                continue    # never raise: this runs inside the rows endpoint's try,
+                            # where an exception marks every group failed on screen
+    else:
+        requested = request.session.get('adh_skill_filter', []) or []
+
+    # Only pay for the validation lookup when something was actually requested — the
+    # unfiltered tab (the common case, once per supervisor group) must cost nothing extra.
+    valid = set(active_skills.values_list('pk', flat=True)) if requested else set()
+    skill_ids = [pk for pk in requested if pk in valid]
+
+    if skill_ids != request.session.get('adh_skill_filter', []):
+        request.session['adh_skill_filter'] = skill_ids
+
+    return skill_ids, active_skills
+
+
+def _adherence_filter_url(week_start, supervisor_id, skill_ids):
+    """Query string for the Adherence tab preserving week + supervisor + the given skills.
+    An empty skill list emits the bare `skills=` clear sentinel, so removing the last pill
+    actually clears the filter instead of falling through to the stored session value."""
+    parts = [f'week_start={week_start.isoformat()}']
+    if supervisor_id and str(supervisor_id).isdigit():
+        parts.append(f'supervisor={supervisor_id}')
+    if skill_ids:
+        parts.extend(f'skills={pk}' for pk in skill_ids)
+    else:
+        parts.append('skills=')
+    return '?' + '&'.join(parts)
+
+
+def _adherence_filter_pills(week_start, supervisor_id, skill_ids, active_skills):
+    """The active-filter pills, as a generic list so a future filter added to the panel
+    contributes pills without touching the template. Each entry is one removable filter."""
+    by_pk = {s.pk: s for s in active_skills}
+    pills = []
+    for pk in skill_ids:
+        skill = by_pk.get(pk)
+        if skill is None:
+            continue
+        remaining = [other for other in skill_ids if other != pk]
+        pills.append({
+            'label': 'Skill',
+            'value': skill.name,
+            'remove_url': _adherence_filter_url(week_start, supervisor_id, remaining),
+        })
+    return pills
+
+
+def _apply_skill_filter(agents_qs, skill_ids):
+    """Narrow to agents holding ALL of skill_ids (an Excel filter, not 'any of').
+
+    Display-side only, and deliberately kept off the caller's queryset: the AND is
+    built as one .filter(skills__id=...) per skill on a separate, unordered queryset
+    and collapsed to a pk set. Chaining those joins onto the caller's queryset would
+    need .distinct(), and that queryset is ordered on related fields
+    (supervisor__user__last_name, ...) — the DISTINCT + ORDER BY combination
+    _get_adherence_agent_pks documents as a PostgreSQL failure. `pk__in` adds no join,
+    so the ordering survives untouched.
+
+    One query, whatever the roster size; extra skills become extra joins inside it,
+    not extra queries.
+    """
+    if not skill_ids:
+        return agents_qs
+    matching = Agent.objects.all()
+    for skill_id in skill_ids:
+        matching = matching.filter(skills__id=skill_id)
+    return agents_qs.filter(pk__in=set(matching.values_list('pk', flat=True).distinct()))
+
+
 # ── Official Admin edit-scope guard ───────────────────────────────────────────
 
 def _get_user_agent(user):
@@ -1249,8 +1348,11 @@ def adherence_week(request):
     week_end = week_dates[-1]
 
     supervisor_id, supervisors = _get_supervisor_filter(request)
+    skill_ids, active_skills = _get_skill_filter(request)
 
     if request.method == 'POST':
+        # Deliberately NOT skill-filtered: this branch writes AdherenceRecord rows, and
+        # a display filter has no business changing which agents a write path visits.
         agent_pks = _get_adherence_agent_pks(week_dates, week_start, supervisor_id)
         agents = Agent.objects.filter(pk__in=agent_pks).select_related(
             'user', 'supervisor__user'
@@ -1303,6 +1405,12 @@ def adherence_week(request):
         'supervisors': supervisors,
         'selected_supervisor': str(supervisor_id) if supervisor_id else '',
         'supervisor_pks_json': supervisor_pks_json,
+        'active_skills': active_skills,
+        'selected_skill_ids': skill_ids,
+        'active_filter_pills': _adherence_filter_pills(
+            week_start, supervisor_id, skill_ids, active_skills
+        ),
+        'clear_filters_url': _adherence_filter_url(week_start, supervisor_id, []),
     })
 
 
@@ -1315,6 +1423,7 @@ def adherence_rows_fragment(request):
 
         week_end = week_dates[-1]
         supervisor_id, _ = _get_supervisor_filter(request)
+        skill_ids, _ = _get_skill_filter(request)
 
         # Two-step query: first get PKs with DISTINCT (no ORDER BY), then
         # filter by those PKs with ORDER BY (no DISTINCT). This avoids the
@@ -1328,6 +1437,9 @@ def adherence_rows_fragment(request):
             'user__last_name', 'user__first_name'
         )
         agents = _apply_supervisor_filter(agents, supervisor_id)
+        # Skill narrowing sits here, on the resolved roster, for the same reason the
+        # supervisor filter does — never inside _get_adherence_agent_pks.
+        agents = _apply_skill_filter(agents, skill_ids)
 
         # Handle optional group parameter for progressive loading.
         # group=<supervisor_pk> loads only that supervisor's agents.
@@ -1380,6 +1492,9 @@ def adherence_rows_fragment(request):
             'show_cos': show_cos,
             'cos_days': cos_days,
             'cos_week': cos_week,
+            # Changes the {% empty %} wording from "no agents" to "no matches" so an
+            # empty grid names the filter as the reason rather than looking broken.
+            'filters_active': bool(skill_ids),
             # Suppress the {% empty %} "No active agents found" row for group
             # requests — an empty group is normal and should render nothing.
             'is_group_request': bool(group_param),

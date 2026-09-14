@@ -7,10 +7,17 @@ from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import User
 
+from django.db import connection
 from django.db.models import Q
-from scheduling.models import Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate, OvertimeShift
+from django.test.utils import CaptureQueriesContext
+from scheduling.models import (
+    Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate, OvertimeShift, Skill,
+)
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
-from adherence.views import _get_adherence_agent_pks, _net_ot_evening_hours
+from adherence.views import (
+    _get_adherence_agent_pks, _net_ot_evening_hours,
+    _adherence_filter_pills, _adherence_filter_url,
+)
 from finance.models import BillingSettings
 from types import SimpleNamespace
 from django.test import SimpleTestCase
@@ -1173,3 +1180,333 @@ class AdherenceRosterBranchTests(TestCase):
         pks = self._pks()
         self.assertIn(other.pk, pks)
         self.assertNotIn(bare.pk, pks)
+
+
+class AdherenceSkillFilterTests(TestCase):
+    """Skills Phase 2 — the Adherence tab's skill filter.
+
+    Display-layer narrowing only: it runs after the roster is resolved, in the
+    same place _apply_supervisor_filter narrows, and never reaches into
+    _get_adherence_agent_pks.
+    """
+
+    def setUp(self):
+        staff_user = User.objects.create_user('skillfilterstaff', password='x')
+        self.staff = Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='Skill Filter Staff', status='active',
+        )
+        self.client.login(username='skillfilterstaff', password='x')
+
+        sup_user = User.objects.create_user('skillfiltersup', password='x')
+        self.supervisor = Agent.objects.create(
+            user=sup_user, role='admin', role_type='supervisor',
+            agent_name='Skill Filter Sup', status='active',
+        )
+
+        self.bilingual = Skill.objects.create(name='Bilingual')
+        self.intake = Skill.objects.create(name='Intake')
+        self.retired = Skill.objects.create(name='Retired Skill', is_active=False)
+
+        # both      — holds Bilingual AND Intake
+        # only_one  — holds Bilingual only (must be excluded by an AND filter)
+        # neither   — holds no skills
+        self.both = self._rostered('sf_both', [self.bilingual, self.intake])
+        self.only_one = self._rostered('sf_only_one', [self.bilingual])
+        self.neither = self._rostered('sf_neither', [])
+
+    def _rostered(self, username, skills, supervisor=None):
+        """An agent the Adherence roster will admit (ShiftTemplate = activity gate)."""
+        agent = _make_agent(username)
+        if supervisor is not None:
+            agent.supervisor = supervisor
+            agent.save()
+        ShiftTemplate.objects.create(agent=agent, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+        if skills:
+            agent.skills.set(skills)
+        return agent
+
+    def _rows_html(self, query=''):
+        url = reverse('adherence_rows_fragment') + f'?week_start={_WEEK_START.isoformat()}{query}'
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertNotIn('error', payload, msg=payload.get('detail', ''))
+        return payload['tbody_html']
+
+    def _shown(self, html):
+        """Names of the test's own roster agents present in the rendered rows. Scoped to
+        the 'sf_' prefix so a supervisor's name in the Supervisor column isn't counted."""
+        return {
+            a.agent_name for a in Agent.objects.filter(agent_name__startswith='sf_')
+            if a.agent_name in html
+        }
+
+    # ── AND semantics, the way an Excel filter narrows ──
+    def test_two_skills_selected_requires_holding_both(self):
+        html = self._rows_html(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        shown = self._shown(html)
+        self.assertIn('sf_both', shown)
+        self.assertNotIn('sf_only_one', shown)   # holds one of two → excluded
+        self.assertNotIn('sf_neither', shown)
+
+    def test_one_skill_selected_shows_every_holder(self):
+        shown = self._shown(self._rows_html(f'&skills={self.bilingual.pk}'))
+        self.assertIn('sf_both', shown)
+        self.assertIn('sf_only_one', shown)
+        self.assertNotIn('sf_neither', shown)
+
+    def test_no_skill_filter_shows_the_whole_roster(self):
+        shown = self._shown(self._rows_html())
+        self.assertIn('sf_both', shown)
+        self.assertIn('sf_only_one', shown)
+        self.assertIn('sf_neither', shown)
+
+    # ── Combines with the existing supervisor filter ──
+    def test_skill_and_supervisor_narrow_to_the_intersection(self):
+        mine = self._rostered('sf_sup_skilled', [self.bilingual], supervisor=self.supervisor)
+        self._rostered('sf_sup_unskilled', [], supervisor=self.supervisor)
+        shown = self._shown(self._rows_html(
+            f'&supervisor={self.supervisor.pk}&skills={self.bilingual.pk}'
+        ))
+        self.assertEqual(shown, {'sf_sup_skilled'})
+        self.assertIn(mine.agent_name, shown)
+
+    # ── Retired skills ──
+    def test_retired_skill_in_the_session_stops_filtering(self):
+        """A skill retired while it sits in someone's session must not keep filtering —
+        that would be an empty grid with no pill and no visible cause."""
+        self.both.skills.add(self.retired)
+        shown = self._shown(self._rows_html(f'&skills={self.retired.pk}'))
+        self.assertIn('sf_neither', shown)   # filter dropped → full roster
+        self.assertIn('sf_both', shown)
+
+    def test_retired_skill_is_not_offered_as_an_option(self):
+        resp = self.client.get(
+            reverse('adherence_dashboard') + f'?week_start={_WEEK_START.isoformat()}'
+        )
+        self.assertEqual(resp.status_code, 200)
+        offered = {s.name for s in resp.context['active_skills']}
+        self.assertIn('Bilingual', offered)
+        self.assertNotIn('Retired Skill', offered)
+
+    # ── State travel: session fallback and the per-group requests ──
+    def test_filter_survives_week_navigation_with_no_param(self):
+        """Week nav links carry only week_start; the filter rides the session, exactly
+        as the supervisor filter already does."""
+        self._rows_html(f'&skills={self.bilingual.pk}')      # sets the session
+        next_week = (_WEEK_START + timedelta(days=7)).isoformat()
+        resp = self.client.get(
+            reverse('adherence_rows_fragment') + f'?week_start={next_week}'
+        )
+        shown = self._shown(resp.json()['tbody_html'])
+        self.assertNotIn('sf_neither', shown)
+
+    def test_explicit_empty_param_clears_the_session_filter(self):
+        self._rows_html(f'&skills={self.bilingual.pk}')
+        shown = self._shown(self._rows_html('&skills='))
+        self.assertIn('sf_neither', shown)
+
+    def test_filter_applies_on_a_group_request(self):
+        self._rostered('sf_grp_skilled', [self.bilingual], supervisor=self.supervisor)
+        self._rostered('sf_grp_unskilled', [], supervisor=self.supervisor)
+        shown = self._shown(self._rows_html(
+            f'&group={self.supervisor.pk}&skills={self.bilingual.pk}'
+        ))
+        self.assertEqual(shown, {'sf_grp_skilled'})
+
+    def test_filter_applies_on_the_no_supervisor_group_request(self):
+        shown = self._shown(self._rows_html(f'&group=__none__&skills={self.bilingual.pk}'))
+        self.assertIn('sf_both', shown)
+        self.assertNotIn('sf_neither', shown)
+
+    # ── Never 500: a bad value would mark every group failed on screen ──
+    def test_garbage_skill_value_is_ignored_not_fatal(self):
+        shown = self._shown(self._rows_html('&skills=notanumber'))
+        self.assertIn('sf_neither', shown)
+
+    def test_unknown_skill_pk_is_ignored(self):
+        shown = self._shown(self._rows_html('&skills=99999'))
+        self.assertIn('sf_neither', shown)
+
+    # ── The roster query itself is untouched ──
+    def test_roster_pks_identical_with_and_without_a_skill_filter(self):
+        before = _get_adherence_agent_pks(_WEEK, _WEEK_START)
+        self._rows_html(f'&skills={self.bilingual.pk}&skills={self.intake.pk}')
+        after = _get_adherence_agent_pks(_WEEK, _WEEK_START)
+        self.assertEqual(before, after)
+        self.assertIn(self.neither.pk, after)   # still in the roster, just not displayed
+
+    # ── Query count is flat in the number of skills and the number of agents ──
+    # Each comparison holds the *rendered* set identical, so the only variable is the
+    # filter itself — row count drives unrelated per-row query work.
+    def _query_count(self, query=''):
+        # Warm up first: the opening request of a session also writes the session row and
+        # loads that week's BillingSettings, which would otherwise read as filter cost.
+        self._rows_html(query)
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            html = self._rows_html(query)
+        return len(ctx), self._shown(html)
+
+    def test_query_count_does_not_grow_with_the_number_of_skills(self):
+        third = Skill.objects.create(name='Third')
+        self.both.skills.add(third)
+        # Both filters resolve to exactly {sf_both}: only_one lacks Intake.
+        two_count, two_shown = self._query_count(
+            f'&skills={self.bilingual.pk}&skills={self.intake.pk}'
+        )
+        three_count, three_shown = self._query_count(
+            f'&skills={self.bilingual.pk}&skills={self.intake.pk}&skills={third.pk}'
+        )
+        self.assertEqual(two_shown, {'sf_both'})
+        self.assertEqual(three_shown, {'sf_both'})
+        self.assertEqual(three_count, two_count)
+
+    def test_query_count_does_not_grow_with_the_number_of_agents(self):
+        small_count, small_shown = self._query_count(
+            f'&skills={self.bilingual.pk}&skills={self.intake.pk}'
+        )
+        # 10 more agents on the roster, none of them matching → same rendered set.
+        for i in range(10):
+            self._rostered(f'sf_bulk_{i}', [])
+        big_count, big_shown = self._query_count(
+            f'&skills={self.bilingual.pk}&skills={self.intake.pk}'
+        )
+        self.assertEqual(small_shown, big_shown)
+        self.assertEqual(big_count, small_count)
+
+    def test_unfiltered_tab_runs_no_skill_queries_at_all(self):
+        """The unfiltered grid is the common case and runs once per supervisor group —
+        it must not pay for the filter it isn't using."""
+        self._rows_html()                       # warm up
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            self._rows_html()
+        skill_table = Skill._meta.db_table
+        self.assertEqual([q for q in ctx.captured_queries if skill_table in q['sql']], [])
+
+    def test_skill_filter_adds_exactly_one_query(self):
+        """Filtering on a skill every roster agent holds renders the same rows as no
+        filter at all, so the whole delta is the filter's own pk lookup."""
+        everyone = Skill.objects.create(name='Everyone')
+        for agent in (self.both, self.only_one, self.neither):
+            agent.skills.add(everyone)
+        plain_count, plain_shown = self._query_count()
+        filtered_count, filtered_shown = self._query_count(f'&skills={everyone.pk}')
+        self.assertEqual(filtered_shown, plain_shown)
+        # +1 narrowing lookup, +1 validating the requested ids against active skills.
+        self.assertEqual(filtered_count, plain_count + 2)
+
+
+class AdherenceEmptyStateTests(TestCase):
+    """An empty grid must name the filter as the reason. The server renders this for a
+    full-table request; per-group requests suppress it (an empty group is normal) and the
+    all-groups-empty case is caught in the progressive loader instead."""
+
+    def setUp(self):
+        staff_user = User.objects.create_user('emptystatestaff', password='x')
+        Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='Empty State Staff', status='active',
+        )
+        self.client.login(username='emptystatestaff', password='x')
+        self.held_by_nobody = Skill.objects.create(name='Held By Nobody')
+        agent = _make_agent('es_agent')
+        ShiftTemplate.objects.create(agent=agent, day_of_week=0,
+                                     start_time=time(9, 0), end_time=time(17, 0))
+
+    def _tbody(self, query):
+        url = reverse('adherence_rows_fragment') + f'?week_start={_WEEK_START.isoformat()}{query}'
+        return self.client.get(url).json()['tbody_html']
+
+    def test_no_match_says_so_rather_than_no_agents_found(self):
+        html = self._tbody(f'&skills={self.held_by_nobody.pk}')
+        self.assertIn('No agents match the current filters.', html)
+        self.assertNotIn('No active agents found.', html)
+
+    def test_unfiltered_empty_roster_keeps_the_original_wording(self):
+        Agent.objects.filter(agent_name='es_agent').delete()
+        html = self._tbody('')
+        self.assertIn('No active agents found.', html)
+        self.assertNotIn('No agents match', html)
+
+    def test_group_request_stays_silent_so_empty_groups_render_nothing(self):
+        """An empty group must append nothing at all — that is what lets a group that
+        FAILED (which renders an explicit 'couldn't load' marker row) stay
+        distinguishable from one the filter simply emptied."""
+        html = self._tbody(f'&group=__none__&skills={self.held_by_nobody.pk}')
+        self.assertNotIn('No agents match', html)
+        self.assertNotIn('No active agents found', html)
+        self.assertEqual(html.strip(), '')
+
+    def test_page_renders_the_panel_pills_and_match_count_slot(self):
+        resp = self.client.get(
+            reverse('adherence_dashboard')
+            + f'?week_start={_WEEK_START.isoformat()}&skills={self.held_by_nobody.pk}'
+        )
+        body = resp.content.decode()
+        self.assertIn('id="filters-popover"', body)
+        self.assertIn('Skill: Held By Nobody', body)          # the pill
+        self.assertIn('id="adh-match-count"', body)           # the count slot
+        self.assertIn('const _ADH_FILTERS_ACTIVE = true', body)
+
+    def test_no_filter_means_no_pills_and_no_active_flag(self):
+        resp = self.client.get(
+            reverse('adherence_dashboard') + f'?week_start={_WEEK_START.isoformat()}&skills='
+        )
+        body = resp.content.decode()
+        self.assertIn('const _ADH_FILTERS_ACTIVE = false', body)
+        self.assertNotIn('id="adh-match-count"', body)
+
+    def test_selected_skill_renders_checked_in_the_panel(self):
+        resp = self.client.get(
+            reverse('adherence_dashboard')
+            + f'?week_start={_WEEK_START.isoformat()}&skills={self.held_by_nobody.pk}'
+        )
+        body = resp.content.decode()
+        self.assertRegex(
+            body, rf'name="skills" value="{self.held_by_nobody.pk}"[^>]*\n?[^>]*checked'
+        )
+
+
+class AdherenceFilterPillTests(TestCase):
+    """The pill links the Filters panel renders. A remove link that drops the last skill
+    must emit the explicit `skills=` sentinel — without it the URL carries no skills param,
+    the view falls back to the session, and the 'removed' filter silently stays on."""
+
+    def setUp(self):
+        self.bilingual = Skill.objects.create(name='Bilingual')
+        self.intake = Skill.objects.create(name='Intake')
+
+    def _pills(self, skill_ids, supervisor_id=''):
+        return _adherence_filter_pills(
+            _WEEK_START, supervisor_id, skill_ids, Skill.objects.filter(is_active=True)
+        )
+
+    def test_removing_the_only_pill_emits_the_clear_sentinel(self):
+        pill = self._pills([self.bilingual.pk])[0]
+        self.assertEqual(pill['value'], 'Bilingual')
+        self.assertIn('skills=', pill['remove_url'])
+        self.assertNotIn(f'skills={self.bilingual.pk}', pill['remove_url'])
+
+    def test_removing_one_of_two_keeps_the_other(self):
+        pills = self._pills([self.bilingual.pk, self.intake.pk])
+        bilingual_pill = next(p for p in pills if p['value'] == 'Bilingual')
+        self.assertIn(f'skills={self.intake.pk}', bilingual_pill['remove_url'])
+        self.assertNotIn(f'skills={self.bilingual.pk}', bilingual_pill['remove_url'])
+
+    def test_remove_url_preserves_week_and_supervisor(self):
+        pill = self._pills([self.bilingual.pk], supervisor_id='7')[0]
+        self.assertIn(f'week_start={_WEEK_START.isoformat()}', pill['remove_url'])
+        self.assertIn('supervisor=7', pill['remove_url'])
+
+    def test_non_numeric_supervisor_is_left_out_of_the_url(self):
+        pill = self._pills([self.bilingual.pk], supervisor_id='../evil')[0]
+        self.assertNotIn('evil', pill['remove_url'])
+
+    def test_clear_all_url_drops_every_skill_but_keeps_the_week(self):
+        url = _adherence_filter_url(_WEEK_START, '', [])
+        self.assertIn(f'week_start={_WEEK_START.isoformat()}', url)
+        self.assertTrue(url.endswith('skills='))

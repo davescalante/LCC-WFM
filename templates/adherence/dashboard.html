@@ -29,7 +29,30 @@
                 onchange="this.form.submit()">
         </form>
         {% include 'includes/supervisor_filter.html' %}
+        <button type="button" id="adh-filters-btn" class="btn btn-cancel" onclick="toggleFilters(this)"
+            style="padding:5px 12px;font-size:13px;display:inline-flex;align-items:center;gap:6px;">
+            Filters
+            {% if active_filter_pills %}
+            <span class="badge badge-blue" style="padding:1px 7px;font-size:11px;">{{ active_filter_pills|length }}</span>
+            {% endif %}
+        </button>
     </div>
+
+    {% if active_filter_pills %}
+    <!-- Active filters. One pill per filter, so a future filter in the panel needs no
+         change here — it just contributes another entry to active_filter_pills. -->
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid #eee;">
+        {% for pill in active_filter_pills %}
+        <span class="badge badge-blue" style="display:inline-flex;align-items:center;gap:6px;">
+            {{ pill.label }}: {{ pill.value }}
+            <a href="{{ pill.remove_url }}" title="Remove this filter"
+                style="color:#0c5460;text-decoration:none;font-weight:700;line-height:1;">&times;</a>
+        </span>
+        {% endfor %}
+        <a href="{{ clear_filters_url }}" style="font-size:12px;color:#888;text-decoration:none;">Clear all</a>
+        <span id="adh-match-count" style="font-size:12px;color:#888;margin-left:auto;"></span>
+    </div>
+    {% endif %}
 </div>
 
 <style>
@@ -355,6 +378,41 @@ tbody td.col-today           { background-color: #eff6ff; box-shadow: inset 1px 
     </div>
 </div>
 
+<!-- Filters popover. Anchored under the Filters button, same shape as the note popover
+     below. One titled section per filter — a later filter adds a section here and nothing
+     else about the panel changes. -->
+<div id="filters-popover" style="display:none;position:fixed;z-index:10000;width:300px;max-width:calc(100vw - 20px);background:white;border:1px solid #ddd;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);flex-direction:column;overflow:hidden;">
+    <div style="padding:10px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;background:#f8f9fa;">
+        <div style="font-size:13px;font-weight:700;color:#1a3a5c;">Filters</div>
+        <button type="button" onclick="closeFilters()"
+            style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa;line-height:1;padding:0 2px;">&times;</button>
+    </div>
+    <form method="get" style="display:flex;flex-direction:column;overflow:hidden;margin:0;">
+        <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+        {% if selected_supervisor %}<input type="hidden" name="supervisor" value="{{ selected_supervisor }}">{% endif %}
+        {# Always submitted, so unchecking every box still clears the filter instead of
+           leaving the param absent and falling back to the stored session value. #}
+        <input type="hidden" name="skills" value="">
+        <div style="padding:10px 14px;overflow-y:auto;max-height:260px;">
+            <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Skill</div>
+            {% for skill in active_skills %}
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;cursor:pointer;padding:3px 0;margin:0;">
+                <input type="checkbox" name="skills" value="{{ skill.pk }}" class="adh-skill-cb"
+                    style="width:15px;height:15px;margin:0;flex:none;"
+                    {% if skill.pk in selected_skill_ids %}checked{% endif %}>
+                <span>{{ skill.name }}</span>
+            </label>
+            {% empty %}
+            <span style="font-size:12px;color:#888;">No skills defined yet.</span>
+            {% endfor %}
+        </div>
+        <div style="padding:10px 14px;border-top:1px solid #eee;background:#fafafa;display:flex;justify-content:space-between;align-items:center;">
+            <button type="button" onclick="filtersClearAll()" class="btn btn-cancel" style="padding:4px 12px;font-size:12px;">Clear</button>
+            <button type="submit" class="btn btn-primary" style="padding:5px 16px;font-size:13px;">Apply</button>
+        </div>
+    </form>
+</div>
+
 <!-- Note popover -->
 <div id="note-popover" style="display:none;position:fixed;z-index:10000;width:340px;max-width:calc(100vw - 20px);background:white;border:1px solid #ddd;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);flex-direction:column;overflow:hidden;">
     <div style="padding:10px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:flex-start;background:#f8f9fa;">
@@ -383,6 +441,61 @@ let _adhLoading = false;
 // Supervisor PKs for progressive loading (injected from server context).
 const _ADH_SUPERVISOR_PKS = {{ supervisor_pks_json|safe }};
 
+// Whether any filter from the Filters panel is on. Fixed for the life of this page view —
+// changing a filter submits the panel's form and reloads, same as the supervisor select.
+const _ADH_FILTERS_ACTIVE = {% if active_filter_pills %}true{% else %}false{% endif %};
+
+// ── Filters panel ────────────────────────────────────────────────────────────
+// Anchored under its button, positioned the same way openNotes() positions the note
+// popover: measure the trigger, flip above if it would overflow the viewport.
+function toggleFilters(btn) {
+    const pop = document.getElementById('filters-popover');
+    if (pop.style.display !== 'none') { closeFilters(); return; }
+    pop.style.display = 'flex';
+    const rect = btn.getBoundingClientRect();
+    const pw = 300, ph = pop.offsetHeight || 320, vw = window.innerWidth, vh = window.innerHeight;
+    let left = rect.right - pw, top = rect.bottom + 6;
+    if (left < 10) left = 10;
+    if (left + pw > vw - 10) left = Math.max(10, vw - pw - 10);
+    if (top + ph > vh) top = Math.max(10, rect.top - ph - 6);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+}
+
+function closeFilters() {
+    document.getElementById('filters-popover').style.display = 'none';
+}
+
+function filtersClearAll() {
+    document.querySelectorAll('.adh-skill-cb').forEach(function(cb) { cb.checked = false; });
+}
+
+document.addEventListener('click', function(e) {
+    const pop = document.getElementById('filters-popover');
+    const btn = document.getElementById('adh-filters-btn');
+    if (!pop || pop.style.display === 'none') return;
+    if (!pop.contains(e.target) && btn && !btn.contains(e.target)) closeFilters();
+});
+
+// How many agents the active filters left on screen. Only rendered when a filter is on,
+// so the unfiltered tab gains nothing to read.
+function _updateMatchCount() {
+    const el = document.getElementById('adh-match-count');
+    if (!el) return;
+    const n = document.querySelectorAll('#adh-tbody tr.agent-row').length;
+    el.textContent = n === 1 ? '1 agent matches' : n + ' agents match';
+}
+
+// Says plainly why the grid is empty. The server renders this for a full-table request,
+// but every per-group request suppresses it (an empty group is normal), so the
+// all-groups-empty case has to be caught here — see _loadAdhRowsProgressive.
+function _showNoFilterMatches() {
+    _removeSkeleton();
+    document.getElementById('adh-tbody').insertAdjacentHTML('beforeend',
+        '<tr><td colspan="21" style="padding:30px;color:#888;text-align:center;">' +
+        'No agents match the current filters.</td></tr>');
+}
+
 function _removeSkeleton() {
     // Remove the initial skeleton rows (loading row + extra skel rows).
     const loadingRow = document.getElementById('adh-loading-row');
@@ -405,6 +518,7 @@ function _loadAdhRowsFull(params) {
             if (data.error) throw new Error(data.error);
             document.getElementById('adh-tbody').innerHTML = data.tbody_html;
             document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
+            _updateMatchCount();
             recomputeCoS();
             _applyAllStatusStyles();
             requestAnimationFrame(syncColumnWidths);
@@ -436,6 +550,7 @@ function _appendAdhGroupRows(data) {
     if (data.tfoot_html) {
         document.getElementById('adh-tfoot').innerHTML = data.tfoot_html;
     }
+    _updateMatchCount();
     recomputeCoS();
 }
 
@@ -529,7 +644,13 @@ async function _loadAdhRowsProgressive(params) {
         clearTimeout(_adhFailWarnTimer);
         document.getElementById('save-status').style.display = 'none';
         _showLoadError();
+    } else if (_ADH_FILTERS_ACTIVE && failedCount === 0
+               && !document.querySelector('#adh-tbody tr.agent-row')) {
+        // Every group loaded fine and none of them held a matching agent. Only claimed
+        // when nothing failed — with a failed group we can't know it held no match.
+        _showNoFilterMatches();
     }
+    _updateMatchCount();
 }
 
 function loadAdhRows() {
@@ -902,7 +1023,7 @@ document.addEventListener('mousedown', function(e) {
     if (pop.style.display === 'none') return;
     if (!pop.contains(e.target) && !e.target.closest('.note-btn')) closeNotes();
 });
-document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeNotes(); });
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { closeNotes(); closeFilters(); } });
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Cost of Schedule ──────────────────────────────────────────────────────────
