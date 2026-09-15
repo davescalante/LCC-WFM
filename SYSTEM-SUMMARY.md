@@ -13,7 +13,7 @@
 - **Key deps** (`requirements.txt`): Django 4.2.30, gunicorn 23, whitenoise 6.11, psycopg2-binary, dj-database-url, openpyxl 3.1.5 (all Excel exports).
 - **Frontend**: server-rendered Django templates, inline CSS, vanilla JS. No SPA framework, no build step. Small AJAX/JSON endpoints handle in-place updates (status pills, cell edits, live-poll badges via `/poll/` and `/adherence/poll/`).
 - **Auth**: stock `django.contrib.auth`, login at `/accounts/login/`. Custom `SessionTimeoutMiddleware` (4h inactivity / 16h absolute) and `AgentAccessMiddleware` (role-based routing + badge counts) in `wfm/middleware.py`.
-- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 703/703 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
+- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 737/737 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 - **Diagnostics**: three read-only management commands, none reachable from a request path and none writing anything — `verify_adherence_roster` (roster pk-set parity, `--weeks` default 8, exits 1 on a mismatch), `verify_ot_topups` (OT incentive top-up parity — the frozen pre-dedupe plain-`+=` summation against the current deduped one, `--weeks` default 12, exits 1 on any difference) and `schedule_data_inventory` (row counts, date ranges, future-dated counts for the schedule/adherence tables, plus exact-duplicate OT slots, their priced money exposure per week, and the write path that created them). See §10's `e2509eb` (roster parity), `1874540`/`370a2de` (OT top-up parity) and `6877c40`/`ccb64cf` (data inventory, including the OT-duplicate sections) — cited by hash now, since two rounds of ordinal renumbering had already broken this reference when it pointed at items by number.
 - **URL mounts** (`wfm/urls.py`): scheduling at site root (duplicated at `/scheduling/`), `/adherence/`, `/erlang/`, `/finance/`, plus `admin-codings/` and `admin-adherence/` mounted directly off the **root** urlconf (not under `/finance/` — see §4), Django admin at `/admin/`, auth at `/accounts/`.
 
@@ -90,7 +90,7 @@ Everyone has exactly one `User` + one `Agent`. Access is entirely by `role`/`rol
 |---|---|---|---|
 | Dashboard | `/` | Staff | `scheduling.views.dashboard` — pending requests, today's attendance tallies, missing-adherence agents |
 | Users | `/agents/` | Staff | `scheduling.views.agent_list` — add/edit/delete, detail page `/agents/<pk>/`, history `/agents/<pk>/history/`. Excel export via `?export=1` with a **column-picker popup** (see §7) |
-| Skills | `/skills/` | Super admins only | `scheduling.views.skill_list` — create/rename/retire/restore skills; no delete control anywhere. Assigning a skill to an agent happens on the Edit User form instead, and is **not** gated to super admins. See §14 |
+| Skills | `/skills/` | Super admins only | `scheduling.views.skill_list` — create/rename/retire/restore skills; no delete control anywhere. Assigning a skill to an agent happens on the Edit User form instead, and is **not** gated to super admins. Adherence and Staffing each offer their own skill Filters panel over the same shared markup/helpers. See §14 |
 | Shifts | `/shifts/` , `/shifts/week/` | Staff | `shift_list`, `shift_week` — weekly grid + per-agent editor, templates/overrides/date-ranges |
 | OT Shifts | `/overtime/` , `/overtime/week/` | Staff | `overtime_list`/`overtime_week` — assigned OT grid, Open Shifts posting, claim/cancel approvals |
 | Available OT / My OT Shifts | `/agent/available-ot/`, `/agent/my-ot-shifts/` | Portal | Agent-side OT claim board + own OT list with cancel-request |
@@ -100,7 +100,7 @@ Everyone has exactly one `User` + one `Agent`. Access is entirely by `role`/`rol
 | Admin Codings | `/admin-codings/` (root-mounted) | Super admins + `can_access_admin_tabs` holders | `finance.views.admin_codings` |
 | Daily Hours | `/adherence/daily/` | Staff | `adherence.views.daily_hours_week` — Five9 Daily CSV upload/re-match/delete |
 | My Adherence | `/adherence/my/` | Portal | `agent_my_adherence` |
-| Staffing | `/erlang/` | Staff | `erlang.views.erlang_calculator` — upload, grid, save/download reports |
+| Staffing | `/erlang/` | Staff | `erlang.views.erlang_calculator` — upload, grid, save/download reports. Filters panel narrows by skill and adds a skill coverage column beside Scheduled Staff — see §14.7 |
 | Requests | `/requests/` , `/requests/mine/` | Staff | `requests_list` (Team Requests) / `staff_my_requests` (My Requests) |
 | My Requests | `/agent/my-requests/` | Portal | `agent_my_requests` |
 | Records | `/records/`, `/records/hours/`, `/records/roles/`, `/records/separations/` | Staff | Read-only filtered lists + CSV export |
@@ -883,3 +883,89 @@ needs no template redesign; today it holds only the Skill section.
   that populates the week is the one poll cycle it silently misses; every change after that polls
   normally. Identical on the unfiltered tab and under the supervisor filter; predates Skills
   entirely.
+
+### 14.7 Phase 3 (`0ce7c22`): a skill coverage column on the Staffing tab
+
+Adds the same **Filters panel** to the Staffing tab (`/erlang/`, `erlang.views.erlang_calculator`)
+that Phase 2 gave Adherence, and — in the same commit — promotes the panel from a look-alike copy
+to genuinely shared markup, plus a new skill coverage column in the Staffing table itself.
+
+- **Shared markup.** `templates/includes/skill_filters_popover.html` is now the one Filters
+  popover template, included from both `templates/adherence/dashboard.html` and
+  `templates/erlang/calculator.html` with `active_skills`, `selected_skill_ids`, `week_start` (and,
+  Adherence-only, `supervisor_id`). It also owns `toggleFilters`/`closeFilters`/
+  `filtersClearAll` and the click-outside-to-close listener as page-global functions, so a page
+  needs only a button carrying class `skill-filters-btn` and `onclick="toggleFilters(this)"` to get
+  a working panel. Each page still writes its own Escape-key handling, since that composes with
+  whatever other popovers the page has (Adherence's note popover, Staffing's two coverage
+  popovers) — not this include's concern.
+- **Shared helpers.** Three primitives now live in `scheduling/views.py`, beside the other Skill
+  helpers, so the rules exist once rather than once per tab:
+  - `_active_skills()` — the lazy `Skill.objects.filter(is_active=True).order_by('name')` queryset
+    every picker/filter offers from. Deliberately lazy: a caller that never touches it pays no
+    query, which is what keeps the unfiltered tab's query count flat.
+  - `_agents_with_all_skills(skill_ids)` — the one-query "holds every skill" AND, built on its own
+    unordered `Agent` queryset and returning a pk set (or `None` for an empty `skill_ids`, meaning
+    "no filter" — distinct from an empty set, meaning "matches nobody"). Kept off the caller's own
+    queryset for the same DISTINCT + ORDER BY reason `_get_adherence_agent_pks` documents.
+  - `_resolve_skill_filter(request, session_key)` — the full read/validate/reconcile cycle (GET
+    param vs. session fallback, retired-skill drop, the empty-`skills=` clear sentinel), taking the
+    session key as a parameter so each tab supplies its own.
+  - `adherence.views._get_skill_filter`/`_apply_skill_filter` and the new
+    `erlang.views._get_skill_filter` are now thin wrappers over these three — Adherence's own
+    version of each rule was deleted, not duplicated.
+- **Separate session keys, deliberately.** Adherence keeps `adh_skill_filter`; Staffing gets its
+  own `erlang_skill_filter` (`erlang.views._get_skill_filter`). A skill chosen on one tab must never
+  silently narrow the other, the same reasoning that already keeps `adh_skill_filter` off the
+  shared `supervisor_filter` session key.
+- **The skill coverage column.** Rendered only when `selected_skill_ids` is non-empty, immediately
+  right of the existing Scheduled Staff column. AND semantics (holds every selected skill, an Excel
+  filter, not "any"). Colored red only at zero coverage; the header shows the single selected
+  skill's name, or `"<first skill> +N"` once more than one is selected. Clicking a covered cell
+  opens its own popover (`#skill-popover`, `openSkillPopover`/`closeSkillPopover`) — a separate
+  element from the existing `#staff-popover`, listing only the agents holding the selected
+  skill(s), with its own `SKILL_AGENTS`/`SKILL_EXCLUDED`/`SKILL_STATUS_SUMMARY` JSON payloads.
+- **The landmine that matters most: the count narrows data `_build_scheduled_map` already built —
+  it re-derives no exclusion rule.** `erlang._build_scheduled_map`'s `agents_map`/`excluded_map`
+  entries now each carry an `agent_id` (the return tuple's shape is unchanged — still 3 values, so
+  every existing 3-value unpack elsewhere is untouched). `erlang._build_skill_maps(agents_map,
+  excluded_map, qualifying_pks)` is pure Python filtering of those existing lists down to the pks in
+  `qualifying_pks` (from `_agents_with_all_skills`) — no new query, and every exclusion
+  `_build_scheduled_map` already applied (`STAFFING_EXCLUDED_STATUSES`, the Quit/Baja mark, the
+  per-cell agent dedupe) is inherited for free. The skill count is therefore a **strict subset** of
+  Scheduled Staff by construction, in both directions — `StaffingSkillColumnTests` pins this both by
+  direct assertion (`assertLessEqual`) and by checking Scheduled Staff itself is unaffected by
+  turning the skill filter on. Anyone changing what counts as scheduled must change
+  `_build_scheduled_map`; the skill column follows automatically.
+- **The deliberate overtime divergence.** Scheduled Staff counts any non-cancelled
+  `OvertimeShift` regardless of role or skill; the skill column counts an OT agent only if they
+  hold the selected skill(s). `StaffingSkillColumnTests` pins both directions: an OT agent without
+  the skill raises Scheduled Staff but not the skill count, and one with the skill raises both. The
+  two columns can legitimately disagree — not a bug to reconcile.
+- **`.staffing-display` stays load-bearing JavaScript, untouched.** The day badge, day summary bar
+  and Variance column all select on that class; the new column uses its own class
+  (`skill-coverage-display`) and id prefix (`skillcov-{day}-{hour}`) instead of joining it.
+  `StaffingSkillColumnRenderTests.test_staffing_display_count_is_unaffected_by_the_skill_filter`
+  counts `.staffing-display` occurrences in the rendered page with the filter on and off and
+  asserts they're equal; `test_no_element_carries_both_classes` asserts neither class string ever
+  appears combined with the other.
+- **The existing Scheduled Staff popover is pinned byte-for-byte.**
+  `test_existing_staff_popover_data_is_unaffected_by_the_skill_filter` extracts the
+  `SCHEDULED_AGENTS`/`EXCLUDED_AGENTS`/`STATUS_SUMMARY` JS literals from the rendered page with the
+  filter on and off and asserts they're identical strings — the skill filter adds a second,
+  separate set of popover data rather than changing the first.
+- **Deliberately unchanged in this phase:** the Staffing CSV download and saved Erlang reports.
+  Neither reflects the skill filter or the new column.
+- **Measured query cost:** 25 queries on the unfiltered Staffing page, 27 with a skill filter
+  active — the same flat `+2` (validate requested ids, resolve the AND to a pk set) Adherence's
+  own filter already pays, regardless of the number of skills selected or agents scheduled.
+  `StaffingSkillFilterQueryCountTests` pins the delta directly, plus that it doesn't grow with more
+  skills or more agents.
+- **Retired skills and bad input behave exactly as Phase 2 specified**, because both tabs now
+  share `_resolve_skill_filter`: a retired skill sitting in session is dropped on read and the
+  reconciled (now-empty, if that was the only one) list is written back; a non-numeric or unknown
+  `skills` value is silently skipped rather than raising.
+- **Known limitation of the whole Skills-filtering feature (Phases 2 and 3 alike): this shows
+  expected coverage, not live coverage.** The skill column (and the Adherence skill filter) can only
+  say who is *scheduled* and *holds* the selected skill(s) in this app's own data — neither knows
+  whether that agent is actually logged into that skill in Five9 at the moment being viewed.

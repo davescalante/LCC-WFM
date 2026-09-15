@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **703**. The tests are the regression gate and double as executable specs for the
+Currently **737**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Three read-only management commands exist for diagnosis; none is reachable from a request
@@ -482,6 +482,57 @@ dropdown, that narrows the grid by skill.
   normally, since the timestamp is non-null after that). This affects the unfiltered tab and the
   supervisor filter identically, predates the Skills work, and is unrelated to the skill filter
   itself.
+- **Phase 3 (`0ce7c22`) added a skill coverage column to the Staffing tab and, in the same
+  commit, promoted the Filters panel to genuinely shared markup.** `templates/includes/
+  skill_filters_popover.html` is now the one Filters popover template for both Adherence and
+  Staffing — not two similar copies — and `scheduling/views.py` gained three shared primitives
+  (`_active_skills`, `_agents_with_all_skills`, `_resolve_skill_filter`) that `adherence.views`'s
+  `_get_skill_filter`/`_apply_skill_filter` and `erlang.views`'s `_get_skill_filter` are now thin
+  wrappers over. Extend the shared helpers, not either tab's wrapper, when the rule itself needs
+  to change.
+- **Adherence and Staffing use separate session keys on purpose** — `adh_skill_filter` vs.
+  `erlang_skill_filter` — so a skill picked on one tab's Filters panel never silently narrows the
+  other. Same reasoning as `adh_skill_filter` already being kept off `supervisor_filter`'s shared
+  key (see the Phase 2 note above); do not consolidate them.
+- **The Staffing skill column is a strict subset of Scheduled Staff by construction, and must stay
+  that way.** `erlang._build_skill_maps` narrows the exact `agents_map`/`excluded_map` lists
+  `_build_scheduled_map` already built, using the `agent_id` now carried on every entry — it
+  reimplements none of `_build_scheduled_map`'s exclusion rules (adherence-status exclusions, the
+  Quit/Baja mark, per-cell dedupe). Anyone changing what counts as "scheduled" must change it once
+  in `_build_scheduled_map`; the skill column inherits it for free. The column itself only renders
+  when a skill is selected (`{% if selected_skill_ids %}`), sits immediately right of Scheduled
+  Staff, uses AND semantics (holds every selected skill), colors red only at zero, and its header
+  shows the one selected skill's name or `"<name> +N"` for more than one.
+- **`.staffing-display` is load-bearing JavaScript on the Staffing tab, not styling** — the day
+  badge, the day summary bar and the Variance column all select on it. The new skill column
+  deliberately uses its own class (`skill-coverage-display`) and id prefix (`skillcov-`) rather
+  than joining that class. `StaffingSkillColumnRenderTests` pins the count of `.staffing-display`
+  elements as identical with the filter on and off, and asserts no element ever carries both
+  classes.
+- **Scheduled Staff and the skill column are allowed to diverge on overtime, deliberately.**
+  Scheduled Staff counts any non-cancelled `OvertimeShift` regardless of role or skill; the skill
+  column counts an OT agent only if they hold every selected skill. An OT agent without the skill
+  raises Scheduled Staff but not the skill count — this is the intended behavior, not a
+  reconciliation bug.
+- **The existing Scheduled Staff popover (`SCHEDULED_AGENTS`/`EXCLUDED_AGENTS`/`STATUS_SUMMARY`)
+  is untouched by the skill filter — pinned byte-for-byte.** `StaffingSkillColumnRenderTests`
+  extracts those three JSON blobs from the rendered page with the filter on and off and asserts
+  they're identical; the skill popover's own data (`SKILL_AGENTS`/`SKILL_EXCLUDED`/
+  `SKILL_STATUS_SUMMARY`) is a separate, additional payload.
+- **The Staffing CSV download and saved Erlang reports were deliberately left out of Phase 3** —
+  neither reflects the skill filter or the skill column. Not an oversight to "finish" later without
+  being asked.
+- **Measured query cost on Staffing: 25 queries unfiltered, 27 with a skill filter active** — the
+  same flat `+2` Adherence's own filter pays (validate the requested ids, resolve the AND to a pk
+  set), regardless of how many skills are selected or how many agents are scheduled.
+  `StaffingSkillFilterQueryCountTests` pins the delta, not an absolute count.
+- **Retired skills and bad `skills=` input behave on Staffing exactly as Phase 2 specified for
+  Adherence** (dropped on read, the reconciled list written back to session, never raising) —
+  because both tabs now call the same `_resolve_skill_filter`, this is guaranteed rather than
+  separately maintained.
+- **Known limitation: the skill column shows expected coverage, not live coverage.** It counts
+  agents who are scheduled and hold the selected skill(s) in this app — it cannot know whether an
+  agent is actually logged into that skill in Five9 at that moment. See SYSTEM-SUMMARY.md §14.7.
 
 ## Conventions
 
