@@ -31,7 +31,7 @@
                 <td style="padding:5px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
                 {% for cell in r.cells %}
                 <td style="padding:4px 8px;text-align:right;">
-                    <div style="font-size:10px;color:#bbb;">computed ${{ cell.computed|floatformat:2 }}</div>
+                    <div style="font-size:10px;color:#bbb;">computed {% if cell.is_hours %}{{ cell.computed|floatformat:2 }} hrs{% else %}${{ cell.computed|floatformat:2 }}{% endif %}</div>
                     <input type="text" name="{{ cell.field }}_{{ r.agent.pk }}" value="{{ cell.override }}"
                         inputmode="decimal" placeholder="—"
                         style="width:95px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">
@@ -47,6 +47,7 @@
 
     {% if admin_rows %}
     <h2 style="margin:22px 0 10px;font-size:16px;color:#1a3a5c;">Official Admins</h2>
+    <p style="margin:-4px 0 10px;font-size:12px;color:#777;"><strong>Holiday Hours</strong>: enter the holiday hours for the week — Holiday Pay is calculated automatically as hours × rate × 2.</p>
     <div class="card" style="overflow-x:auto;padding:0;">
     <table style="width:100%;border-collapse:collapse;font-size:13px;">
         <thead><tr style="background:#f0f4f8;text-align:left;">
@@ -59,7 +60,7 @@
                 <td style="padding:5px 10px;font-weight:600;color:#1a3a5c;">{{ r.name }}</td>
                 {% for cell in r.cells %}
                 <td style="padding:4px 8px;text-align:right;">
-                    <div style="font-size:10px;color:#bbb;">computed ${{ cell.computed|floatformat:2 }}</div>
+                    <div style="font-size:10px;color:#bbb;">computed {% if cell.is_hours %}{{ cell.computed|floatformat:2 }} hrs{% else %}${{ cell.computed|floatformat:2 }}{% endif %}</div>
                     <input type="text" name="{{ cell.field }}_{{ r.agent.pk }}" value="{{ cell.override }}"
                         inputmode="decimal" placeholder="—"
                         style="width:95px;text-align:right;padding:4px 6px;border:1px solid #ddd;border-radius:4px;margin:0;font-family:monospace;">

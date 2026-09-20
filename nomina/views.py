@@ -1237,8 +1237,12 @@ def vacations(request):
 
 # Auto columns that can be overridden on the Agent Nómina.
 OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('adherence', 'Adherence'), ('holiday', 'Holiday')]
-# Admins have no adherence bonus — they get the admin bonus instead.
-ADMIN_OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('admin_bonus', 'Admin Bonus'), ('holiday', 'Holiday')]
+# Admins have no adherence bonus — they get the admin bonus instead. Holiday for admins is
+# entered as HOURS (they have no automatic holiday source — off the adherence roster and rarely
+# in Five9); the Holiday Pay amount derives from those hours on the backend.
+ADMIN_OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('admin_bonus', 'Admin Bonus'), ('holiday_hrs', 'Holiday Hours')]
+# Override fields captured as HOURS (the money amount is derived), not entered as a peso amount.
+HOURS_OVERRIDE_FIELDS = {'holiday_hrs'}
 
 
 @login_required
@@ -1279,7 +1283,8 @@ def overrides(request):
         for field, _label in fields:
             o = existing.get((a.pk, field))
             out.append({'field': field, 'computed': computed[field],
-                        'override': '' if o is None else f'{o:.2f}'})
+                        'override': '' if o is None else f'{o:.2f}',
+                        'is_hours': field in HOURS_OVERRIDE_FIELDS})
         return out
 
     # Agents
@@ -1312,8 +1317,9 @@ def overrides(request):
         computed = {
             'base_pay': d.get('base_pay_mxn', Decimal('0')),
             'admin_bonus': d.get('admin_bonus_mxn', Decimal('0')),
-            'holiday': (ahol.get(a.pk, Decimal('0')) * rate * 2
-                        + ahol_nw.get(a.pk, Decimal('0')) * rate).quantize(Decimal('0.01')),
+            # Holiday for admins is entered as hours; the computed default is the (usually 0)
+            # auto holiday hours, and Holiday Pay derives from it in _admin_nomina_data.
+            'holiday_hrs': ahol.get(a.pk, Decimal('0')) + ahol_nw.get(a.pk, Decimal('0')),
         }
         admin_rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
                            'cells': _cells(a, computed, ADMIN_OVERRIDE_FIELDS)})
@@ -1562,9 +1568,12 @@ def _admin_nomina_data(week_start, week_dates):
         # Bonus is shown FULL/unmodified; the penalty % + vacation proration land in the Note.
         gross_bonus = ov(a.pk, 'admin_bonus', d.get('admin_bonus_mxn', Decimal('0')))
         ded_pct = deductions.get(a.pk, Decimal('0'))
-        hol_hrs = hol_hours.get(a.pk, Decimal('0'))
+        # Admins have no automatic holiday-hours source, so holiday hours are entered via the
+        # 'holiday_hrs' override; Holiday Pay is derived (never entered as an amount) at 2× the
+        # rate — the worked-holiday premium. hol_nw_hrs is 0 for admins in practice.
+        hol_hrs = ov(a.pk, 'holiday_hrs', hol_hours.get(a.pk, Decimal('0')))
         hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))
-        holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01')))
+        holiday_pay = (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01'))
         spiffs = ((wi.spiff_usd if wi else Decimal('0')) * fx).quantize(Decimal('0.01'))
         lpo = wi.lpo if wi else Decimal('0')
         referral = wi.referral if wi else Decimal('0')
