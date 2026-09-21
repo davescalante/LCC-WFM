@@ -729,6 +729,108 @@ class NominaWelcomeBonusTests(TestCase):
         self.assertEqual(r['welcome'], Decimal('0'))     # not paid without the adherence bonus
 
 
+class NominaAdminHolidayHoursOverrideTests(TestCase):
+    """Admins have no automatic holiday source (off the adherence roster, rarely in Five9), so
+    the Admin Nómina showed 0 holiday. Holiday hours are now entered via the 'holiday_hrs'
+    override and Holiday Pay derives on the backend as hours × rate × 2 (worked-holiday premium)."""
+
+    def setUp(self):
+        import datetime
+        _make_agent('hh_super', is_super_admin=True)
+        self.client.login(username='hh_super', password='x')
+        self.ws = get_week_start()
+        self.week = [self.ws + datetime.timedelta(days=i) for i in range(7)]
+        u = User.objects.create_user('hhadmin', password='x', first_name='HH', last_name='Admin')
+        self.admin = Agent.objects.create(
+            user=u, role='admin', role_type='supervisor', agent_name='HH Admin',
+            status='active', employer='Infinity', is_official_admin=True, hourly_rate=Decimal('80'))
+
+    def test_no_override_shows_zero_holiday(self):
+        from nomina.views import _admin_nomina_data
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('0'))
+        self.assertEqual(r['holiday_pay'], Decimal('0.00'))
+
+    def test_holiday_hours_override_drives_pay_at_2x(self):
+        from nomina.views import _admin_nomina_data
+        from nomina.models import NominaOverride
+        NominaOverride.objects.create(agent=self.admin, week_start=self.ws,
+                                      field='holiday_hrs', value=Decimal('8'))
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))         # Holiday column now shows the hours
+        self.assertEqual(r['wage'], Decimal('80'))               # rate flows from hourly_rate
+        self.assertEqual(r['holiday_pay'], Decimal('1280.00'))   # 8 × 80 × 2
+
+    def test_worked_holiday_reads_coded_time_and_pays_triple(self):
+        # An admin who WORKS the holiday codes that time; the coded hours are read
+        # automatically (no manual entry) and the holiday pays triple: base 1× + premium 2×.
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import Holiday
+        from adherence.models import Coding
+        holiday = self.week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Coding.objects.create(agent=self.admin, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(16, 0), is_admin_coding=True)   # 8 coded hours
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))         # auto-read from coded time
+        self.assertEqual(r['base_pay'], Decimal('640.00'))       # 8 × 80 already paid at 1×
+        self.assertEqual(r['holiday_pay'], Decimal('1280.00'))   # + 8 × 80 × 2 premium
+        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('8') * Decimal('80') * 3)   # triple
+
+    def test_worked_holiday_sums_connected_and_coded_time(self):
+        # For the holiday day, worked hours = connected Five9 time + coded time; both count.
+        import datetime
+        from scheduling.models import Five9Profile
+        from adherence.models import DailyUpload, DailyAgentHours, Coding
+        from nomina.models import Holiday
+        from nomina.views import _admin_nomina_data
+        holiday = self.week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Five9Profile.objects.create(agent=self.admin, five9_username='hhadmin_f9', billable=True, is_primary=True)
+        up, _ = DailyUpload.objects.get_or_create(date=holiday)
+        DailyAgentHours.objects.create(upload=up, agent=self.admin, five9_username='hhadmin_f9',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)      # 3h connected
+        Coding.objects.create(agent=self.admin, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(13, 0), is_admin_coding=True)        # 5h coded
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))         # 3 connected + 5 coded
+        self.assertEqual(r['holiday_pay'], Decimal('1280.00'))   # 8 × 80 × 2
+
+    def test_manual_override_wins_over_coded_holiday_time(self):
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import Holiday, NominaOverride
+        from adherence.models import Coding
+        holiday = self.week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Coding.objects.create(agent=self.admin, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(16, 0), is_admin_coding=True)   # 8 coded hours
+        NominaOverride.objects.create(agent=self.admin, week_start=self.ws,
+                                      field='holiday_hrs', value=Decimal('5'))       # correction
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('5'))         # override replaces the 8 coded
+        self.assertEqual(r['holiday_pay'], Decimal('800.00'))    # 5 × 80 × 2
+
+    def test_overrides_page_offers_holiday_hours_input_for_admins(self):
+        resp = self.client.get(reverse('nomina:overrides') + f'?week_start={self.ws.isoformat()}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Holiday Hours')
+        self.assertContains(resp, f'holiday_hrs_{self.admin.pk}')
+
+    def test_overrides_page_saves_holiday_hours(self):
+        from nomina.models import NominaOverride
+        url = reverse('nomina:overrides') + f'?week_start={self.ws.isoformat()}'
+        self.client.post(url, {f'holiday_hrs_{self.admin.pk}': '6'})
+        o = NominaOverride.objects.get(agent=self.admin, week_start=self.ws, field='holiday_hrs')
+        self.assertEqual(o.value, Decimal('6'))
+
+
 class NominaAdminLoanTests(TestCase):
     """Admin Nómina loans: the manager who handed out a loan is CREDITED this week's
     repayment (Prestamo given); an admin who took a loan has it DEDUCTED (Prestamo owed)."""

@@ -239,6 +239,23 @@ def _holiday_not_worked_hours(agents, holiday_dates, week_dates):
     return out
 
 
+def _admin_holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
+    """{agent_id: worked-holiday hours for an official admin} = Five9 connected (NR-adjusted
+    login) holiday hours PLUS admin coded hours on the holiday date. An admin may have some
+    connected Five9 time and/or admin codings on the day, and both count toward the day's
+    worked-holiday hours (mirrors the billable engine's connected = login + coded). These hours
+    are already paid at 1× in base pay (they flow into _get_billable_weekly_data's final_hrs),
+    so the Admin Nómina adds only the 2× premium on top → a worked holiday pays triple. A manual
+    'holiday_hrs' override still wins over this automatic value."""
+    if not agents or not holiday_dates:
+        return {}
+    from adherence.models import Coding
+    out = dict(_holiday_worked_hours(agents, holiday_dates, nr_ratio))   # connected (login) hours
+    for c in Coding.objects.filter(agent__in=agents, date__in=holiday_dates, is_admin_coding=True):
+        out[c.agent_id] = out.get(c.agent_id, Decimal('0')) + Decimal(str(c.total_hours()))
+    return out
+
+
 def _vacation_hours(agents, week_dates):
     """{agent_id: paid vacation hours this week}. Each 'V' day pays min(scheduled
     hours, 8); a 'V' on an unscheduled day (day off) pays a flat 8."""
@@ -1241,8 +1258,12 @@ def vacations(request):
 
 # Auto columns that can be overridden on the Agent Nómina.
 OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('adherence', 'Adherence'), ('holiday', 'Holiday')]
-# Admins have no adherence bonus — they get the admin bonus instead.
-ADMIN_OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('admin_bonus', 'Admin Bonus'), ('holiday', 'Holiday')]
+# Admins have no adherence bonus — they get the admin bonus instead. Holiday for admins is
+# entered as HOURS (they have no automatic holiday source — off the adherence roster and rarely
+# in Five9); the Holiday Pay amount derives from those hours on the backend.
+ADMIN_OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('admin_bonus', 'Admin Bonus'), ('holiday_hrs', 'Holiday Hours')]
+# Override fields captured as HOURS (the money amount is derived), not entered as a peso amount.
+HOURS_OVERRIDE_FIELDS = {'holiday_hrs'}
 
 
 @login_required
@@ -1283,7 +1304,8 @@ def overrides(request):
         for field, _label in fields:
             o = existing.get((a.pk, field))
             out.append({'field': field, 'computed': computed[field],
-                        'override': '' if o is None else f'{o:.2f}'})
+                        'override': '' if o is None else f'{o:.2f}',
+                        'is_hours': field in HOURS_OVERRIDE_FIELDS})
         return out
 
     # Agents
@@ -1307,7 +1329,7 @@ def overrides(request):
 
     # Official admins
     adata = _get_billable_weekly_data(admins, week_dates, settings)
-    ahol = _holiday_worked_hours(admins, holiday_dates, settings.nr_ratio)
+    ahol = _admin_holiday_worked_hours(admins, holiday_dates, settings.nr_ratio)   # connected + coded
     ahol_nw = _holiday_not_worked_hours(admins, holiday_dates, week_dates)
     admin_rows = []
     for a in admins:
@@ -1316,8 +1338,9 @@ def overrides(request):
         computed = {
             'base_pay': d.get('base_pay_mxn', Decimal('0')),
             'admin_bonus': d.get('admin_bonus_mxn', Decimal('0')),
-            'holiday': (ahol.get(a.pk, Decimal('0')) * rate * 2
-                        + ahol_nw.get(a.pk, Decimal('0')) * rate).quantize(Decimal('0.01')),
+            # Holiday for admins is entered as hours; the computed default is the (usually 0)
+            # auto holiday hours, and Holiday Pay derives from it in _admin_nomina_data.
+            'holiday_hrs': ahol.get(a.pk, Decimal('0')) + ahol_nw.get(a.pk, Decimal('0')),
         }
         admin_rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
                            'cells': _cells(a, computed, ADMIN_OVERRIDE_FIELDS)})
@@ -1508,9 +1531,11 @@ def _admin_nomina_data(week_start, week_dates):
     inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
 
-    # Holiday hours worked (NR-adjusted, per-day 12.5% allowance) + premium.
+    # Holiday hours WORKED come from the admin's connected Five9 time + coded time on the holiday
+    # date. Those hours are already paid at 1× in base pay; the 2× premium is added below, so a
+    # worked holiday pays triple. A manual 'holiday_hrs' override wins over this auto value.
     holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
-    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
+    hol_hours = _admin_holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
     hol_nw_hours = _holiday_not_worked_hours(agents, holiday_dates, week_dates)  # scheduled, not worked (1×)
     # Prestamo GIVEN: the loan manager who fronted the cash (granted_by) is credited this
     # week's repayment for loans they granted — the ONE place a loan adds money to pay
@@ -1566,9 +1591,12 @@ def _admin_nomina_data(week_start, week_dates):
         # Bonus is shown FULL/unmodified; the penalty % + vacation proration land in the Note.
         gross_bonus = ov(a.pk, 'admin_bonus', d.get('admin_bonus_mxn', Decimal('0')))
         ded_pct = deductions.get(a.pk, Decimal('0'))
-        hol_hrs = hol_hours.get(a.pk, Decimal('0'))
+        # Admins have no automatic holiday-hours source, so holiday hours are entered via the
+        # 'holiday_hrs' override; Holiday Pay is derived (never entered as an amount) at 2× the
+        # rate — the worked-holiday premium. hol_nw_hrs is 0 for admins in practice.
+        hol_hrs = ov(a.pk, 'holiday_hrs', hol_hours.get(a.pk, Decimal('0')))
         hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))
-        holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01')))
+        holiday_pay = (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01'))
         spiffs = ((wi.spiff_usd if wi else Decimal('0')) * fx).quantize(Decimal('0.01'))
         lpo = wi.lpo if wi else Decimal('0')
         referral = wi.referral if wi else Decimal('0')
