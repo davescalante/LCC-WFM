@@ -238,6 +238,23 @@ def _holiday_not_worked_hours(agents, holiday_dates, week_dates):
     return out
 
 
+def _admin_holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
+    """{agent_id: worked-holiday hours for an official admin} = Five9 connected (NR-adjusted
+    login) holiday hours PLUS admin coded hours on the holiday date. An admin may have some
+    connected Five9 time and/or admin codings on the day, and both count toward the day's
+    worked-holiday hours (mirrors the billable engine's connected = login + coded). These hours
+    are already paid at 1× in base pay (they flow into _get_billable_weekly_data's final_hrs),
+    so the Admin Nómina adds only the 2× premium on top → a worked holiday pays triple. A manual
+    'holiday_hrs' override still wins over this automatic value."""
+    if not agents or not holiday_dates:
+        return {}
+    from adherence.models import Coding
+    out = dict(_holiday_worked_hours(agents, holiday_dates, nr_ratio))   # connected (login) hours
+    for c in Coding.objects.filter(agent__in=agents, date__in=holiday_dates, is_admin_coding=True):
+        out[c.agent_id] = out.get(c.agent_id, Decimal('0')) + Decimal(str(c.total_hours()))
+    return out
+
+
 def _vacation_hours(agents, week_dates):
     """{agent_id: paid vacation hours this week}. Each 'V' day pays min(scheduled
     hours, 8); a 'V' on an unscheduled day (day off) pays a flat 8."""
@@ -1308,7 +1325,7 @@ def overrides(request):
 
     # Official admins
     adata = _get_billable_weekly_data(admins, week_dates, settings)
-    ahol = _holiday_worked_hours(admins, holiday_dates, settings.nr_ratio)
+    ahol = _admin_holiday_worked_hours(admins, holiday_dates, settings.nr_ratio)   # connected + coded
     ahol_nw = _holiday_not_worked_hours(admins, holiday_dates, week_dates)
     admin_rows = []
     for a in admins:
@@ -1510,9 +1527,11 @@ def _admin_nomina_data(week_start, week_dates):
     inputs_map = {wi.agent_id: wi for wi in WeeklyPayInput.objects.filter(
         agent__in=agents, week_start=week_start)}
 
-    # Holiday hours worked (NR-adjusted, per-day 12.5% allowance) + premium.
+    # Holiday hours WORKED come from the admin's connected Five9 time + coded time on the holiday
+    # date. Those hours are already paid at 1× in base pay; the 2× premium is added below, so a
+    # worked holiday pays triple. A manual 'holiday_hrs' override wins over this auto value.
     holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
-    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
+    hol_hours = _admin_holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
     hol_nw_hours = _holiday_not_worked_hours(agents, holiday_dates, week_dates)  # scheduled, not worked (1×)
     # Prestamo GIVEN: the loan manager who fronted the cash (granted_by) is credited this
     # week's repayment for loans they granted — the ONE place a loan adds money to pay

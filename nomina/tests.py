@@ -763,6 +763,60 @@ class NominaAdminHolidayHoursOverrideTests(TestCase):
         self.assertEqual(r['wage'], Decimal('80'))               # rate flows from hourly_rate
         self.assertEqual(r['holiday_pay'], Decimal('1280.00'))   # 8 × 80 × 2
 
+    def test_worked_holiday_reads_coded_time_and_pays_triple(self):
+        # An admin who WORKS the holiday codes that time; the coded hours are read
+        # automatically (no manual entry) and the holiday pays triple: base 1× + premium 2×.
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import Holiday
+        from adherence.models import Coding
+        holiday = self.week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Coding.objects.create(agent=self.admin, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(16, 0), is_admin_coding=True)   # 8 coded hours
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))         # auto-read from coded time
+        self.assertEqual(r['base_pay'], Decimal('640.00'))       # 8 × 80 already paid at 1×
+        self.assertEqual(r['holiday_pay'], Decimal('1280.00'))   # + 8 × 80 × 2 premium
+        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('8') * Decimal('80') * 3)   # triple
+
+    def test_worked_holiday_sums_connected_and_coded_time(self):
+        # For the holiday day, worked hours = connected Five9 time + coded time; both count.
+        import datetime
+        from scheduling.models import Five9Profile
+        from adherence.models import DailyUpload, DailyAgentHours, Coding
+        from nomina.models import Holiday
+        from nomina.views import _admin_nomina_data
+        holiday = self.week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Five9Profile.objects.create(agent=self.admin, five9_username='hhadmin_f9', billable=True, is_primary=True)
+        up, _ = DailyUpload.objects.get_or_create(date=holiday)
+        DailyAgentHours.objects.create(upload=up, agent=self.admin, five9_username='hhadmin_f9',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)      # 3h connected
+        Coding.objects.create(agent=self.admin, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(13, 0), is_admin_coding=True)        # 5h coded
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))         # 3 connected + 5 coded
+        self.assertEqual(r['holiday_pay'], Decimal('1280.00'))   # 8 × 80 × 2
+
+    def test_manual_override_wins_over_coded_holiday_time(self):
+        import datetime
+        from nomina.views import _admin_nomina_data
+        from nomina.models import Holiday, NominaOverride
+        from adherence.models import Coding
+        holiday = self.week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Coding.objects.create(agent=self.admin, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(16, 0), is_admin_coding=True)   # 8 coded hours
+        NominaOverride.objects.create(agent=self.admin, week_start=self.ws,
+                                      field='holiday_hrs', value=Decimal('5'))       # correction
+        rows, _ = _admin_nomina_data(self.ws, self.week)
+        r = next(x for x in rows if x['agent'].pk == self.admin.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('5'))         # override replaces the 8 coded
+        self.assertEqual(r['holiday_pay'], Decimal('800.00'))    # 5 × 80 × 2
+
     def test_overrides_page_offers_holiday_hours_input_for_admins(self):
         resp = self.client.get(reverse('nomina:overrides') + f'?week_start={self.ws.isoformat()}')
         self.assertEqual(resp.status_code, 200)
