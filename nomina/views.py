@@ -707,7 +707,6 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         kill_qa = ov(a.pk, 'kill_qa', kq_raw)
         hol_hrs = hol_hours.get(a.pk, Decimal('0'))            # worked holiday hours → 2×
         hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))      # scheduled, not worked (≤8/day) → 1×
-        holiday_hrs = hol_hrs + hol_nw_hrs                     # Holiday column shows both (mutually exclusive per day)
         holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01')))
         comedor = ov(a.pk, 'comedor', wi.comedor if wi else Decimal('0'))
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))
@@ -729,10 +728,9 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         total = subtotal - comedor - transport - loan  # may go negative (G6)
 
         final_hrs = d.get('final_hrs', Decimal('0'))
-        # Hours Worked INCLUDES worked holiday hours (paid 1× here via base; Holiday Pay adds
-        # the +2× = triple) plus any applied extra hours. The Holiday column (holiday_hrs) shows
-        # worked + not-worked holiday hours; not-worked hours are NOT in Hours Worked (1× via
-        # Holiday Pay only), so the column is no longer a strict subset of Hours Worked.
+        # Hours Worked INCLUDES holiday hours (paid 1× here via base; the Holiday column
+        # shows that subset, Holiday Pay adds the +2× = triple) plus any applied extra hours.
+        # A not-worked holiday shows 0 Holiday hours (worked 0) but is still paid via Holiday Pay.
         worked_hrs = final_hrs + applied_extra
         total_hrs = worked_hrs + applied_vac                  # + paid vacation hours (Mine only)
         rows.append({
@@ -740,7 +738,7 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
             'legal_name': a.user.get_full_name() or a.user.username,
             'username': a.user.username, 'break_abuse': broke,
             'hours': final_hrs, 'rate': rate,
-            'worked_hrs': worked_hrs, 'holiday_hrs': holiday_hrs, 'total_hrs': total_hrs,
+            'worked_hrs': worked_hrs, 'holiday_hrs': hol_hrs, 'total_hrs': total_hrs,
             'vac_hrs': vac_hrs, 'vac_pay': vac_pay, 'vac_days': vac_days_map.get(a.pk, 0),
             'extra_hrs': extra_hrs, 'extra_pay': extra_pay,
             'base_pay': pay48, 'adherence_bonus': bonus,
@@ -750,7 +748,7 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         })
         tot_base += pay48; tot_bonus += bonus; tot_lpo += net_lpo; tot_spiff += spiff_mxn
         tot_hol += holiday_pay; tot_sub += subtotal; tot_ded += (comedor + transport + loan); tot_total += total
-        tot_worked_hrs += worked_hrs; tot_hol_hrs += holiday_hrs; tot_total_hrs += total_hrs; tot_vac_hrs += vac_hrs
+        tot_worked_hrs += worked_hrs; tot_hol_hrs += hol_hrs; tot_total_hrs += total_hrs; tot_vac_hrs += vac_hrs
         tot_referral += referral; tot_welcome += welcome; tot_kill += kill_qa
         tot_comedor += comedor; tot_transport += transport; tot_loan += loan
 
