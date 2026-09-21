@@ -964,8 +964,9 @@ class NominaHolidayPayTests(TestCase):
         self.assertEqual(r['base_pay'], Decimal('375.00'))         # 6 × 62.50
 
     def test_not_worked_holiday_pays_scheduled_1x(self):
-        # Decision 5b: scheduled but NOT worked (status 'Holiday') → 0 worked hours,
-        # Holiday Pay = scheduled hours × rate (1×), nothing added to Hours Worked.
+        # Decision 5b: scheduled but NOT worked (status 'Holiday') → 0 WORKED hours (nothing
+        # added to Hours Worked), Holiday Pay = scheduled hours (≤8) × rate (1×). The scheduled
+        # holiday hours now show in the Holiday column so hours and pay line up.
         from nomina.models import Holiday
         from nomina.views import _agent_nomina_data
         from adherence.models import AdherenceRecord
@@ -983,8 +984,30 @@ class NominaHolidayPayTests(TestCase):
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
         self.assertEqual(r['holiday_pay'], Decimal('500.00'))      # 8 × 62.50 × 1
-        self.assertEqual(r['holiday_hrs'], Decimal('0'))           # 0 worked holiday hours
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))           # scheduled not-worked hours shown
         self.assertEqual(r['worked_hrs'], Decimal('0'))            # nothing added to hours worked
+
+    def test_not_worked_holiday_over_8_caps_at_8(self):
+        # Scheduled MORE than 8h on a holiday, not worked → Holiday Pay = 8 × rate (capped at 8),
+        # and the Holiday column shows 8. Regression for the uncapped case (e.g. a 9h10m holiday
+        # shift at 208.33 was paying 9.166 × 208.33 = 1909.69 instead of 8 × 208.33 = 1666.64).
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import AdherenceRecord
+        from scheduling.models import Shift
+        import datetime
+        a = self._agent(rate='208.33')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Shift.objects.create(agent=a, date=holiday, is_off=False,
+                             start_time=datetime.time(8, 0), end_time=datetime.time(17, 10))   # 9h10m scheduled
+        AdherenceRecord.objects.update_or_create(agent=a, date=holiday, defaults={'status': 'Holiday'})
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))           # capped at 8, shown in the column
+        self.assertEqual(r['holiday_pay'], Decimal('1666.64'))     # 8 × 208.33 (not 9.166 ×)
 
     def test_holiday_status_is_bonus_qualifying(self):
         from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
@@ -1923,5 +1946,5 @@ class NominaAuditFixTests(TestCase):
                                        login_seconds=2 * 3600, not_ready_seconds=0)   # stray login
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
-        self.assertEqual(r['holiday_hrs'], Decimal('0'))          # not paid as WORKED holiday
-        self.assertEqual(r['holiday_pay'], Decimal('500.00'))     # 8 sched × 62.50 × 1 only
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))          # not-worked scheduled hours shown
+        self.assertEqual(r['holiday_pay'], Decimal('500.00'))     # 8 sched × 62.50 × 1 only — the stray 2h login is NOT paid as worked (no 2×)
