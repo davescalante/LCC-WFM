@@ -209,8 +209,9 @@ def _holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
 
 def _holiday_not_worked_hours(agents, holiday_dates, week_dates):
     """{agent_id: scheduled hours on holidays the agent was scheduled for but did NOT
-    work (status 'Holiday')}. These earn Holiday Pay at 1× (rate × hours) and add 0
-    to Hours Worked — the paid-but-not-worked company-holiday case (decision 5b)."""
+    work (status 'Holiday'), each holiday day capped at 8h}. These earn Holiday Pay at
+    1× (rate × hours) and add 0 to Hours Worked — the paid-but-not-worked company-holiday
+    case (decision 5b). A day scheduled for more than 8h therefore pays rate × 8."""
     if not agents or not holiday_dates:
         return {}
     from adherence.models import AdherenceRecord
@@ -233,7 +234,7 @@ def _holiday_not_worked_hours(agents, holiday_dates, week_dates):
             shift = shift_map.get((aid, d))
             sched = _scheduled_hours(shift) if shift else Decimal('0')
             sched += extra_hrs_map.get((aid, d), Decimal('0'))
-            total += sched
+            total += min(sched, Decimal('8'))   # a paid-not-worked holiday day is capped at 8h
         out[aid] = total
     return out
 
@@ -688,7 +689,7 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
             kq_raw = kq_stored if kq_stored is not None else Decimal('0')
         kill_qa = ov(a.pk, 'kill_qa', kq_raw)
         hol_hrs = hol_hours.get(a.pk, Decimal('0'))            # worked holiday hours → 2×
-        hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))      # scheduled, not worked → 1×
+        hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))      # scheduled, not worked (≤8/day) → 1×
         holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01')))
         comedor = ov(a.pk, 'comedor', wi.comedor if wi else Decimal('0'))
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))
@@ -712,6 +713,7 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         final_hrs = d.get('final_hrs', Decimal('0'))
         # Hours Worked INCLUDES holiday hours (paid 1× here via base; the Holiday column
         # shows that subset, Holiday Pay adds the +2× = triple) plus any applied extra hours.
+        # A not-worked holiday shows 0 Holiday hours (worked 0) but is still paid via Holiday Pay.
         worked_hrs = final_hrs + applied_extra
         total_hrs = worked_hrs + applied_vac                  # + paid vacation hours (Mine only)
         rows.append({
