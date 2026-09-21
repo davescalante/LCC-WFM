@@ -1086,7 +1086,7 @@ class NominaHolidayPayTests(TestCase):
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
         self.assertEqual(r['holiday_pay'], Decimal('500.00'))      # 8 × 62.50 × 1
-        self.assertEqual(r['holiday_hrs'], Decimal('8'))           # scheduled not-worked hours shown
+        self.assertEqual(r['holiday_hrs'], Decimal('0'))           # 0 worked holiday hours
         self.assertEqual(r['worked_hrs'], Decimal('0'))            # nothing added to hours worked
 
     def test_not_worked_holiday_over_8_caps_at_8(self):
@@ -1108,8 +1108,8 @@ class NominaHolidayPayTests(TestCase):
         AdherenceRecord.objects.update_or_create(agent=a, date=holiday, defaults={'status': 'Holiday'})
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
-        self.assertEqual(r['holiday_hrs'], Decimal('8'))           # capped at 8, shown in the column
-        self.assertEqual(r['holiday_pay'], Decimal('1666.64'))     # 8 × 208.33 (not 9.166 ×)
+        self.assertEqual(r['holiday_hrs'], Decimal('0'))           # 0 worked holiday hours (not worked)
+        self.assertEqual(r['holiday_pay'], Decimal('1666.64'))     # pay capped: 8 × 208.33 (not 9.166 ×)
 
     def test_holiday_status_is_bonus_qualifying(self):
         from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
@@ -2048,5 +2048,5 @@ class NominaAuditFixTests(TestCase):
                                        login_seconds=2 * 3600, not_ready_seconds=0)   # stray login
         rows, _ = _agent_nomina_data(ws, week)
         r = next(x for x in rows if x['agent'].pk == a.pk)
-        self.assertEqual(r['holiday_hrs'], Decimal('8'))          # not-worked scheduled hours shown
-        self.assertEqual(r['holiday_pay'], Decimal('500.00'))     # 8 sched × 62.50 × 1 only — the stray 2h login is NOT paid as worked (no 2×)
+        self.assertEqual(r['holiday_hrs'], Decimal('0'))          # 0 worked holiday hours (stray 2h Five9 is NOT worked-holiday)
+        self.assertEqual(r['holiday_pay'], Decimal('500.00'))     # 8 sched × 62.50 × 1 only — no 2× on the stray login
