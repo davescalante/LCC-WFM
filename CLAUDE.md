@@ -364,13 +364,19 @@ Full map in `SYSTEM-SUMMARY.md` §12. The math lives in `nomina/views.py` and is
 Full map in `SYSTEM-SUMMARY.md` §13.
 
 - **The holiday not-ready allowance is a third NR rule and must stay different.**
-  `_holiday_worked_hours` uses `login × nr_ratio` **per holiday day, uncapped, with coded time
-  excluded** from the allowance base. The money engine uses `(login + coded) × nr_ratio` pooled
-  over the whole week and capped at 6 h/7 h; `_refresh_actual_hours` uses `(login + coded) ×
-  nr_ratio` per day, uncapped. All three read the same `nr_ratio`. The premium is meant to be
-  paid on the day's productive hours (`d5ecf07`), so the holiday hour count can legitimately
-  differ from that day's contribution to `final_hrs` — "triple pay" holds only when the two
-  figures happen to agree. This is not a bug to reconcile.
+  `_holiday_worked_hours` discounts not-ready time **in excess of a flat 1-hour allowance per
+  holiday day** (NOT `login × nr_ratio` — that was the old rule); the deduction reduces only the
+  connected/login portion, never coded time. The money engine uses `(login + coded) × nr_ratio`
+  pooled over the whole week and capped at 6 h/7 h; `_refresh_actual_hours` uses
+  `(login + coded) × nr_ratio` per day, uncapped — those two are unchanged and still use
+  `nr_ratio`. **The worked-holiday premium is paid on connected + coded, not login alone:** the
+  nómina calls `_holiday_worked_hours_incl_coded`, which adds each person's coded hours on the
+  holiday date (regular codings for agents, admin codings for official admins) to the
+  NR-adjusted login hours, so the 2× premium covers all worked holiday hours and a worked
+  holiday pays triple on them. (`_holiday_worked_hours` still takes an `nr_ratio` arg for
+  signature compatibility but no longer uses it — the holiday allowance is a flat 1 h.) The
+  holiday hour count can still legitimately differ from that day's contribution to `final_hrs`;
+  this is not a bug to reconcile.
 - **`status='Holiday'` and worked holiday hours are mutually exclusive by design.** A day marked
   `'Holiday'` is dropped from `_holiday_worked_hours` entirely, even if Five9 login exists for it,
   and paid the 1× not-worked way instead (`4f152b0`). Removing that exclusion double-pays.
