@@ -1028,8 +1028,8 @@ class NominaHolidayPayTests(TestCase):
         self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('8') * Decimal('62.50') * 3)
 
     def test_holiday_hours_discount_excess_not_ready(self):
-        # The rule: 8h logged, 1.5h not-ready → discount the EXCESS over the 12.5%
-        # allowance (1.0h) = 0.5h, so the premium is on 7.5 holiday hours, not 8.
+        # The rule: 8h logged, 1.5h not-ready → discount the EXCESS over the flat 1h
+        # allowance = 0.5h, so the premium is on 7.5 holiday hours, not 8.
         from nomina.models import Holiday
         from nomina.views import _agent_nomina_data
         import datetime
@@ -1049,7 +1049,7 @@ class NominaHolidayPayTests(TestCase):
         self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('7.5') * Decimal('62.50') * 3)
 
     def test_holiday_hours_heavier_not_ready(self):
-        # 8h logged, 3h not-ready → excess over allowance = 3 − 1.0 = 2.0 → 6 holiday hours.
+        # 8h logged, 3h not-ready → excess over the flat 1h allowance = 3 − 1 = 2 → 6 holiday hours.
         from nomina.models import Holiday
         from nomina.views import _agent_nomina_data
         import datetime
@@ -1110,6 +1110,102 @@ class NominaHolidayPayTests(TestCase):
         r = next(x for x in rows if x['agent'].pk == a.pk)
         self.assertEqual(r['holiday_hrs'], Decimal('0'))           # 0 worked holiday hours (not worked)
         self.assertEqual(r['holiday_pay'], Decimal('1666.64'))     # pay capped: 8 × 208.33 (not 9.166 ×)
+
+    def test_worked_holiday_includes_connected_and_coded(self):
+        # A worked holiday counts connected (Five9) + coded time; the 2× premium applies to both,
+        # so a worked holiday pays triple on the full worked hours (not just the Five9 portion).
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import Coding
+        import datetime
+        a = self._agent(rate='100')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        self._log_day(a, holiday, login_h=3, nr_h=0)                                   # 3h connected
+        Coding.objects.create(agent=a, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(13, 0), is_admin_coding=False)     # 5h coded
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))           # 3 connected + 5 coded
+        self.assertEqual(r['base_pay'], Decimal('800.00'))         # 8 × 100 already at 1×
+        self.assertEqual(r['holiday_pay'], Decimal('1600.00'))     # + 8 × 100 × 2 premium
+        self.assertEqual(r['base_pay'] + r['holiday_pay'], Decimal('8') * Decimal('100') * 3)   # triple
+
+    def test_worked_holiday_coded_only_earns_premium(self):
+        # Even with NO Five9 login, coded time on the holiday earns the premium (previously coded
+        # time was ignored for the holiday — only connected/Five9 time counted).
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import Coding
+        import datetime
+        a = self._agent(rate='100')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        Coding.objects.create(agent=a, date=holiday, start_time=datetime.time(8, 0),
+                              end_time=datetime.time(16, 0), is_admin_coding=False)     # 8h coded, no Five9
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('8'))           # coded only
+        self.assertEqual(r['holiday_pay'], Decimal('1600.00'))     # 8 × 100 × 2
+
+    def test_worked_holiday_not_ready_excess_deducted(self):
+        # Not-ready time OVER the allowance is deducted from the worked holiday hours.
+        # Connected 8h (2h not-ready) + coded 4h = 12h; allowance = flat 1h; excess = 1h;
+        # holiday hours = 12 − 1 = 11; pay = 11 × 62.50 × 2 = $1,375.00.
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        from adherence.models import Coding
+        import datetime
+        a = self._agent(rate='62.50')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        self._log_day(a, holiday, login_h=8, nr_h=2)                                   # 8h connected, 2h NR
+        Coding.objects.create(agent=a, date=holiday, start_time=datetime.time(0, 0),
+                              end_time=datetime.time(4, 0), is_admin_coding=False)      # 4h coded
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('11'))          # 12 − 1 (not-ready excess)
+        self.assertEqual(r['holiday_pay'], Decimal('1375.00'))     # 11 × 62.50 × 2
+
+    def test_holiday_nr_allowance_is_flat_1h_not_ratio(self):
+        # The holiday not-ready allowance is a FLAT 1h, not 12.5% of connected. 12h connected,
+        # 2h not-ready, no coded → excess = 2 − 1 = 1 → 11h. (Under the old 12.5% rule the
+        # allowance would have been 12 × 12.5% = 1.5h → excess 0.5h → 11.5h.)
+        from nomina.models import Holiday
+        from nomina.views import _agent_nomina_data
+        import datetime
+        a = self._agent(rate='62.50')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        holiday = week[2]
+        Holiday.objects.create(date=holiday, name='Test Holiday')
+        self._log_day(a, holiday, login_h=12, nr_h=2)              # 12h connected, 2h NR, no coded
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('11'))         # 12 − 1 (flat 1h), NOT 11.5
+        self.assertEqual(r['holiday_pay'], Decimal('1375.00'))    # 11 × 62.50 × 2
+
+    def test_agent_holiday_hours_override_pays_2x(self):
+        # The agent holiday override is hours-based (like admins): the entered hours are worked
+        # holiday hours paid at 2×. A 6h override at $62.50 → 6 × 62.50 × 2 = $750.
+        from nomina.models import Holiday, NominaOverride
+        from nomina.views import _agent_nomina_data
+        import datetime
+        a = self._agent(rate='62.50')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        Holiday.objects.create(date=week[2], name='Test Holiday')
+        NominaOverride.objects.create(agent=a, week_start=ws, field='holiday_hrs', value=Decimal('6'))
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('6'))          # override sets worked holiday hours
+        self.assertEqual(r['holiday_pay'], Decimal('750.00'))     # 6 × 62.50 × 2
 
     def test_holiday_status_is_bonus_qualifying(self):
         from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING

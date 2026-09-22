@@ -171,10 +171,11 @@ def _unrostered_infinity(week_start):
 def _holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
     """{agent_id: NR-adjusted billable hours worked on the holiday dates}.
 
-    Per holiday day, the not-ready time *in excess* of the allowance
-    (nr_ratio × that day's login) is discounted, so a holiday worked with heavy
-    not-ready earns its 2× premium on fewer than the raw logged hours. With no
-    (or within-allowance) not-ready, this equals the logged hours."""
+    Per holiday day, the not-ready time *in excess* of a flat 1-hour allowance is
+    discounted, so a holiday worked with heavy not-ready earns its 2× premium on fewer
+    than the raw logged hours. With no (or within-allowance) not-ready, this equals the
+    logged hours. (`nr_ratio` is kept for signature compatibility; the holiday allowance
+    is a flat 1 h, not nr_ratio × login.)"""
     if not agents or not holiday_dates:
         return {}
     from adherence.models import DailyAgentHours, AdherenceRecord
@@ -201,7 +202,7 @@ def _holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
     for (aid, _d), (lsec, nsec) in per_day.items():
         login_h = Decimal(str(lsec)) / Decimal('3600')
         nr_h = Decimal(str(nsec)) / Decimal('3600')
-        excess_nr = max(Decimal('0'), nr_h - login_h * nr_ratio)   # only NR over the allowance
+        excess_nr = max(Decimal('0'), nr_h - Decimal('1'))   # holiday NR allowance: a flat 1 hour/day (max)
         worked = max(Decimal('0'), login_h - excess_nr)
         out[aid] = out.get(aid, Decimal('0')) + worked
     return out
@@ -239,21 +240,27 @@ def _holiday_not_worked_hours(agents, holiday_dates, week_dates):
     return out
 
 
-def _admin_holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
-    """{agent_id: worked-holiday hours for an official admin} = Five9 connected (NR-adjusted
-    login) holiday hours PLUS admin coded hours on the holiday date. An admin may have some
-    connected Five9 time and/or admin codings on the day, and both count toward the day's
-    worked-holiday hours (mirrors the billable engine's connected = login + coded). These hours
-    are already paid at 1× in base pay (they flow into _get_billable_weekly_data's final_hrs),
-    so the Admin Nómina adds only the 2× premium on top → a worked holiday pays triple. A manual
-    'holiday_hrs' override still wins over this automatic value."""
+def _holiday_worked_hours_incl_coded(agents, holiday_dates, nr_ratio, admin_coding):
+    """{agent_id: worked-holiday hours} = NR-adjusted Five9 connected (login) holiday hours PLUS
+    coded hours on the holiday date. Coded time is off-Five9 work, so it adds to (never overlaps)
+    the login hours — the same connected = login + coded the billable engine uses for base pay —
+    and the 2× holiday premium then applies to all of it (a worked holiday pays triple). Those
+    hours are already paid at 1× in base pay (they flow into _get_billable_weekly_data's
+    final_hrs), so the nómina adds only the 2× premium on top. `admin_coding` selects the coding
+    partition: True = admin codings (official admins), False = regular codings (agents)."""
     if not agents or not holiday_dates:
         return {}
     from adherence.models import Coding
     out = dict(_holiday_worked_hours(agents, holiday_dates, nr_ratio))   # connected (login) hours
-    for c in Coding.objects.filter(agent__in=agents, date__in=holiday_dates, is_admin_coding=True):
+    for c in Coding.objects.filter(agent__in=agents, date__in=holiday_dates, is_admin_coding=admin_coding):
         out[c.agent_id] = out.get(c.agent_id, Decimal('0')) + Decimal(str(c.total_hours()))
     return out
+
+
+def _admin_holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125')):
+    """Official-admin worked-holiday hours = connected (login) + admin coded hours on the holiday
+    date (a manual 'holiday_hrs' override still wins). See _holiday_worked_hours_incl_coded."""
+    return _holiday_worked_hours_incl_coded(agents, holiday_dates, nr_ratio, admin_coding=True)
 
 
 def _vacation_hours(agents, week_dates):
@@ -649,7 +656,7 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
     ba_agents = set(BreakAbuseIncident.objects.filter(
         agent__in=agents, date__in=week_dates).values_list('agent_id', flat=True))
     holiday_dates = list(Holiday.objects.filter(date__in=week_dates).values_list('date', flat=True))
-    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
+    hol_hours = _holiday_worked_hours_incl_coded(agents, holiday_dates, settings.nr_ratio, admin_coding=False)
     hol_nw_hours = _holiday_not_worked_hours(agents, holiday_dates, week_dates)  # scheduled, not worked (1×)
     vac_hours = _vacation_hours(agents, week_dates)   # paid vacation hours ('V' days)
     from adherence.models import AdherenceRecord
@@ -705,9 +712,12 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         else:
             kq_raw = kq_stored if kq_stored is not None else Decimal('0')
         kill_qa = ov(a.pk, 'kill_qa', kq_raw)
-        hol_hrs = hol_hours.get(a.pk, Decimal('0'))            # worked holiday hours → 2×
+        # Worked holiday hours (connected + coded) are entered via the 'holiday_hrs' hours override
+        # (mirrors admins); Holiday Pay derives at 2× the rate. The scheduled-not-worked holiday
+        # (1×, ≤8/day) stays auto-computed.
+        hol_hrs = ov(a.pk, 'holiday_hrs', hol_hours.get(a.pk, Decimal('0')))   # worked holiday hrs; hours override
         hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))      # scheduled, not worked (≤8/day) → 1×
-        holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01')))
+        holiday_pay = (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01'))
         comedor = ov(a.pk, 'comedor', wi.comedor if wi else Decimal('0'))
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))
         loan = ov(a.pk, 'loan', loan_ded.get(a.pk, Decimal('0')))
@@ -1255,7 +1265,7 @@ def vacations(request):
 
 
 # Auto columns that can be overridden on the Agent Nómina.
-OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('adherence', 'Adherence'), ('holiday', 'Holiday')]
+OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('adherence', 'Adherence'), ('holiday_hrs', 'Holiday Hours')]
 # Admins have no adherence bonus — they get the admin bonus instead. Holiday for admins is
 # entered as HOURS (they have no automatic holiday source — off the adherence roster and rarely
 # in Five9); the Holiday Pay amount derives from those hours on the backend.
@@ -1310,7 +1320,7 @@ def overrides(request):
     data = _get_billable_weekly_data(agents, week_dates, settings)
     ba_agents = set(BreakAbuseIncident.objects.filter(
         agent__in=agents, date__in=week_dates).values_list('agent_id', flat=True))
-    hol_hours = _holiday_worked_hours(agents, holiday_dates, settings.nr_ratio)
+    hol_hours = _holiday_worked_hours_incl_coded(agents, holiday_dates, settings.nr_ratio, admin_coding=False)
     hol_nw_hours = _holiday_not_worked_hours(agents, holiday_dates, week_dates)
     rows = []
     for a in agents:
@@ -1319,8 +1329,8 @@ def overrides(request):
         computed = {
             'base_pay': d.get('base_pay_mxn', Decimal('0')),
             'adherence': Decimal('0') if a.pk in ba_agents else d.get('bonus_mxn', Decimal('0')),
-            'holiday': (hol_hours.get(a.pk, Decimal('0')) * rate * 2
-                        + hol_nw_hours.get(a.pk, Decimal('0')) * rate).quantize(Decimal('0.01')),
+            # Holiday for agents is entered as hours (worked holiday hrs); the amount derives at 2×.
+            'holiday_hrs': hol_hours.get(a.pk, Decimal('0')),
         }
         rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
                      'cells': _cells(a, computed, OVERRIDE_FIELDS)})
