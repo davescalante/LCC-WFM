@@ -1191,6 +1191,22 @@ class NominaHolidayPayTests(TestCase):
         self.assertEqual(r['holiday_hrs'], Decimal('11'))         # 12 − 1 (flat 1h), NOT 11.5
         self.assertEqual(r['holiday_pay'], Decimal('1375.00'))    # 11 × 62.50 × 2
 
+    def test_agent_holiday_hours_override_pays_2x(self):
+        # The agent holiday override is hours-based (like admins): the entered hours are worked
+        # holiday hours paid at 2×. A 6h override at $62.50 → 6 × 62.50 × 2 = $750.
+        from nomina.models import Holiday, NominaOverride
+        from nomina.views import _agent_nomina_data
+        import datetime
+        a = self._agent(rate='62.50')
+        ws = get_week_start()
+        week = [ws + datetime.timedelta(days=i) for i in range(7)]
+        Holiday.objects.create(date=week[2], name='Test Holiday')
+        NominaOverride.objects.create(agent=a, week_start=ws, field='holiday_hrs', value=Decimal('6'))
+        rows, _ = _agent_nomina_data(ws, week)
+        r = next(x for x in rows if x['agent'].pk == a.pk)
+        self.assertEqual(r['holiday_hrs'], Decimal('6'))          # override sets worked holiday hours
+        self.assertEqual(r['holiday_pay'], Decimal('750.00'))     # 6 × 62.50 × 2
+
     def test_holiday_status_is_bonus_qualifying(self):
         from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING
         self.assertIn('Holiday', BONUS_QUALIFYING)        # a not-worked holiday must NOT kill the bonus

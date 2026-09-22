@@ -712,9 +712,12 @@ def _agent_nomina_data(week_start, week_dates, corrected=True):
         else:
             kq_raw = kq_stored if kq_stored is not None else Decimal('0')
         kill_qa = ov(a.pk, 'kill_qa', kq_raw)
-        hol_hrs = hol_hours.get(a.pk, Decimal('0'))            # worked holiday hours → 2×
+        # Worked holiday hours (connected + coded) are entered via the 'holiday_hrs' hours override
+        # (mirrors admins); Holiday Pay derives at 2× the rate. The scheduled-not-worked holiday
+        # (1×, ≤8/day) stays auto-computed.
+        hol_hrs = ov(a.pk, 'holiday_hrs', hol_hours.get(a.pk, Decimal('0')))   # worked holiday hrs; hours override
         hol_nw_hrs = hol_nw_hours.get(a.pk, Decimal('0'))      # scheduled, not worked (≤8/day) → 1×
-        holiday_pay = ov(a.pk, 'holiday', (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01')))
+        holiday_pay = (hol_hrs * rate * 2 + hol_nw_hrs * rate).quantize(Decimal('0.01'))
         comedor = ov(a.pk, 'comedor', wi.comedor if wi else Decimal('0'))
         transport = ov(a.pk, 'transport', wi.transportation if wi else Decimal('0'))
         loan = ov(a.pk, 'loan', loan_ded.get(a.pk, Decimal('0')))
@@ -1262,7 +1265,7 @@ def vacations(request):
 
 
 # Auto columns that can be overridden on the Agent Nómina.
-OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('adherence', 'Adherence'), ('holiday', 'Holiday')]
+OVERRIDE_FIELDS = [('base_pay', 'Base Pay'), ('adherence', 'Adherence'), ('holiday_hrs', 'Holiday Hours')]
 # Admins have no adherence bonus — they get the admin bonus instead. Holiday for admins is
 # entered as HOURS (they have no automatic holiday source — off the adherence roster and rarely
 # in Five9); the Holiday Pay amount derives from those hours on the backend.
@@ -1326,8 +1329,8 @@ def overrides(request):
         computed = {
             'base_pay': d.get('base_pay_mxn', Decimal('0')),
             'adherence': Decimal('0') if a.pk in ba_agents else d.get('bonus_mxn', Decimal('0')),
-            'holiday': (hol_hours.get(a.pk, Decimal('0')) * rate * 2
-                        + hol_nw_hours.get(a.pk, Decimal('0')) * rate).quantize(Decimal('0.01')),
+            # Holiday for agents is entered as hours (worked holiday hrs); the amount derives at 2×.
+            'holiday_hrs': hol_hours.get(a.pk, Decimal('0')),
         }
         rows.append({'agent': a, 'name': a.agent_name or a.user.get_full_name() or a.user.username,
                      'cells': _cells(a, computed, OVERRIDE_FIELDS)})

@@ -277,10 +277,13 @@ nothing in `nomina/` reads `AdherenceRecord.actual_hours`; all hours and base pa
   the engine's `base_pay_mxn` and extra-hours and vacation pay are still added on top. On the Admin
   Nómina it replaces `base_pay_mxn + extra_hrs × rate` — the whole thing, Admin Hours included.
 - **Only three override fields have a UI, but `_agent_nomina_data` honors more.** The Overrides page
-  writes `base_pay`, `adherence`, `holiday` (admins: `base_pay`, `admin_bonus`, `holiday`), yet
-  `ov()` is also called for `net_lpo`, `spiff`, `welcome`, `referral`, `kill_qa`, `comedor`,
-  `transport` and `loan`. A `NominaOverride` row with one of those `field` values silently takes
-  effect with nothing on screen to create or reveal it. Overrides apply to "Mine" only.
+  writes `base_pay`, `adherence`, `holiday_hrs` (admins: `base_pay`, `admin_bonus`, `holiday_hrs`).
+  **Holiday is an HOURS override** (`holiday_hrs`, in `HOURS_OVERRIDE_FIELDS`): the value is the
+  WORKED holiday hours and Holiday Pay derives from it at 2× (the scheduled-not-worked 1× stays
+  auto-computed); the old amount-based `holiday` field is no longer read on either sheet. `ov()`
+  is also called for `net_lpo`, `spiff`, `welcome`, `referral`, `kill_qa`, `comedor`, `transport`
+  and `loan` — a `NominaOverride` row with one of those `field` values silently takes effect with
+  nothing on screen to create or reveal it. Overrides apply to "Mine" only.
 - **The non-billable-overpay guard does not zero holiday or vacation pay.** For an untracked agent
   with no billable Five9 profile, `_agent_nomina_data` zeroes `base_pay_mxn`, `bonus_mxn` and
   `final_hrs` but deliberately leaves `hourly_mxn` intact. `_holiday_worked_hours` reads
