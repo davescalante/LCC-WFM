@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from adherence.models import AdherenceRecord, Coding
 from .models import (
-    Agent, AgentRequest, OvertimeShift,
+    Agent, AgentRequest, Five9Profile, OvertimeShift,
     OpenOTShift, OTShiftClaimRequest, OTCancellationRequest,
     Shift, ShiftBlock, ShiftTemplate, ShiftTemplateBlock,
     Skill, AgentSkillChange, SkillRenameHistory,
@@ -3862,3 +3862,105 @@ class SkillInfoIconRenderingTests(TestCase):
         self.described.save(update_fields=['description'])
         resp = self.client.get(reverse('agent_detail', kwargs={'pk': self.target.pk}))
         self.assertNotContains(resp, '&#9432;')
+
+
+class Five9AccountSetupReportTests(TestCase):
+    """Read-only Five9 account setup report — pins each of the five flagged
+    configurations to its own section, a clean setup to none of them, and that
+    the command never writes anything."""
+
+    def _run(self):
+        out = io.StringIO()
+        from django.core.management import call_command
+        call_command('five9_account_setup_report', stdout=out)
+        return out.getvalue()
+
+    def test_section_a_two_or_more_accounts_none_primary(self):
+        agent = _make_agent('rep_a')
+        Five9Profile.objects.create(agent=agent, five9_username='a1', is_primary=False, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='a2', is_primary=False, billable=False)
+        out = self._run()
+        self.assertIn('(a) 1', out)
+        self.assertIn('(b) 0', out)
+        self.assertIn('(c) 0', out)
+        self.assertIn('(d) 0', out)
+        self.assertIn('(e) 0', out)
+        self.assertIn('Rep_A', out)
+
+    def test_section_b_exactly_one_account_not_primary(self):
+        agent = _make_agent('rep_b')
+        Five9Profile.objects.create(agent=agent, five9_username='b1', is_primary=False, billable=True)
+        out = self._run()
+        self.assertIn('(a) 0', out)
+        self.assertIn('(b) 1', out)
+        self.assertIn('(c) 0', out)
+        self.assertIn('(d) 0', out)
+        self.assertIn('(e) 0', out)
+        self.assertIn('Rep_B', out)
+
+    def test_section_c_primary_not_billable_another_is(self):
+        agent = _make_agent('rep_c')
+        Five9Profile.objects.create(agent=agent, five9_username='c1', is_primary=True, billable=False)
+        Five9Profile.objects.create(agent=agent, five9_username='c2', is_primary=False, billable=True)
+        out = self._run()
+        self.assertIn('(a) 0', out)
+        self.assertIn('(b) 0', out)
+        self.assertIn('(c) 1', out)
+        self.assertIn('(d) 0', out)
+        self.assertIn('(e) 0', out)
+        self.assertIn('Rep_C', out)
+
+    def test_section_d_more_than_one_billable_account(self):
+        agent = _make_agent('rep_d')
+        Five9Profile.objects.create(agent=agent, five9_username='d1', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='d2', is_primary=False, billable=True)
+        out = self._run()
+        self.assertIn('(a) 0', out)
+        self.assertIn('(b) 0', out)
+        self.assertIn('(c) 0', out)
+        self.assertIn('(d) 1', out)
+        self.assertIn('(e) 0', out)
+        self.assertIn('Rep_D', out)
+
+    def test_section_e_more_than_one_primary(self):
+        agent = _make_agent('rep_e')
+        Five9Profile.objects.create(agent=agent, five9_username='e1', is_primary=True, billable=False)
+        Five9Profile.objects.create(agent=agent, five9_username='e2', is_primary=True, billable=False)
+        out = self._run()
+        self.assertIn('(a) 0', out)
+        self.assertIn('(b) 0', out)
+        self.assertIn('(c) 0', out)
+        self.assertIn('(d) 0', out)
+        self.assertIn('(e) 1', out)
+        self.assertIn('Rep_E', out)
+
+    def test_clean_setup_appears_in_no_section(self):
+        agent = _make_agent('rep_clean')
+        Five9Profile.objects.create(agent=agent, five9_username='clean1', is_primary=True, billable=True)
+        out = self._run()
+        self.assertIn('(a) 0', out)
+        self.assertIn('(b) 0', out)
+        self.assertIn('(c) 0', out)
+        self.assertIn('(d) 0', out)
+        self.assertIn('(e) 0', out)
+        self.assertNotIn('Rep_Clean', out)
+
+    def test_inactive_agent_excluded(self):
+        agent = _make_agent('rep_inactive')
+        agent.status = 'inactive'
+        agent.save()
+        Five9Profile.objects.create(agent=agent, five9_username='i1', is_primary=False, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='i2', is_primary=False, billable=True)
+        out = self._run()
+        self.assertIn('(a) 0', out)
+        self.assertNotIn('Rep_Inactive', out)
+
+    def test_writes_nothing(self):
+        agent = _make_agent('rep_write_check')
+        Five9Profile.objects.create(agent=agent, five9_username='w1', is_primary=False, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='w2', is_primary=False, billable=True)
+        agent_count = Agent.objects.count()
+        profile_count = Five9Profile.objects.count()
+        self._run()
+        self.assertEqual(Agent.objects.count(), agent_count)
+        self.assertEqual(Five9Profile.objects.count(), profile_count)

@@ -1,3 +1,4 @@
+import io
 import json
 from decimal import Decimal
 from datetime import date, timedelta, time
@@ -18,7 +19,7 @@ from adherence.views import (
     _get_adherence_agent_pks, _net_ot_evening_hours,
     _adherence_filter_pills, _adherence_filter_url,
 )
-from finance.models import BillingSettings
+from finance.models import BillingSettings, BillingSettingsHistory
 from types import SimpleNamespace
 from django.test import SimpleTestCase
 
@@ -1510,3 +1511,128 @@ class AdherenceFilterPillTests(TestCase):
         url = _adherence_filter_url(_WEEK_START, '', [])
         self.assertIn(f'week_start={_WEEK_START.isoformat()}', url)
         self.assertTrue(url.endswith('skills='))
+
+
+class UncodedExtraAccountReviewTests(TestCase):
+    """Read-only review of uncoded time on non-primary Five9 accounts. Pins the
+    three production answer-key outcomes for Mark Reyes' week (Sep 14-20 2026),
+    that a day with no non-primary login is never reviewed at all (narrower than
+    reviewing every day in the range), that an agent with no primary account is
+    skipped rather than guessed at, and that the command writes nothing —
+    including BillingSettings, which a naive BillingSettings.get_for_week() call
+    could otherwise create via get_or_create."""
+
+    def _run(self, start, end):
+        out = io.StringIO()
+        from django.core.management import call_command
+        # call_command applies argparse's `type=` conversion only to positional/
+        # string args -- keyword args pass straight into options, so these must
+        # already be date objects (what --start/--end would parse into).
+        call_command('uncoded_extra_account_review', stdout=out, start=start, end=end)
+        return out.getvalue()
+
+    def _upload(self, d):
+        return DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})[0]
+
+    def _hours(self, d, agent, username, login_seconds):
+        DailyAgentHours.objects.create(
+            upload=self._upload(d), agent=agent, five9_username=username,
+            login_seconds=login_seconds, not_ready_seconds=0,
+        )
+
+    def _make_mark(self):
+        agent = _make_agent('mark_test')
+        Five9Profile.objects.create(agent=agent, five9_username='marreyes_test', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='markreyes_test', is_primary=False, billable=False)
+        return agent
+
+    def test_answer_key_mark_reyes_week(self):
+        agent = self._make_mark()
+        mon = date(2026, 9, 14)
+        days = [mon + timedelta(days=i) for i in range(7)]  # Mon .. Sun
+
+        # Mon, Tue, Wed, Thu, Sat: 3:00 on the second account, coded to within a
+        # second, no scheduled hours that day — must NOT be flagged.
+        for i in (0, 1, 2, 3, 5):
+            d = days[i]
+            self._hours(d, agent, 'markreyes_test', 3 * 3600)
+            Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(12, 0),
+                                  is_admin_coding=False)
+
+        # Fri Sep 18: 9:00 scheduled OT, 0 billable login, 0 coded, 8:59 on the
+        # second account — must be flagged.
+        fri = days[4]
+        OvertimeShift.objects.create(agent=agent, date=fri, start_time=time(9, 0), end_time=time(18, 0))
+        self._hours(fri, agent, 'markreyes_test', 8 * 3600 + 59 * 60)
+
+        # Sun Sep 20: 4:00 scheduled OT, 3:56 on the second account, 3:56 coded —
+        # a 4-minute gap, under the 5-minute threshold — must NOT be flagged.
+        sun = days[6]
+        OvertimeShift.objects.create(agent=agent, date=sun, start_time=time(9, 0), end_time=time(13, 0))
+        self._hours(sun, agent, 'markreyes_test', 3 * 3600 + 56 * 60)
+        Coding.objects.create(agent=agent, date=sun, start_time=time(9, 0), end_time=time(12, 56),
+                              is_admin_coding=False)
+
+        out = self._run(mon, sun)
+
+        self.assertIn('FLAGGED DAYS', out)
+        flagged_section = out.split('FLAGGED DAYS', 1)[1].split('No primary marked', 1)[0]
+        self.assertIn(fri.isoformat(), flagged_section)
+        self.assertIn('scheduled=9:00', flagged_section)
+        self.assertIn('billable_login=0:00', flagged_section)
+        self.assertIn('coded=0:00', flagged_section)
+        self.assertIn('non_primary_login=8:59', flagged_section)
+        for d in (days[0], days[1], days[2], days[3], days[5], sun):
+            self.assertNotIn(d.isoformat(), flagged_section)
+        self.assertIn('7 day(s) reviewed, 6 not flagged.', out)
+
+    def test_no_primary_marked_is_skipped_not_guessed(self):
+        agent = _make_agent('skip_test')
+        Five9Profile.objects.create(agent=agent, five9_username='skip_second', is_primary=False, billable=False)
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'skip_second', 3600)
+        out = self._run(d, d)
+        self.assertIn('No primary marked, skipped:', out)
+        self.assertIn('skip_test', out)
+        self.assertIn('0 day(s) reviewed, 0 not flagged.', out)
+
+    def test_day_without_non_primary_login_is_never_reviewed(self):
+        """Only the specific days with non-primary login get reviewed — not every
+        day in the range. Without this narrowing, Tuesday's ordinary short day on
+        the primary account alone would be wrongly pulled in and flagged."""
+        agent = _make_agent('narrow_test')
+        Five9Profile.objects.create(agent=agent, five9_username='narrow_primary', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='narrow_second', is_primary=False, billable=False)
+        mon = date(2026, 9, 14)
+        tue = mon + timedelta(days=1)
+
+        self._hours(mon, agent, 'narrow_second', 3600)  # Monday: non-primary login -> reviewed
+
+        # Tuesday: only primary-account login, well short of a full scheduled
+        # shift — would flag rule (1) if it were (wrongly) reviewed.
+        Shift.objects.create(agent=agent, date=tue, start_time=time(9, 0), end_time=time(17, 0))
+        self._hours(tue, agent, 'narrow_primary', 2 * 3600)
+
+        out = self._run(mon, tue + timedelta(days=3))
+
+        self.assertIn(mon.isoformat(), out)
+        self.assertNotIn(tue.isoformat(), out)
+        self.assertIn('1 day(s) reviewed,', out)
+
+    def test_writes_nothing(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 18)
+        self._hours(d, agent, 'markreyes_test', 3600)
+
+        def _counts():
+            return (
+                Agent.objects.count(), Five9Profile.objects.count(),
+                DailyUpload.objects.count(), DailyAgentHours.objects.count(),
+                Coding.objects.count(), OvertimeShift.objects.count(),
+                Shift.objects.count(), AdherenceRecord.objects.count(),
+                BillingSettings.objects.count(), BillingSettingsHistory.objects.count(),
+            )
+
+        before = _counts()
+        self._run(d, d)
+        self.assertEqual(_counts(), before)
