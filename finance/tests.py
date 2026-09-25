@@ -1793,10 +1793,12 @@ class AdherenceExportTests(TestCase):
 
 
 class AdminAdherenceLiveLoginTests(TestCase):
-    """The admin adherence tab/export must reflect LIVE billable login hours
-    (same source as Billing v2), NOT the stale, double-NR-deducted stored
-    AdherenceRecord.actual_hours that made Official Admins show false
-    'missing time'. Also fixes summing across multiple billable Five9 profiles."""
+    """The admin adherence tab/export must reflect LIVE PRIMARY-account login
+    hours (adherence display's primary-only rule — no fallback), NOT the
+    stale, double-NR-deducted stored AdherenceRecord.actual_hours that made
+    Official Admins show false 'missing time'. Also sums across multiple
+    primary Five9 profiles, and never touches a day with no Daily Hours row
+    at all (a hand-entered value on such a day is not a live-login day)."""
 
     def setUp(self):
         cache.clear()
@@ -1817,38 +1819,62 @@ class AdminAdherenceLiveLoginTests(TestCase):
         rec = AdherenceRecord.objects.create(agent=admin, date=_WEEK[0], status='P', actual_hours=Decimal('3.00'))
         record_map = {(admin.pk, _WEEK[0]): rec}
         _apply_live_login_hours([admin], _WEEK, record_map)
-        # In-memory record now reflects the true 8h billable login…
+        # In-memory record now reflects the true 8h primary login…
         self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('8'))
         # …but the DB row is untouched (request-scoped, never saved).
         rec.refresh_from_db()
         self.assertEqual(rec.actual_hours, Decimal('3.00'))
 
-    def test_sums_multiple_billable_profiles(self):
+    def test_sums_multiple_primary_profiles(self):
         from finance.views import _apply_live_login_hours
         admin = self._official_admin('multiadmin')
         Five9Profile.objects.create(agent=admin, five9_username='acct_a', billable=True, is_primary=True)
-        Five9Profile.objects.create(agent=admin, five9_username='acct_b', billable=True)
+        Five9Profile.objects.create(agent=admin, five9_username='acct_b', billable=True, is_primary=True)
         upload, _ = DailyUpload.objects.get_or_create(date=_WEEK[0])
         DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='acct_a', login_seconds=5 * 3600, not_ready_seconds=0)
         DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='acct_b', login_seconds=3 * 3600, not_ready_seconds=0)
         record_map = {}
         _apply_live_login_hours([admin], _WEEK, record_map)
-        # Both billable profiles summed = 8h (the old write path stored only the last).
+        # Both primary profiles summed = 8h.
         self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('8'))
         # A record was fabricated in memory only — nothing persisted.
         self.assertFalse(AdherenceRecord.objects.filter(agent=admin, date=_WEEK[0]).exists())
 
-    def test_excludes_non_billable_username(self):
+    def test_excludes_non_primary_username(self):
         from finance.views import _apply_live_login_hours
-        admin = self._official_admin('nbadmin')
-        Five9Profile.objects.create(agent=admin, five9_username='billable_u', billable=True, is_primary=True)
+        admin = self._official_admin('npadmin')
+        Five9Profile.objects.create(agent=admin, five9_username='primary_u', billable=True, is_primary=True)
         upload, _ = DailyUpload.objects.get_or_create(date=_WEEK[0])
-        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='billable_u', login_seconds=6 * 3600, not_ready_seconds=0)
-        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='other_nb', login_seconds=2 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='primary_u', login_seconds=6 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='other_np', login_seconds=2 * 3600, not_ready_seconds=0)
         record_map = {}
         _apply_live_login_hours([admin], _WEEK, record_map)
-        # Only the billable username's 6h counts — matches Billing v2's billable filter.
+        # Only the primary username's 6h counts — the non-primary 2h is ignored, no fallback.
         self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('6'))
+
+    def test_no_primary_row_that_day_overwrites_to_zero_not_left_stale(self):
+        from finance.views import _apply_live_login_hours
+        admin = self._official_admin('zeroadmin')
+        Five9Profile.objects.create(agent=admin, five9_username='zero_primary', billable=True, is_primary=True)
+        upload, _ = DailyUpload.objects.get_or_create(date=_WEEK[0])
+        # Only a non-primary row exists that day.
+        DailyAgentHours.objects.create(upload=upload, agent=admin, five9_username='other_np', login_seconds=8 * 3600, not_ready_seconds=0)
+        rec = AdherenceRecord.objects.create(agent=admin, date=_WEEK[0], status='P', actual_hours=Decimal('8'))
+        record_map = {(admin.pk, _WEEK[0]): rec}
+        _apply_live_login_hours([admin], _WEEK, record_map)
+        self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('0'))
+
+    def test_stored_value_untouched_on_a_day_with_no_daily_hours_row_at_all(self):
+        """A hand-entered actual_hours on a day with no upload at all must never
+        be replaced with a fabricated 0 — only days with at least one Daily
+        Hours row are in scope for the live overwrite."""
+        from finance.views import _apply_live_login_hours
+        admin = self._official_admin('handadmin')
+        Five9Profile.objects.create(agent=admin, five9_username='hand_primary', billable=True, is_primary=True)
+        rec = AdherenceRecord.objects.create(agent=admin, date=_WEEK[0], status='P', actual_hours=Decimal('5'))
+        record_map = {(admin.pk, _WEEK[0]): rec}
+        _apply_live_login_hours([admin], _WEEK, record_map)
+        self.assertEqual(record_map[(admin.pk, _WEEK[0])].actual_hours, Decimal('5'))
 
 
 class OTTopupParityCommandTests(TestCase):

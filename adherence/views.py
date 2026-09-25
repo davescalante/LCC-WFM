@@ -18,31 +18,41 @@ from django.template.loader import render_to_string
 from scheduling.models import Shift, ShiftTemplate, ShiftTemplateBlock, ShiftBlock, Agent, Five9Profile, OvertimeShift, log_action
 from .models import AdherenceRecord, AdherenceNote, Coding, PayrollAdjustment, DailyUpload, DailyAgentHours
 from wfm.constants import BONUS_QUALIFYING as _BONUS_QUALIFYING, BONUS_DISQUALIFYING as _BONUS_DISQUALIFYING, SCHED_HOURS_ZEROING_STATUSES
-from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
+from wfm.utils import get_week_start, parse_week_param, get_billable_username_map, get_adherence_primary_resolver
+
+
+def _compute_display_hours(login_seconds, not_ready_seconds, coded_seconds, nr_ratio):
+    """The daily NR deduction for ADHERENCE DISPLAY — pure arithmetic, no queries.
+    Moved verbatim from the write paths that used to duplicate it inline; each
+    caller keeps its own Coding query and its own admin-coding inclusion rule,
+    since upload/rematch include admin codings in the allowance base while
+    _refresh_actual_hours deliberately excludes them."""
+    total_secs = login_seconds + coded_seconds
+    allowance_secs = int(total_secs * float(nr_ratio))
+    excess_secs = max(0, not_ready_seconds - allowance_secs)
+    login_final_secs = max(0, login_seconds - excess_secs)
+    return Decimal(str(round(login_final_secs / 3600, 6)))
 
 
 def _refresh_actual_hours(agent_id, coding_date):
-    """Recalculate AdherenceRecord.actual_hours after a coding change."""
-    billable_usernames = list(
-        Five9Profile.objects.filter(agent_id=agent_id, billable=True)
-        .values_list('five9_username', flat=True)
-    )
-    if billable_usernames:
-        dah = DailyAgentHours.objects.filter(
-            upload__date=coding_date, agent_id=agent_id,
-            five9_username__in=billable_usernames
-        ).first()
-        if not dah:
-            # Fall back to any profile (handles edge case with no billable profiles)
-            dah = DailyAgentHours.objects.filter(
-                upload__date=coding_date, agent_id=agent_id
-            ).first()
-    else:
-        dah = DailyAgentHours.objects.filter(
-            upload__date=coding_date, agent_id=agent_id
-        ).first()
-    if not dah:
+    """Recalculate AdherenceRecord.actual_hours after a coding change.
+
+    Sums every primary-account Daily Hours row for the day — no fallback to any
+    other account. An agent with no primary account has no counted row, so this
+    returns without writing (the display value for that day is whatever the
+    upload/reconcile path already wrote — zero, if a Daily Hours row exists for
+    that date at all)."""
+    counts_for_adherence = get_adherence_primary_resolver([agent_id])
+    rows = list(DailyAgentHours.objects.filter(
+        upload__date=coding_date, agent_id=agent_id
+    ).values('five9_username', 'login_seconds', 'not_ready_seconds'))
+    primary_rows = [
+        r for r in rows if counts_for_adherence(agent_id, r['five9_username'], coding_date)
+    ]
+    if not primary_rows:
         return
+    login_secs = sum(r['login_seconds'] for r in primary_rows)
+    not_ready_secs = sum(r['not_ready_seconds'] for r in primary_rows)
     from finance.models import BillingSettings as _BillingSettings
     _week = coding_date - timedelta(days=coding_date.weekday())
     _settings = _BillingSettings.get_for_week(_week)
@@ -50,11 +60,7 @@ def _refresh_actual_hours(agent_id, coding_date):
         c.total_seconds_count()
         for c in Coding.objects.filter(agent_id=agent_id, date=coding_date, is_admin_coding=False)
     )
-    total_secs = dah.login_seconds + coded_secs
-    allowance_secs = int(total_secs * float(_settings.nr_ratio))
-    excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-    login_final_secs = max(0, dah.login_seconds - excess_secs)
-    final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
+    final_hours = _compute_display_hours(login_secs, not_ready_secs, coded_secs, _settings.nr_ratio)
     AdherenceRecord.objects.update_or_create(
         agent_id=agent_id,
         date=coding_date,
@@ -706,19 +712,19 @@ def _build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=Non
     rows = []
     week_dates_set = set(week_dates)
 
-    # Pre-compute weekly NR seconds from billable DailyAgentHours
+    # Pre-compute weekly NR seconds from primary-account DailyAgentHours
     _agent_ids = [a.pk for a in agents]
-    _billable_map, _primary_billable_map = get_billable_username_map(_agent_ids)
+    _, _primary_billable_map = get_billable_username_map(_agent_ids)
+    _counts_for_adherence = get_adherence_primary_resolver(_agent_ids)
 
     _weekly_nr_map = {}  # agent_id -> total NR seconds
     for _row in DailyAgentHours.objects.filter(
         upload__date__in=week_dates, agent__in=_agent_ids
-    ).values('agent_id', 'five9_username', 'not_ready_seconds'):
+    ).values('agent_id', 'upload__date', 'five9_username', 'not_ready_seconds'):
         _aid = _row['agent_id']
         if _aid is None:
             continue
-        _bnames = _billable_map.get(_aid)
-        if _bnames is None or _row['five9_username'].strip().lower() in _bnames:
+        if _counts_for_adherence(_aid, _row['five9_username'], _row['upload__date']):
             _weekly_nr_map[_aid] = _weekly_nr_map.get(_aid, 0) + _row['not_ready_seconds']
 
     _billing_settings = billing_settings if billing_settings is not None else _BS.get()
@@ -1778,14 +1784,12 @@ def daily_hours_week(request):
         key = (c.agent_id, c.date)
         codings_map[key] = codings_map.get(key, 0) + c.total_seconds_count()
 
-    # Only attribute coded time to the billable Five9 row for each agent.
-    billable_pairs = set(
-        Five9Profile.objects.filter(billable=True)
-        .values_list('agent_id', 'five9_username')
+    # Only attribute coded time / display hours to the primary Five9 row for each agent.
+    _agent_ids_this_week = set(
+        DailyAgentHours.objects.filter(upload__date__in=week_dates, agent__isnull=False)
+        .values_list('agent_id', flat=True).distinct()
     )
-    agents_with_profiles = set(
-        Five9Profile.objects.values_list('agent_id', flat=True).distinct()
-    )
+    counts_for_adherence = get_adherence_primary_resolver(_agent_ids_this_week)
 
     upload_map = {u.date: u for u in DailyUpload.objects.filter(date__in=week_dates)}
 
@@ -1807,21 +1811,26 @@ def daily_hours_week(request):
                     pass
 
             for dah in dah_qs:
-                if dah.agent_id:
-                    if dah.agent_id in agents_with_profiles:
-                        # Only show coded time on the billable profile row
-                        coded_secs = codings_map.get((dah.agent_id, day_date), 0) if (dah.agent_id, dah.five9_username) in billable_pairs else 0
-                    else:
-                        # Legacy agent with no Five9Profile records — show on any row
-                        coded_secs = codings_map.get((dah.agent_id, day_date), 0)
-                else:
-                    coded_secs = 0
+                if dah.agent_id and not counts_for_adherence(dah.agent_id, dah.five9_username, day_date):
+                    rows.append({
+                        'dah': dah,
+                        'not_ready_seconds': None,
+                        'coded_seconds': None,
+                        'total_seconds': None,
+                        'allowance_seconds': None,
+                        'excess_seconds': None,
+                        'final_seconds': None,
+                    })
+                    continue
+
+                coded_secs = codings_map.get((dah.agent_id, day_date), 0) if dah.agent_id else 0
                 total_secs = dah.login_seconds + coded_secs
                 allowance_secs = int(total_secs * _nr_ratio)
                 excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
                 final_secs = max(0, total_secs - excess_secs)
                 rows.append({
                     'dah': dah,
+                    'not_ready_seconds': dah.not_ready_seconds,
                     'coded_seconds': coded_secs,
                     'total_seconds': total_secs,
                     'allowance_seconds': allowance_secs,
@@ -1848,48 +1857,43 @@ def daily_hours_week(request):
 
 def _reconcile_stale_actual_hours(upload_date):
     """
-    Zero actual_hours for any agent who no longer has a billable-matched
+    Zero actual_hours for any agent who no longer has a primary-matched
     DailyAgentHours row for upload_date — covers deletions and replacement
-    uploads that drop a previously-matched agent from the file. Only updates
+    uploads that drop a previously-matched agent from the file, and an agent
+    whose only row that day is on a non-primary account. Only updates
     existing non-zero values; never creates AdherenceRecord rows.
 
-    Username comparison uses .strip().lower() on both sides (matching the
-    agent_map convention above, not the unnormalized billable_names checks
-    elsewhere in this file) because Five9Profile.five9_username is stored
-    with only .strip() applied, while DailyAgentHours.five9_username is
-    stored .strip().lower()'d. Do not remove either .lower() call — it is
-    the only thing preventing a mixed-case billable username from being
-    treated as unmatched and having its real, current hours zeroed.
+    Returns the set of agent_ids that DID have a primary-account row counted
+    on upload_date — the same set _zero_missing_scheduled needs, so the two
+    can never drift apart.
     """
-    valid_agent_ids = set()
-    billable_cache = {}
-    for dah in DailyAgentHours.objects.filter(upload__date=upload_date, agent__isnull=False):
-        agent_id = dah.agent_id
-        if agent_id not in billable_cache:
-            billable_cache[agent_id] = {
-                u.strip().lower() for u in
-                Five9Profile.objects.filter(agent_id=agent_id, billable=True)
-                .values_list('five9_username', flat=True)
-            }
-        billable_names = billable_cache[agent_id]
-        if billable_names and dah.five9_username.strip().lower() not in billable_names:
-            continue  # not the billable-matched row for this agent
-        valid_agent_ids.add(agent_id)
+    rows = list(DailyAgentHours.objects.filter(
+        upload__date=upload_date, agent__isnull=False
+    ).values('agent_id', 'five9_username'))
+    counts_for_adherence = get_adherence_primary_resolver({r['agent_id'] for r in rows})
+    counted_agent_ids = {
+        r['agent_id'] for r in rows
+        if counts_for_adherence(r['agent_id'], r['five9_username'], upload_date)
+    }
 
     (AdherenceRecord.objects
         .filter(date=upload_date)
-        .exclude(agent_id__in=valid_agent_ids)
+        .exclude(agent_id__in=counted_agent_ids)
         .exclude(actual_hours__isnull=True)
         .exclude(actual_hours=0)
         .update(actual_hours=Decimal('0')))
 
+    return counted_agent_ids
 
-def _zero_missing_scheduled(upload_date, matched_agent_ids):
+
+def _zero_missing_scheduled(upload_date, counted_agent_ids):
     """
-    After a daily upload, agents who are scheduled on upload_date but absent
-    from the file get actual_hours=0 so the grid shows their missing hours.
+    After a daily upload, agents who are scheduled on upload_date but have no
+    primary-account Daily Hours row that day get actual_hours=0 so the grid
+    shows their missing hours. counted_agent_ids is the set of agents whose
+    primary account appeared in the file (from _reconcile_stale_actual_hours).
     """
-    matched = set(matched_agent_ids)
+    matched = set(counted_agent_ids)
 
     # OT shifts on this date (cancelled shifts don't count as scheduled)
     scheduled = set(
@@ -2013,30 +2017,23 @@ def upload_daily_file(request):
         upload.unmatched_count = unmatched
         upload.save()
 
-        billable_usernames_cache = {}
+        counts_for_adherence = get_adherence_primary_resolver(
+            {dah.agent_id for dah in dah_objects if dah.agent_id}
+        )
         for dah in dah_objects:
             if not dah.agent_id:
                 continue
-            # Only update actual_hours from billable profiles
-            agent_id = dah.agent_id
-            if agent_id not in billable_usernames_cache:
-                billable_usernames_cache[agent_id] = set(
-                    Five9Profile.objects.filter(agent_id=agent_id, billable=True)
-                    .values_list('five9_username', flat=True)
-                )
-            billable_names = billable_usernames_cache[agent_id]
-            if billable_names and dah.five9_username not in billable_names:
-                continue  # Skip non-billable profile rows
+            # Only update actual_hours from the primary account — no fallback
+            if not counts_for_adherence(dah.agent_id, dah.five9_username, upload_date):
+                continue  # Skip non-primary account rows
 
             coded_secs = sum(
                 c.total_seconds_count()
                 for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
             )
-            total_secs = dah.login_seconds + coded_secs
-            allowance_secs = int(total_secs * _upload_nr_ratio)
-            excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-            login_final_secs = max(0, dah.login_seconds - excess_secs)
-            final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
+            final_hours = _compute_display_hours(
+                dah.login_seconds, dah.not_ready_seconds, coded_secs, _upload_nr_ratio
+            )
 
             AdherenceRecord.objects.update_or_create(
                 agent_id=dah.agent_id,
@@ -2044,9 +2041,8 @@ def upload_daily_file(request):
                 defaults={'actual_hours': final_hours},
             )
 
-        matched_agent_ids = {dah.agent_id for dah in dah_objects if dah.agent_id}
-        _reconcile_stale_actual_hours(upload_date)
-        _zero_missing_scheduled(upload_date, matched_agent_ids)
+        counted_agent_ids = _reconcile_stale_actual_hours(upload_date)
+        _zero_missing_scheduled(upload_date, counted_agent_ids)
 
     log_action(request.user, 'Uploaded daily login file',
                f'{csv_file.name} for {upload_date} — {len(dah_objects)} rows matched, {unmatched} unmatched')
@@ -2085,9 +2081,10 @@ def rematch_daily_upload(request):
         ).select_related('agent')
     }
 
+    counts_for_adherence = get_adherence_primary_resolver({a.pk for a in agent_map.values()})
+
     with transaction.atomic():
         newly_matched = 0
-        billable_usernames_cache = {}
         for dah in DailyAgentHours.objects.filter(upload=upload, agent__isnull=True):
             agent = agent_map.get(dah.five9_username.strip().lower())
             if not agent:
@@ -2096,25 +2093,17 @@ def rematch_daily_upload(request):
             dah.save(update_fields=['agent'])
             newly_matched += 1
 
-            # Only update actual_hours from billable profiles
-            if agent.pk not in billable_usernames_cache:
-                billable_usernames_cache[agent.pk] = set(
-                    Five9Profile.objects.filter(agent=agent, billable=True)
-                    .values_list('five9_username', flat=True)
-                )
-            billable_names = billable_usernames_cache[agent.pk]
-            if billable_names and dah.five9_username not in billable_names:
-                continue  # Skip non-billable profile rows
+            # Only update actual_hours from the primary account — no fallback
+            if not counts_for_adherence(agent.pk, dah.five9_username, upload_date):
+                continue  # Skip non-primary account rows
 
             coded_secs = sum(
                 c.total_seconds_count()
                 for c in Coding.objects.filter(agent=agent, date=upload_date)
             )
-            total_secs = dah.login_seconds + coded_secs
-            allowance_secs = int(total_secs * _rematch_nr_ratio)
-            excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-            login_final_secs = max(0, dah.login_seconds - excess_secs)
-            final_hours = Decimal(str(round(login_final_secs / 3600, 6)))
+            final_hours = _compute_display_hours(
+                dah.login_seconds, dah.not_ready_seconds, coded_secs, _rematch_nr_ratio
+            )
 
             AdherenceRecord.objects.update_or_create(
                 agent=agent,
@@ -2126,12 +2115,8 @@ def rematch_daily_upload(request):
         upload.unmatched_count = still_unmatched
         upload.save(update_fields=['unmatched_count'])
 
-        matched_agent_ids = set(
-            DailyAgentHours.objects.filter(upload=upload, agent__isnull=False)
-            .values_list('agent_id', flat=True)
-        )
-        _reconcile_stale_actual_hours(upload_date)
-        _zero_missing_scheduled(upload_date, matched_agent_ids)
+        counted_agent_ids = _reconcile_stale_actual_hours(upload_date)
+        _zero_missing_scheduled(upload_date, counted_agent_ids)
 
     return JsonResponse({'ok': True, 'newly_matched': newly_matched, 'still_unmatched': still_unmatched})
 

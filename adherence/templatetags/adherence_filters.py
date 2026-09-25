@@ -49,7 +49,10 @@ def to_hhmm(value):
 
 @register.filter
 def seconds_to_hhmmss(value):
-    """Integer seconds → HH:MM:SS string. Returns '' if value is falsy."""
+    """Integer seconds → HH:MM:SS string. Returns '—' for None (not counted for
+    display), '' for any other falsy value (e.g. zero seconds)."""
+    if value is None:
+        return '—'
     if not value:
         return ''
     try:

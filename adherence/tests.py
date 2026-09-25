@@ -12,7 +12,7 @@ from django.db import connection
 from django.db.models import Q
 from django.test.utils import CaptureQueriesContext
 from scheduling.models import (
-    Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate, OvertimeShift, Skill,
+    Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate, OvertimeShift, Skill, AuditLog,
 )
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
 from adherence.views import (
@@ -222,6 +222,10 @@ class BuildRowsNRCapTests(TestCase):
     def setUp(self):
         self.agent = _make_agent('nr_test')
         self.settings = _settings(nr_cap_regular_hours=Decimal('6.00'))
+        # Adherence display's weekly NR sum counts only the primary account —
+        # mark this fixture's one account primary so these tests keep
+        # exercising the NR-cap math they're named for.
+        Five9Profile.objects.create(agent=self.agent, five9_username='nr_test', is_primary=True, billable=True)
 
     def _add_nr(self, nr_seconds, login_seconds=None):
         upload = DailyUpload.objects.create(date=_WEEK[0], row_count=1)
@@ -1636,3 +1640,700 @@ class UncodedExtraAccountReviewTests(TestCase):
         before = _counts()
         self._run(d, d)
         self.assertEqual(_counts(), before)
+
+
+class PrimaryAccountDisplayHoursTests(TestCase):
+    """Adherence DISPLAY hours count only Five9 login/not-ready time from the
+    agent's primary Five9 account — no fallback to any other account. Mirrors
+    the production Mark Reyes fixture (week of Sep 14 2026): a primary billable
+    account plus a non-primary, non-billable 'extra' account. Every fixture
+    puts the non-primary row LAST so a pre-fix failure is a stable wrong
+    number, not an order-dependent coincidence."""
+
+    def setUp(self):
+        _settings()
+
+    def _make_two_account_agent(self, username):
+        agent = _make_agent(username)
+        Five9Profile.objects.create(
+            agent=agent, five9_username=f'{username}_primary', is_primary=True, billable=True,
+        )
+        Five9Profile.objects.create(
+            agent=agent, five9_username=f'{username}_extra', is_primary=False, billable=False,
+        )
+        return agent
+
+    def _upload(self, d):
+        return DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})[0]
+
+    def _hours(self, d, agent, username, login_seconds, not_ready_seconds=0):
+        DailyAgentHours.objects.create(
+            upload=self._upload(d), agent=agent, five9_username=username,
+            login_seconds=login_seconds, not_ready_seconds=not_ready_seconds,
+        )
+
+    def test_monday_primary_plus_extra_shows_only_primary_plus_coding(self):
+        """Primary 8h login + extra 3h (ignored) + 3h coding. The Adherence
+        cell is stored actual_hours (login-only, after NR deduction) plus that
+        day's coded hours — 8 + 3 = 11h, never 14h from the extra account
+        leaking in."""
+        agent = self._make_two_account_agent('mark')
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'mark_primary', 8 * 3600)
+        self._hours(d, agent, 'mark_extra', 3 * 3600)
+        Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(12, 0),
+                              is_admin_coding=False)
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('8'))
+        cell = rec.actual_hours + Decimal('3')  # that day's coded hours, added by _build_rows
+        self.assertEqual(cell, Decimal('11'))
+
+    def test_friday_extra_account_only_shows_zero_login(self):
+        """9:00 OT worked entirely on the extra account, never coded, must show
+        0:00 — the exact Mark Reyes Fri Sep 18 production case."""
+        agent = self._make_two_account_agent('mark')
+        d = date(2026, 9, 18)
+        self._hours(d, agent, 'mark_extra', 8 * 3600 + 59 * 60)
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        rec = AdherenceRecord.objects.filter(agent=agent, date=d).first()
+        self.assertIsNone(rec)  # no primary row that day -> nothing to write; upload path zeroes it
+
+    def test_sunday_extra_plus_matching_coding_shows_coding_only(self):
+        """Extra-account login 3:56 plus a matching 3:56 coding must show 3:56,
+        not the doubled 7:52 the old fallback produced."""
+        agent = self._make_two_account_agent('mark')
+        d = date(2026, 9, 20)
+        self._hours(d, agent, 'mark_extra', 3 * 3600 + 56 * 60)
+        Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(12, 56),
+                              is_admin_coding=False)
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        rec = AdherenceRecord.objects.filter(agent=agent, date=d).first()
+        self.assertIsNone(rec)  # no primary row -> no write from _refresh_actual_hours
+
+    def test_agent_with_no_primary_marked_gets_zero_login(self):
+        agent = _make_agent('noprimary')
+        Five9Profile.objects.create(agent=agent, five9_username='np_a', is_primary=False, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='np_b', is_primary=False, billable=True)
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'np_b', 8 * 3600)
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        self.assertIsNone(AdherenceRecord.objects.filter(agent=agent, date=d).first())
+
+    def test_two_primary_rows_are_summed_not_last_wins(self):
+        agent = _make_agent('twoprimary')
+        Five9Profile.objects.create(agent=agent, five9_username='tp_a', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='tp_b', is_primary=True, billable=True)
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'tp_a', 4 * 3600)
+        self._hours(d, agent, 'tp_b', 3 * 3600)
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('7'))
+
+    def test_not_ready_deduction_uses_only_primary_not_ready_seconds(self):
+        """The extra account's not-ready seconds must never bleed into the
+        deduction applied to the primary's login."""
+        agent = self._make_two_account_agent('nrtest')
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'nrtest_primary', 8 * 3600, not_ready_seconds=0)
+        self._hours(d, agent, 'nrtest_extra', 2 * 3600, not_ready_seconds=2 * 3600)
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('8'))
+
+    def test_upload_view_end_to_end_matches_stored_value(self):
+        """Drives the real upload_daily_file view with a two-row CSV, non-primary
+        row last, mirroring DailyUploadStaleActualHoursTests' style."""
+        staff_user = User.objects.create_user('uploadstaff', password='x')
+        Agent.objects.create(user=staff_user, role='admin', role_type='supervisor',
+                             agent_name='Upload Staff', status='active')
+        self.client.login(username='uploadstaff', password='x')
+        agent = self._make_two_account_agent('e2e')
+        d = date(2026, 9, 14)
+        content = (
+            "AGENT,LOGIN TIME,NOT READY TIME\n"
+            "e2e_primary,08:00:00,00:00:00\n"
+            "e2e_extra,03:00:00,00:00:00\n"
+        )
+        csv_file = SimpleUploadedFile('daily.csv', content.encode('utf-8'), content_type='text/csv')
+        resp = self.client.post(reverse('upload_daily_file'), {'date': d.isoformat(), 'file': csv_file})
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('8'))
+
+
+class SupervisorNonBillablePrimaryTests(TestCase):
+    """A primary account that is NOT billable, plus a second billable account —
+    the three-supervisor production shape (Jesus Urbina, Jose Aranda, Misael
+    Martinez). Adherence display must follow the primary; the money engine
+    must be completely unaffected."""
+
+    def setUp(self):
+        self.settings = _settings()
+
+    def _make_agent_with_hours(self, primary_billable, second_billable, primary_seconds, second_seconds):
+        agent = _make_agent('sup_test')
+        Five9Profile.objects.create(
+            agent=agent, five9_username='sup_primary', is_primary=True, billable=primary_billable,
+        )
+        Five9Profile.objects.create(
+            agent=agent, five9_username='sup_second', is_primary=False, billable=second_billable,
+        )
+        d = _WEEK[0]
+        upload = DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})[0]
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='sup_primary',
+                                       login_seconds=primary_seconds, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='sup_second',
+                                       login_seconds=second_seconds, not_ready_seconds=0)
+        return agent, d
+
+    def test_adherence_shows_only_the_primary_account_login(self):
+        agent, d = self._make_agent_with_hours(
+            primary_billable=False, second_billable=True,
+            primary_seconds=20 * 60, second_seconds=8 * 3600,
+        )
+        from adherence.views import _refresh_actual_hours
+        _refresh_actual_hours(agent.pk, d)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal(str(round(20 * 60 / 3600, 6))))
+
+    def test_billable_weekly_data_is_unmoved(self):
+        from finance.views import _get_billable_weekly_data
+        agent, d = self._make_agent_with_hours(
+            primary_billable=False, second_billable=True,
+            primary_seconds=20 * 60, second_seconds=8 * 3600,
+        )
+        data = _get_billable_weekly_data([agent], _WEEK, self.settings)
+        self.assertEqual(data[agent.pk]['actual_hrs'], Decimal('8'))
+
+    def test_billable_weekly_data_ignores_is_primary_entirely(self):
+        from finance.views import _get_billable_weekly_data
+        agent, d = self._make_agent_with_hours(
+            primary_billable=False, second_billable=True,
+            primary_seconds=20 * 60, second_seconds=8 * 3600,
+        )
+        before = _get_billable_weekly_data([agent], _WEEK, self.settings)
+        before_snapshot = {k: v for k, v in before[agent.pk].items() if k != 'agent'}
+
+        # Swap which account is primary, holding billable fixed.
+        Five9Profile.objects.filter(agent=agent, five9_username='sup_primary').update(is_primary=False)
+        Five9Profile.objects.filter(agent=agent, five9_username='sup_second').update(is_primary=True)
+
+        after = _get_billable_weekly_data([agent], _WEEK, self.settings)
+        after_snapshot = {k: v for k, v in after[agent.pk].items() if k != 'agent'}
+        self.assertEqual(before_snapshot, after_snapshot)
+
+
+class PrimaryAccountDailyHoursRenderTests(TestCase):
+    """The Daily Hours page: every uploaded row stays visible; a matched
+    non-primary row keeps Login Time but dashes every other column."""
+
+    def setUp(self):
+        _settings()
+        staff_user = User.objects.create_user('dhrenderstaff', password='x')
+        Agent.objects.create(user=staff_user, role='admin', role_type='supervisor',
+                             agent_name='DH Render Staff', status='active')
+        self.client.login(username='dhrenderstaff', password='x')
+
+    def _rows_for(self, d):
+        resp = self.client.get(reverse('daily_hours'), {'week_start': _get_week_start_of(d).isoformat()})
+        self.assertEqual(resp.status_code, 200)
+        for slot in resp.context['day_slots']:
+            if slot['date'] == d:
+                return slot['rows']
+        return []
+
+    def test_non_primary_row_dashes_every_column_but_login(self):
+        agent = _make_agent('renderx')
+        Five9Profile.objects.create(agent=agent, five9_username='renderx_primary', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='renderx_extra', is_primary=False, billable=False)
+        d = _WEEK[0]
+        upload = DailyUpload.objects.create(date=d, filename='d.csv', row_count=1)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='renderx_primary',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='renderx_extra',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)
+
+        rows = self._rows_for(d)
+        primary_row = next(r for r in rows if r['dah'].five9_username == 'renderx_primary')
+        extra_row = next(r for r in rows if r['dah'].five9_username == 'renderx_extra')
+
+        self.assertIsNotNone(primary_row['total_seconds'])
+        self.assertIsNone(extra_row['not_ready_seconds'])
+        self.assertIsNone(extra_row['coded_seconds'])
+        self.assertIsNone(extra_row['total_seconds'])
+        self.assertIsNone(extra_row['allowance_seconds'])
+        self.assertIsNone(extra_row['excess_seconds'])
+        self.assertIsNone(extra_row['final_seconds'])
+        # Login Time (the raw model field) stays visible on the extra row.
+        self.assertEqual(extra_row['dah'].login_seconds, 3 * 3600)
+
+    def test_agent_with_no_primary_shows_zero_login_on_every_row(self):
+        agent = _make_agent('nopriref')
+        Five9Profile.objects.create(agent=agent, five9_username='npref_a', is_primary=False, billable=True)
+        d = _WEEK[0]
+        upload = DailyUpload.objects.create(date=d, filename='d.csv', row_count=1)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='npref_a',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        rows = self._rows_for(d)
+        row = next(r for r in rows if r['dah'].five9_username == 'npref_a')
+        self.assertIsNone(row['total_seconds'])
+
+    def test_seconds_to_hhmmss_renders_none_as_dash(self):
+        from adherence.templatetags.adherence_filters import seconds_to_hhmmss
+        self.assertEqual(seconds_to_hhmmss(None), '—')
+        self.assertEqual(seconds_to_hhmmss(0), '')
+        self.assertEqual(seconds_to_hhmmss(3600), '01:00:00')
+
+
+def _get_week_start_of(d):
+    return d - timedelta(days=d.weekday())
+
+
+class AutoPrimaryOnSaveTests(TestCase):
+    """A lone Five9 account is always marked primary on save, through the one
+    existing Five9 save path (_save_five9_profiles), so an agent never ends up
+    with a single account and no primary — which would show zero adherence
+    login for no operational reason. Calls _save_five9_profiles directly
+    (the single real write path, shared by agent_create and agent_edit)
+    with a minimal fake request, rather than driving the full Edit User form
+    — which has many unrelated required fields that would make this test
+    fragile to changes elsewhere on that form."""
+
+    def _fake_request(self, post_data):
+        return SimpleNamespace(POST=post_data)
+
+    def test_single_account_is_auto_marked_primary_on_save(self):
+        from scheduling.views import _save_five9_profiles
+        agent = _make_agent('autoprimary1')
+        profile = Five9Profile.objects.create(agent=agent, five9_username='ap1', is_primary=False, billable=True)
+        request = self._fake_request({
+            'five9_primary': '',
+            f'five9_{profile.pk}_username': 'ap1',
+            f'five9_{profile.pk}_label': '',
+            f'five9_{profile.pk}_billable': 'on',
+        })
+        _save_five9_profiles(request, agent)
+        profile.refresh_from_db()
+        self.assertTrue(profile.is_primary)
+
+    def test_auto_primary_does_not_override_an_explicit_choice(self):
+        from scheduling.views import _save_five9_profiles
+        agent = _make_agent('autoprimary2')
+        p1 = Five9Profile.objects.create(agent=agent, five9_username='ap2a', is_primary=False, billable=True)
+        p2 = Five9Profile.objects.create(agent=agent, five9_username='ap2b', is_primary=False, billable=True)
+        request = self._fake_request({
+            'five9_primary': str(p2.pk),
+            f'five9_{p1.pk}_username': 'ap2a', f'five9_{p1.pk}_label': '', f'five9_{p1.pk}_billable': 'on',
+            f'five9_{p2.pk}_username': 'ap2b', f'five9_{p2.pk}_label': '', f'five9_{p2.pk}_billable': 'on',
+        })
+        _save_five9_profiles(request, agent)
+        p1.refresh_from_db()
+        p2.refresh_from_db()
+        self.assertFalse(p1.is_primary)
+        self.assertTrue(p2.is_primary)
+
+    def test_auto_primary_does_not_fire_with_two_accounts_and_none_chosen(self):
+        from scheduling.views import _save_five9_profiles
+        agent = _make_agent('autoprimary3')
+        p1 = Five9Profile.objects.create(agent=agent, five9_username='ap3a', is_primary=False, billable=True)
+        p2 = Five9Profile.objects.create(agent=agent, five9_username='ap3b', is_primary=False, billable=True)
+        request = self._fake_request({
+            'five9_primary': '',
+            f'five9_{p1.pk}_username': 'ap3a', f'five9_{p1.pk}_label': '', f'five9_{p1.pk}_billable': 'on',
+            f'five9_{p2.pk}_username': 'ap3b', f'five9_{p2.pk}_label': '', f'five9_{p2.pk}_billable': 'on',
+        })
+        _save_five9_profiles(request, agent)
+        p1.refresh_from_db()
+        p2.refresh_from_db()
+        self.assertFalse(p1.is_primary)
+        self.assertFalse(p2.is_primary)
+
+    def test_auto_primary_fires_when_going_from_two_accounts_to_one_via_delete(self):
+        from scheduling.views import _save_five9_profiles
+        agent = _make_agent('autoprimary4')
+        p1 = Five9Profile.objects.create(agent=agent, five9_username='ap4a', is_primary=False, billable=True)
+        p2 = Five9Profile.objects.create(agent=agent, five9_username='ap4b', is_primary=False, billable=True)
+        request = self._fake_request({
+            'five9_primary': '',
+            f'five9_{p1.pk}_delete': 'on',
+            f'five9_{p2.pk}_username': 'ap4b', f'five9_{p2.pk}_label': '', f'five9_{p2.pk}_billable': 'on',
+        })
+        _save_five9_profiles(request, agent)
+        p2.refresh_from_db()
+        self.assertTrue(p2.is_primary)
+        self.assertFalse(Five9Profile.objects.filter(pk=p1.pk).exists())
+
+
+class PrimaryAccountQueryCountTests(TestCase):
+    """The primary resolver is bulk — one query up front regardless of roster
+    size — never a query per agent."""
+
+    def setUp(self):
+        _settings()
+        staff_user = User.objects.create_user('qcstaff', password='x')
+        Agent.objects.create(user=staff_user, role='admin', role_type='supervisor',
+                             agent_name='QC Staff', status='active')
+        self.client.login(username='qcstaff', password='x')
+
+    def _make_two_account_agent(self, n):
+        agent = _make_agent(f'qc_agent_{n}')
+        Five9Profile.objects.create(agent=agent, five9_username=f'qc_{n}_primary', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username=f'qc_{n}_extra', is_primary=False, billable=False)
+        d = _WEEK[0]
+        upload, _ = DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'qc_{n}_primary',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'qc_{n}_extra',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)
+        return agent
+
+    def test_daily_hours_query_count_flat_as_row_count_grows(self):
+        for i in range(2):
+            self._make_two_account_agent(i)
+        self.client.get(reverse('daily_hours'), {'week_start': _WEEK[0].isoformat()})  # warm up
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            self.client.get(reverse('daily_hours'), {'week_start': _WEEK[0].isoformat()})
+        small_count = len(ctx)
+
+        for i in range(2, 12):
+            self._make_two_account_agent(i)
+        ctx2 = CaptureQueriesContext(connection)
+        with ctx2:
+            self.client.get(reverse('daily_hours'), {'week_start': _WEEK[0].isoformat()})
+        big_count = len(ctx2)
+
+        self.assertEqual(small_count, big_count,
+                         'the primary-username resolver must stay one bulk query, not per-agent')
+
+    def _make_roster_agent(self, n):
+        agent = self._make_two_account_agent(n)
+        ShiftTemplate.objects.create(agent=agent, day_of_week=_WEEK[0].weekday(),
+                                     start_time=time(9, 0), end_time=time(17, 0), is_off=False)
+        return agent
+
+    def test_adherence_rows_query_count_flat_as_agent_count_grows(self):
+        for i in range(2):
+            self._make_roster_agent(i)
+        url = reverse('adherence_rows_fragment') + f'?week_start={_WEEK[0].isoformat()}'
+        self.client.get(url)  # warm up
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            self.client.get(url)
+        small_count = len(ctx)
+
+        for i in range(2, 12):
+            self._make_roster_agent(i)
+        ctx2 = CaptureQueriesContext(connection)
+        with ctx2:
+            self.client.get(url)
+        big_count = len(ctx2)
+
+        self.assertEqual(small_count, big_count,
+                         'the primary-username resolver must stay one bulk query, not per-agent')
+
+    def _make_admin_roster_agent(self, n):
+        user = User.objects.create_user(f'qc_admin_{n}', password='x')
+        agent = Agent.objects.create(
+            user=user, role='admin', role_type='qa', agent_name=f'qc_admin_{n}',
+            status='active', is_official_admin=True,
+        )
+        Five9Profile.objects.create(agent=agent, five9_username=f'qc_admin_{n}_primary',
+                                    is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username=f'qc_admin_{n}_extra',
+                                    is_primary=False, billable=False)
+        d = _WEEK[0]
+        upload, _ = DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'qc_admin_{n}_primary',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'qc_admin_{n}_extra',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)
+        return agent
+
+    def test_admin_adherence_query_count_flat_as_agent_count_grows(self):
+        for i in range(2):
+            self._make_admin_roster_agent(i)
+        url = reverse('admin_adherence') + f'?week_start={_WEEK[0].isoformat()}'
+        self.client.get(url)  # warm up
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            self.client.get(url)
+        small_count = len(ctx)
+
+        for i in range(2, 12):
+            self._make_admin_roster_agent(i)
+        ctx2 = CaptureQueriesContext(connection)
+        with ctx2:
+            self.client.get(url)
+        big_count = len(ctx2)
+
+        self.assertEqual(small_count, big_count,
+                         'the primary-username resolver must stay one bulk query, not per-agent')
+
+
+class BillableWeeklyDataPrimaryIndependenceTests(TestCase):
+    """_get_billable_weekly_data must be completely indifferent to is_primary —
+    only `billable` drives money. Table-driven over every is_primary
+    permutation for a two-account fixture."""
+
+    def setUp(self):
+        self.settings = _settings()
+
+    def _snapshot(self, agent, data):
+        return {k: v for k, v in data[agent.pk].items() if k != 'agent'}
+
+    def test_output_identical_across_every_is_primary_permutation(self):
+        from finance.views import _get_billable_weekly_data
+        for i, combo in enumerate([(True, False), (False, True), (True, True), (False, False)]):
+            agent = _make_agent(f'perm_{combo[0]}_{combo[1]}')
+            Five9Profile.objects.create(agent=agent, five9_username=f'perm_{i}_a',
+                                        is_primary=combo[0], billable=True)
+            Five9Profile.objects.create(agent=agent, five9_username=f'perm_{i}_b',
+                                        is_primary=combo[1], billable=False)
+            upload, _ = DailyUpload.objects.get_or_create(date=_WEEK[0], defaults={'filename': 'd.csv', 'row_count': 1})
+            DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'perm_{i}_a',
+                                           login_seconds=8 * 3600, not_ready_seconds=0)
+            DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'perm_{i}_b',
+                                           login_seconds=3 * 3600, not_ready_seconds=0)
+
+            data = _get_billable_weekly_data([agent], _WEEK, self.settings)
+            self.assertEqual(data[agent.pk]['actual_hrs'], Decimal('8'),
+                             f'is_primary permutation {combo} changed billable money figures')
+
+
+class RecalculateDisplayHoursCommandTests(TestCase):
+    """Step 2: the one-time recalculation command. Simulates the production
+    Mark Reyes week (Sep 14-20 2026) with stale actual_hours values written
+    the OLD way (falling back to the non-primary account) — exactly the
+    state Step 2 must repair. The command never touches DailyAgentHours,
+    Coding, status, finance or nomina, and can never create a row."""
+
+    def setUp(self):
+        _settings()
+
+    def _run(self, start, end, apply=False, agent_pk=None):
+        out = io.StringIO()
+        from django.core.management import call_command
+        kwargs = {'stdout': out, 'start': start, 'end': end}
+        if apply:
+            kwargs['apply'] = True
+        if agent_pk is not None:
+            kwargs['agent_pk'] = agent_pk
+        call_command('recalculate_display_hours', **kwargs)
+        return out.getvalue()
+
+    def _upload(self, d):
+        return DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})[0]
+
+    def _hours(self, d, agent, username, login_seconds):
+        DailyAgentHours.objects.create(
+            upload=self._upload(d), agent=agent, five9_username=username,
+            login_seconds=login_seconds, not_ready_seconds=0,
+        )
+
+    def _make_mark(self):
+        agent = _make_agent('mark_s2')
+        Five9Profile.objects.create(agent=agent, five9_username='marreyes_s2', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=agent, five9_username='markreyes_s2', is_primary=False, billable=False)
+        return agent
+
+    def _seed_mark_week(self):
+        """Mon/Fri/Sun of the production week, with stale actual_hours values
+        written the OLD (fallback) way — the state Step 2 must repair."""
+        agent = self._make_mark()
+        mon, fri, sun = date(2026, 9, 14), date(2026, 9, 18), date(2026, 9, 20)
+
+        # Mon: primary login 7:59, coded 3:00 -> old and new stored both 7.983333h (unchanged).
+        self._hours(mon, agent, 'marreyes_s2', 7 * 3600 + 59 * 60)
+        Coding.objects.create(agent=agent, date=mon, start_time=time(9, 0), end_time=time(12, 0),
+                              is_admin_coding=False)
+        AdherenceRecord.objects.create(agent=agent, date=mon, status='P', actual_hours=Decimal('7.983333'))
+
+        # Fri: only the extra account has login (8:59), no coding -- the old
+        # fallback stored the extra account's login; must correct to 0.
+        self._hours(fri, agent, 'markreyes_s2', 8 * 3600 + 59 * 60)
+        AdherenceRecord.objects.create(agent=agent, date=fri, status='P', actual_hours=Decimal('8.983333'))
+
+        # Sun: only the extra account has login (3:56) plus a matching 3:56
+        # coding -- old fallback stored the extra login; must correct to 0
+        # (the coding still shows in the cell separately).
+        self._hours(sun, agent, 'markreyes_s2', 3 * 3600 + 56 * 60)
+        Coding.objects.create(agent=agent, date=sun, start_time=time(9, 0), end_time=time(12, 56),
+                              is_admin_coding=False)
+        AdherenceRecord.objects.create(agent=agent, date=sun, status='P', actual_hours=Decimal('3.933333'))
+
+        return agent, mon, fri, sun
+
+    def test_preview_writes_nothing(self):
+        agent, mon, fri, sun = self._seed_mark_week()
+
+        def _counts():
+            return (
+                AdherenceRecord.objects.count(),
+                tuple(AdherenceRecord.objects.order_by('pk').values_list('actual_hours', 'updated_at')),
+                DailyAgentHours.objects.count(), Coding.objects.count(),
+                BillingSettings.objects.count(), BillingSettingsHistory.objects.count(),
+                Agent.objects.count(),
+            )
+
+        before = _counts()
+        self._run(mon, sun)
+        self.assertEqual(_counts(), before)
+
+    def test_preview_prints_only_changing_rows(self):
+        agent, mon, fri, sun = self._seed_mark_week()
+        # Widen the range by a day on each side so the header's own start/end
+        # dates never coincide with Monday's date, keeping this check honest.
+        out = self._run(mon - timedelta(days=1), sun + timedelta(days=1))
+        rows_section = out.split('STORED BEFORE → AFTER', 1)[1]
+        self.assertIn(fri.isoformat(), rows_section)
+        self.assertIn(sun.isoformat(), rows_section)
+        self.assertNotIn(mon.isoformat(), rows_section)   # unchanged -> not printed
+        self.assertIn('2 agent-day(s) would change.', out)
+        self.assertIn('Nothing was written.', out)
+
+    def test_preview_reports_the_answer_key_cell_values(self):
+        agent, mon, fri, sun = self._seed_mark_week()
+        out = self._run(mon, sun)
+        self.assertIn('8:59 → 0:00', out)
+        self.assertIn('7:52 → 3:56', out)
+
+    def test_apply_updates_only_the_changed_rows(self):
+        agent, mon, fri, sun = self._seed_mark_week()
+        mon_rec = AdherenceRecord.objects.get(agent=agent, date=mon)
+        mon_before = (mon_rec.actual_hours, mon_rec.updated_at)
+
+        self._run(mon, sun, apply=True)
+
+        mon_rec.refresh_from_db()
+        self.assertEqual((mon_rec.actual_hours, mon_rec.updated_at), mon_before)
+
+        fri_rec = AdherenceRecord.objects.get(agent=agent, date=fri)
+        sun_rec = AdherenceRecord.objects.get(agent=agent, date=sun)
+        self.assertEqual(fri_rec.actual_hours, Decimal('0'))
+        self.assertEqual(sun_rec.actual_hours, Decimal('0'))
+
+    def test_second_apply_is_a_no_op(self):
+        self._seed_mark_week()
+        self._run(date(2026, 9, 14), date(2026, 9, 20), apply=True)
+        after_first = tuple(AdherenceRecord.objects.order_by('pk').values_list('actual_hours', 'updated_at'))
+        log_count_after_first = AuditLog.objects.count()
+
+        out = self._run(date(2026, 9, 14), date(2026, 9, 20), apply=True)
+
+        self.assertIn('No agent-day would change.', out)
+        after_second = tuple(AdherenceRecord.objects.order_by('pk').values_list('actual_hours', 'updated_at'))
+        self.assertEqual(after_first, after_second)
+        self.assertEqual(AuditLog.objects.count(), log_count_after_first)
+
+    def test_apply_writes_exactly_one_activity_log_entry(self):
+        self._seed_mark_week()
+        before = AuditLog.objects.count()
+        self._run(date(2026, 9, 14), date(2026, 9, 20), apply=True)
+        self.assertEqual(AuditLog.objects.count(), before + 1)
+        entry = AuditLog.objects.latest('pk')
+        self.assertEqual(entry.action, 'Recalculated adherence display hours')
+        self.assertIn('2026-09-14', entry.detail)
+        self.assertIn('2 agent-day(s) updated', entry.detail)
+        self.assertIsNone(entry.user)
+
+    def test_no_adherence_record_is_created(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 14)
+        # Scheduled that day, has a Daily Hours row, but no AdherenceRecord at all.
+        ShiftTemplate.objects.create(agent=agent, day_of_week=d.weekday(),
+                                     start_time=time(9, 0), end_time=time(17, 0), is_off=False)
+        self._hours(d, agent, 'marreyes_s2', 8 * 3600)
+        before = AdherenceRecord.objects.count()
+        self._run(d, d, apply=True)
+        self.assertEqual(AdherenceRecord.objects.count(), before)
+        self.assertFalse(AdherenceRecord.objects.filter(agent=agent, date=d).exists())
+
+    def test_official_admin_record_is_never_created_or_touched(self):
+        user = User.objects.create_user('s2admin', password='x')
+        admin = Agent.objects.create(
+            user=user, role='admin', role_type='qa', agent_name='s2admin',
+            status='active', is_official_admin=True,
+        )
+        Five9Profile.objects.create(agent=admin, five9_username='s2admin_primary', is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=admin, five9_username='s2admin_extra', is_primary=False, billable=False)
+        d = date(2026, 9, 14)
+        self._hours(d, admin, 's2admin_extra', 8 * 3600)  # stale-shaped data
+        rec = AdherenceRecord.objects.create(agent=admin, date=d, status='P', actual_hours=Decimal('8'))
+
+        self._run(d, d, apply=True)
+
+        rec.refresh_from_db()
+        self.assertEqual(rec.actual_hours, Decimal('8'))  # untouched
+
+    def test_unmatched_daily_hours_row_stays_unmatched(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'marreyes_s2', 8 * 3600)
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('5'))
+        unmatched = DailyAgentHours.objects.create(
+            upload=self._upload(d), agent=None, five9_username='ghost_user',
+            login_seconds=3600, not_ready_seconds=0,
+        )
+        self._run(d, d, apply=True)
+        unmatched.refresh_from_db()
+        self.assertIsNone(unmatched.agent_id)
+
+    def test_hand_entered_hours_on_a_day_with_no_upload_row_are_untouched(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 14)
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('5'))
+        self._run(d, d, apply=True)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('5'))
+
+    def test_out_of_range_dates_are_not_touched(self):
+        agent, mon, fri, sun = self._seed_mark_week()
+        before = fri - timedelta(days=1)
+        AdherenceRecord.objects.create(agent=agent, date=before, status='P', actual_hours=Decimal('9'))
+        self._hours(before, agent, 'markreyes_s2', 9 * 3600)
+
+        self._run(fri, sun, apply=True)
+
+        rec = AdherenceRecord.objects.get(agent=agent, date=before)
+        self.assertEqual(rec.actual_hours, Decimal('9'))
+
+    def test_value_that_rises_is_also_corrected(self):
+        """The old fallback picked whichever row happened to match first; a
+        duplicated/misattributed history can leave a stored value LOWER than
+        the correct primary-only figure. The command must raise it too, not
+        just zero things out."""
+        agent = self._make_mark()
+        d = date(2026, 9, 14)
+        self._hours(d, agent, 'marreyes_s2', 8 * 3600)         # primary: 8h
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('3'))  # stale, too low
+        self._run(d, d, apply=True)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('8'))
+
+    def test_apply_failure_leaves_nothing_written_and_no_log_entry(self):
+        """--apply runs in ONE transaction, all-or-nothing: a failure anywhere
+        in the write rolls back every row, not just the ones after it."""
+        self._seed_mark_week()
+        before = tuple(AdherenceRecord.objects.order_by('pk').values_list('actual_hours', 'updated_at'))
+        log_count_before = AuditLog.objects.count()
+
+        from unittest.mock import patch
+        with patch('adherence.management.commands.recalculate_display_hours.log_action',
+                   side_effect=RuntimeError('boom')):
+            with self.assertRaises(RuntimeError):
+                self._run(date(2026, 9, 14), date(2026, 9, 20), apply=True)
+
+        after = tuple(AdherenceRecord.objects.order_by('pk').values_list('actual_hours', 'updated_at'))
+        self.assertEqual(after, before)
+        self.assertEqual(AuditLog.objects.count(), log_count_before)
+

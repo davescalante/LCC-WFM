@@ -111,7 +111,7 @@
                 <td style="padding:6px 10px;font-size:12px;color:#555;">{{ row.dah.five9_username }}</td>
                 <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;">{{ row.dah.login_seconds|seconds_to_hhmmss }}</td>
                 <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;{% if row.excess_seconds > 0 %}color:#c0392b;{% endif %}">
-                    {{ row.dah.not_ready_seconds|seconds_to_hhmmss }}
+                    {{ row.not_ready_seconds|seconds_to_hhmmss }}
                 </td>
                 <td style="padding:6px 10px;text-align:center;font-family:monospace;font-size:12px;color:#5d6d7e;">
                     {% if row.coded_seconds %}{{ row.coded_seconds|seconds_to_hhmmss }}{% else %}<span style="color:#ddd;">—</span>{% endif %}

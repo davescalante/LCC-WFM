@@ -627,6 +627,38 @@ class ScheduledMapQuitBajaExclusionTests(TestCase):
         )
         self.assertEqual(self._count(self.next_week, 'Monday'), 0)
 
+    def test_login_on_a_non_primary_account_alone_does_not_reinstate(self):
+        """Documents an accepted, narrow second-order effect of the adherence
+        primary-account-only display rule (see CLAUDE.md): _build_quit_mark_map
+        treats stored actual_hours above zero as evidence of real work. Since
+        adherence display now counts only the primary Five9 account with no
+        fallback, a Quit-marked agent whose only login that day is on a
+        non-primary account, with no status typed, stores actual_hours=0 and
+        stays excluded — where before the primary-only rule existed, the
+        non-primary account's login would have counted and reinstated them.
+        No Staffing code changes for this; it is accepted and pinned here."""
+        from scheduling.models import Five9Profile
+        from adherence.models import DailyUpload, DailyAgentHours
+        from adherence.views import _refresh_actual_hours
+
+        marked_day = self.past_week + timedelta(days=2)
+        self._mark(marked_day)
+        activity_day = self.past_week + timedelta(days=3)
+
+        Five9Profile.objects.create(agent=self.agent, five9_username='sp_primary',
+                                    is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=self.agent, five9_username='sp_extra',
+                                    is_primary=False, billable=False)
+        upload = DailyUpload.objects.create(date=activity_day, filename='d.csv', row_count=1)
+        DailyAgentHours.objects.create(upload=upload, agent=self.agent, five9_username='sp_extra',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        _refresh_actual_hours(self.agent.pk, activity_day)
+
+        self.assertFalse(
+            AdherenceRecord.objects.filter(agent=self.agent, date=activity_day, actual_hours__gt=0).exists()
+        )
+        self.assertEqual(self._count(self.next_week, 'Monday'), 0)
+
 
 # ── Skills Phase 3 groundwork: agent_id on every agents_map/excluded_map entry ──
 # _build_scheduled_map's return tuple is unchanged (still 3 values); only the

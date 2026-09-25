@@ -69,3 +69,38 @@ def get_billable_username_map(agent_ids):
             primary_billable_map[aid] = p['five9_username']
 
     return billable_map, primary_billable_map
+
+
+def get_adherence_primary_resolver(agent_ids):
+    """
+    Return counts_for_adherence(agent_id, five9_username, on_date) -> bool.
+
+    True only when that username belongs to a Five9Profile of that agent marked
+    is_primary. ADHERENCE DISPLAY ONLY — no fallback: an agent with no primary
+    account counts zero Five9 login/not-ready time (their codings still count
+    separately). Billing, payroll and nomina keep using get_billable_username_map
+    (the billable flag) — the two pipelines are independent by design.
+
+    One query up front, then any number of questions — never a query per agent.
+    Both sides are compared .strip().lower()'d: DailyAgentHours.five9_username is
+    stored lowercased, Five9Profile.five9_username with only .strip() applied.
+
+    on_date is required of every caller and deliberately ignored today. It is the
+    seam for a later phase that resolves which account was primary on a given
+    date — adding that becomes an internal change here and touches no caller.
+    """
+    from scheduling.models import Five9Profile
+
+    primary_map = {}
+    for p in Five9Profile.objects.filter(
+        agent__in=agent_ids, is_primary=True
+    ).values('agent_id', 'five9_username'):
+        primary_map.setdefault(p['agent_id'], set()).add(p['five9_username'].strip().lower())
+
+    def counts_for_adherence(agent_id, five9_username, on_date):
+        names = primary_map.get(agent_id)
+        if not names:
+            return False
+        return (five9_username or '').strip().lower() in names
+
+    return counts_for_adherence

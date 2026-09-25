@@ -14,7 +14,7 @@ from scheduling.models import Agent, AgentSeparation, Five9Profile, OvertimeShif
 from adherence.models import AdherenceRecord, DailyAgentHours, DailyUpload, PayrollAdjustment, Coding
 from .models import BillingSettings, BillingSettingsHistory
 from wfm.constants import BONUS_QUALIFYING, BONUS_DISQUALIFYING, VTO_TYPE_STATUSES
-from wfm.utils import get_week_start, parse_week_param, get_billable_username_map
+from wfm.utils import get_week_start, parse_week_param, get_billable_username_map, get_adherence_primary_resolver
 
 # ─── Access control ───────────────────────────────────────────────────────────
 # Finance is visible only to users with is_super_admin=True, plus Django superusers.
@@ -1334,17 +1334,23 @@ def delete_admin_coding_ajax(request):
 
 def _apply_live_login_hours(agents, week_dates, record_map):
     """
-    Overwrite in-memory AdherenceRecord.actual_hours with LIVE raw billable
-    login hours per (agent, date), summed across ALL billable Five9 profiles —
-    the exact source Billing Report v2 uses.
+    Overwrite in-memory AdherenceRecord.actual_hours with LIVE primary-account
+    login hours per (agent, date) — ADHERENCE DISPLAY ONLY, matching the
+    primary-only rule the rest of adherence display follows. No fallback: a
+    day whose only rows are on a non-primary account shows 0, never the
+    non-primary total.
 
-    Why: the admin adherence tab otherwise reads the STORED actual_hours, which
-    already had a per-day not-ready deduction baked in at upload time;
-    _build_rows then re-applies the weekly NR cap on top, so Official Admins
-    show false "missing time" even though the connected time is present (and
-    Billing v2 shows it correctly). This also fixes admins with 2+ billable
-    Five9 profiles, whose stored value held only the last profile's login
-    instead of the sum.
+    Overwritten only for (agent, date) pairs that have at least one Daily
+    Hours row that day — a day with no upload at all keeps its stored value
+    exactly as-is, so a hand-entered actual_hours is never replaced with a
+    fabricated 0.
+
+    Why this function exists at all: the admin adherence tab otherwise reads
+    the STORED actual_hours, which already had a per-day not-ready deduction
+    baked in at upload time; _build_rows then re-applies the weekly NR cap on
+    top, so Official Admins show false "missing time" even though the
+    connected time is present. It also sums every primary row for the day
+    rather than trusting whatever a single earlier write happened to store.
 
     The record_map objects are request-scoped and are NEVER saved — this
     changes only what this page/export displays, not the database, Billing v2,
@@ -1352,24 +1358,27 @@ def _apply_live_login_hours(agents, week_dates, record_map):
     """
     if not agents:
         return
-    billable_map, _ = get_billable_username_map([a.pk for a in agents])
+    counts_for_adherence = get_adherence_primary_resolver([a.pk for a in agents])
     login_hrs = {}
+    days_with_rows = set()
     for r in DailyAgentHours.objects.filter(
         upload__date__in=week_dates, agent__in=agents
     ).values('agent_id', 'upload__date', 'five9_username', 'login_seconds'):
         aid = r['agent_id']
         if aid is None:
             continue
-        bnames = billable_map.get(aid)
-        if bnames is None or r['five9_username'].strip().lower() in bnames:
-            key = (aid, r['upload__date'])
+        key = (aid, r['upload__date'])
+        days_with_rows.add(key)
+        if counts_for_adherence(aid, r['five9_username'], r['upload__date']):
             login_hrs[key] = login_hrs.get(key, Decimal('0')) + Decimal(str(r['login_seconds'])) / Decimal('3600')
-    for (aid, d), hrs in login_hrs.items():
-        rec = record_map.get((aid, d))
+    for key in days_with_rows:
+        aid, d = key
+        hrs = login_hrs.get(key, Decimal('0'))
+        rec = record_map.get(key)
         if rec is not None:
             rec.actual_hours = hrs
         else:
-            record_map[(aid, d)] = AdherenceRecord(agent_id=aid, date=d, actual_hours=hrs, status='')
+            record_map[key] = AdherenceRecord(agent_id=aid, date=d, actual_hours=hrs, status='')
 
 
 @login_required

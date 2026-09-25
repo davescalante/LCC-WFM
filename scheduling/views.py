@@ -485,6 +485,15 @@ def _save_five9_profiles(request, agent):
             )
         i += 1
 
+    # A lone Five9 account is always the primary one. Without this, leaving
+    # the radio unset yields an agent with no primary — which now means zero
+    # Five9 adherence login time. Re-queried, not the lists built above: the
+    # delete/update/create logic above may have changed the row set.
+    profiles = list(agent.five9_profiles.all())
+    if len(profiles) == 1 and not profiles[0].is_primary:
+        profiles[0].is_primary = True
+        profiles[0].save(update_fields=['is_primary'])
+
 
 def _sync_agent_skills(request, agent, form, before):
     """Apply the skills picked on the Edit User form and record every change.
