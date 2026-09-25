@@ -23,10 +23,10 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **737**. The tests are the regression gate and double as executable specs for the
+Currently **762**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
-Three read-only management commands exist for diagnosis; none is reachable from a request
+Five read-only management commands exist for diagnosis; none is reachable from a request
 path and none writes anything. `verify_adherence_roster` runs the old and new roster
 implementations against the same database and reports any difference in the pk sets
 (`--weeks`, default 8). `verify_ot_topups` (`370a2de`) does the same job for the OT incentive
@@ -36,7 +36,17 @@ any difference (`--weeks`, default 12). `schedule_data_inventory` prints row cou
 future-dated counts for the schedule/adherence tables, plus three OT-duplicate sections
 (`ccb64cf`): exact-duplicate slots keyed on agent/date/start/end with cancelled rows
 excluded, the money-exposed subset (extra rows that are `completed` **and** incentivized,
-priced and broken out per week), and the origin split by write path.
+priced and broken out per week), and the origin split by write path. `five9_account_setup_report`
+(`38e8b3c`) lists active agents' Five9Profile setups and flags five unusual configurations —
+2+ accounts with none marked primary, exactly 1 account not marked primary, a non-billable
+primary alongside a billable account, more than one billable account, more than one account
+marked primary; first production run (2026-09-25): 3 active agents in the non-billable-primary
+section, 0 in every other section. `uncoded_extra_account_review` (`38e8b3c`) reviews only the
+specific days an agent has Daily Hours login time on a non-primary Five9 account and flags one
+where paid time (billable login + coded time) falls more than 5 minutes short of scheduled
+hours, or non-primary login time exceeds coded time by more than 5 minutes (`--start`/`--end`,
+default 2026-08-24 to 2026-09-27); first production run (2026-09-25): 62 of 149 reviewed days
+flagged.
 
 ## The rule that matters most: there are two separate hours pipelines
 
