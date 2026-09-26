@@ -8,6 +8,8 @@ urlpatterns = [
     path('agents/<int:pk>/', views.agent_detail, name='agent_detail'),
     path('agents/<int:pk>/edit/', views.agent_edit, name='agent_edit'),
     path('agents/<int:pk>/delete/', views.agent_delete, name='agent_delete'),
+    path('agents/<int:pk>/five9-primary-period/', views.five9_primary_period_add,
+         name='five9_primary_period_add'),
     path('shifts/', views.shift_list, name='shift_list'),
     path('shifts/week/', views.shift_week, name='shift_week'),
     path('shifts/copy-from-prev/', views.shift_copy_from_prev, name='shift_copy_from_prev'),

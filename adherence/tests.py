@@ -7,12 +7,14 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 from django.db import connection
 from django.db.models import Q
 from django.test.utils import CaptureQueriesContext
 from scheduling.models import (
-    Agent, AgentSeparation, Five9Profile, Shift, ShiftTemplate, OvertimeShift, Skill, AuditLog,
+    Agent, AgentSeparation, Five9Profile, Five9PrimaryPeriod, Shift, ShiftTemplate,
+    OvertimeShift, Skill, AuditLog,
 )
 from adherence.models import AdherenceRecord, DailyUpload, DailyAgentHours, Coding, AdherenceNote
 from adherence.views import (
@@ -1909,7 +1911,10 @@ class AutoPrimaryOnSaveTests(TestCase):
     fragile to changes elsewhere on that form."""
 
     def _fake_request(self, post_data):
-        return SimpleNamespace(POST=post_data)
+        # A super admin, because removing a saved account is super-admin-only.
+        # This class is about the auto-primary rule, not about permissions —
+        # those have their own coverage in Five9AccountPermissionTests.
+        return SimpleNamespace(POST=post_data, has_finance_access=True)
 
     def test_single_account_is_auto_marked_primary_on_save(self):
         from scheduling.views import _save_five9_profiles
@@ -2337,3 +2342,1285 @@ class RecalculateDisplayHoursCommandTests(TestCase):
         self.assertEqual(after, before)
         self.assertEqual(AuditLog.objects.count(), log_count_before)
 
+
+
+class PrimaryPeriodDateAwarenessTests(TestCase):
+    """Switching an agent's primary Five9 account must change which account counts
+    from the switch date forward ONLY. Every earlier day keeps counting whichever
+    account was primary at the time.
+
+    Before the primary-period history, get_adherence_primary_resolver read today's
+    is_primary flag for every date it was asked about, so a single switch silently
+    recomputed the agent's whole adherence past — the reason CLAUDE.md and
+    HANDOFF.md §8 both said not to switch anyone's primary account."""
+
+    def _fake_request(self, post_data):
+        return SimpleNamespace(POST=post_data)
+
+    def _switch_primary_to(self, agent, keep, new):
+        """Drive the one real write path (_save_five9_profiles) the way the Edit
+        User form does: every row resubmitted, the radio now on `new`."""
+        from scheduling.views import _save_five9_profiles
+        post = {'five9_primary': str(new.pk)}
+        for p in (keep, new):
+            post[f'five9_{p.pk}_username'] = p.five9_username
+            post[f'five9_{p.pk}_label'] = p.label
+            post[f'five9_{p.pk}_billable'] = 'on' if p.billable else ''
+        _save_five9_profiles(self._fake_request(post), agent)
+
+    def test_switching_primary_leaves_earlier_days_on_the_old_account(self):
+        from wfm.utils import get_adherence_primary_resolver
+        agent = _make_agent('dateaware1')
+        old = Five9Profile.objects.create(agent=agent, five9_username='da_old',
+                                          is_primary=True, billable=True)
+        new = Five9Profile.objects.create(agent=agent, five9_username='da_new',
+                                          is_primary=False, billable=True)
+        today = timezone.localdate()
+        past = today - timedelta(days=10)
+
+        self._switch_primary_to(agent, old, new)
+
+        counts = get_adherence_primary_resolver([agent.pk])
+        self.assertTrue(counts(agent.pk, 'da_old', past),
+                        'the account that was primary on that past day must still count')
+        self.assertFalse(counts(agent.pk, 'da_new', past),
+                         'the new account must not retroactively count days before the switch')
+
+    def test_switching_primary_takes_effect_from_today(self):
+        from wfm.utils import get_adherence_primary_resolver
+        agent = _make_agent('dateaware2')
+        old = Five9Profile.objects.create(agent=agent, five9_username='db_old',
+                                          is_primary=True, billable=True)
+        new = Five9Profile.objects.create(agent=agent, five9_username='db_new',
+                                          is_primary=False, billable=True)
+        today = timezone.localdate()
+
+        self._switch_primary_to(agent, old, new)
+
+        counts = get_adherence_primary_resolver([agent.pk])
+        self.assertTrue(counts(agent.pk, 'db_new', today))
+        self.assertFalse(counts(agent.pk, 'db_old', today))
+
+    def test_switch_recalculates_today_but_leaves_earlier_stored_hours_alone(self):
+        """The switch must recompute exactly the days it affects. A day before the
+        switch keeps the stored value it already had; the switch day is recomputed
+        against the new account."""
+        _settings(nr_ratio=Decimal('0.125'))
+        agent = _make_agent('dateaware3')
+        old = Five9Profile.objects.create(agent=agent, five9_username='dc_old',
+                                          is_primary=True, billable=True)
+        new = Five9Profile.objects.create(agent=agent, five9_username='dc_new',
+                                          is_primary=False, billable=True)
+        today = timezone.localdate()
+        past = today - timedelta(days=10)
+
+        for d in (past, today):
+            upload, _ = DailyUpload.objects.get_or_create(
+                date=d, defaults={'filename': 'x.csv', 'row_count': 2})
+            DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='dc_old',
+                                           login_seconds=8 * 3600, not_ready_seconds=0)
+            DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='dc_new',
+                                           login_seconds=5 * 3600, not_ready_seconds=0)
+            AdherenceRecord.objects.create(agent=agent, date=d, status='P',
+                                           actual_hours=Decimal('8'))
+
+        self._switch_primary_to(agent, old, new)
+
+        self.assertEqual(AdherenceRecord.objects.get(agent=agent, date=past).actual_hours,
+                         Decimal('8'), 'a day before the switch must keep its stored hours')
+        self.assertEqual(AdherenceRecord.objects.get(agent=agent, date=today).actual_hours,
+                         Decimal('5'), 'the switch day must be recomputed on the new account')
+
+
+class Five9PrimaryHistoryResolverTests(TestCase):
+    """The resolution rule itself: for any date, the NEWEST entry covering it
+    (highest pk) decides which account was primary. Entries are append-only, so
+    every correction is a newer entry rather than an edit."""
+
+    def setUp(self):
+        self.agent = _make_agent('histagent')
+        self.a = Five9Profile.objects.create(agent=self.agent, five9_username='hist_a',
+                                             is_primary=True, billable=True)
+        self.b = Five9Profile.objects.create(agent=self.agent, five9_username='hist_b',
+                                             is_primary=False, billable=True)
+        self.c = Five9Profile.objects.create(agent=self.agent, five9_username='hist_c',
+                                             is_primary=False, billable=True)
+        self.d1 = date(2026, 3, 1)
+
+    def _period(self, profile, start, end, kind='switch'):
+        return Five9PrimaryPeriod.objects.create(
+            agent=self.agent, profile=profile, five9_username=profile.five9_username,
+            start_date=start, end_date=end, kind=kind,
+        )
+
+    def _counts(self):
+        from wfm.utils import get_adherence_primary_resolver
+        return get_adherence_primary_resolver([self.agent.pk])
+
+    def _winner_on(self, d):
+        counts = self._counts()
+        names = [n for n in ('hist_a', 'hist_b', 'hist_c') if counts(self.agent.pk, n, d)]
+        self.assertLessEqual(len(names), 1, 'at most one account can be primary on a day')
+        return names[0] if names else None
+
+    def test_bootstrap_uses_todays_flag_when_there_is_no_history(self):
+        for offset in (-400, -1, 0, 30):
+            self.assertEqual(self._winner_on(self.d1 + timedelta(days=offset)), 'hist_a')
+
+    def test_switch_splits_the_timeline_at_the_start_date(self):
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, self.d1, None)
+        self.assertEqual(self._winner_on(self.d1 - timedelta(days=1)), 'hist_a')
+        self.assertEqual(self._winner_on(self.d1), 'hist_b')
+        self.assertEqual(self._winner_on(self.d1 + timedelta(days=90)), 'hist_b')
+
+    def test_switch_then_switch_back(self):
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, self.d1, None)
+        back = self.d1 + timedelta(days=10)
+        self._period(self.a, back, None)
+        self.assertEqual(self._winner_on(self.d1 - timedelta(days=1)), 'hist_a')
+        self.assertEqual(self._winner_on(self.d1), 'hist_b')
+        self.assertEqual(self._winner_on(back - timedelta(days=1)), 'hist_b')
+        self.assertEqual(self._winner_on(back), 'hist_a')
+
+    def test_past_period_inside_a_longer_primary(self):
+        """After the past period's end date, the older entry applies again."""
+        self._period(self.a, None, None, 'initial')
+        start = self.d1
+        end = self.d1 + timedelta(days=4)
+        self._period(self.b, start, end, 'past_period')
+        self.assertEqual(self._winner_on(start - timedelta(days=1)), 'hist_a')
+        self.assertEqual(self._winner_on(start), 'hist_b')
+        self.assertEqual(self._winner_on(end), 'hist_b')
+        self.assertEqual(self._winner_on(end + timedelta(days=1)), 'hist_a')
+
+    def test_past_period_entered_after_a_later_switch_already_exists(self):
+        """A past period is newest, so it wins inside its own range — but it must
+        not disturb the later switch that already governs today."""
+        self._period(self.a, None, None, 'initial')
+        switch_day = self.d1 + timedelta(days=20)
+        self._period(self.b, switch_day, None)
+        gap_start = self.d1 + timedelta(days=5)
+        gap_end = self.d1 + timedelta(days=7)
+        self._period(self.c, gap_start, gap_end, 'past_period')
+
+        self.assertEqual(self._winner_on(gap_start - timedelta(days=1)), 'hist_a')
+        self.assertEqual(self._winner_on(gap_start), 'hist_c')
+        self.assertEqual(self._winner_on(gap_end), 'hist_c')
+        self.assertEqual(self._winner_on(gap_end + timedelta(days=1)), 'hist_a')
+        self.assertEqual(self._winner_on(switch_day), 'hist_b')
+        self.assertEqual(self._winner_on(switch_day + timedelta(days=365)), 'hist_b')
+
+    def test_always_supersedes_every_earlier_entry(self):
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, self.d1, None)
+        self._period(self.c, self.d1 + timedelta(days=3), self.d1 + timedelta(days=6), 'past_period')
+        self._period(self.a, None, None, 'always')
+        for offset in (-500, -1, 0, 3, 6, 7, 400):
+            self.assertEqual(self._winner_on(self.d1 + timedelta(days=offset)), 'hist_a',
+                             'an "always" entry is newest and covers every day')
+
+    def test_newest_wins_on_an_exact_overlap(self):
+        self._period(self.a, self.d1, None, 'switch')
+        self._period(self.b, self.d1, None, 'switch')
+        self.assertEqual(self._winner_on(self.d1), 'hist_b')
+
+    def test_a_date_no_entry_covers_has_no_primary(self):
+        self._period(self.a, self.d1, None, 'switch')
+        self.assertIsNone(self._winner_on(self.d1 - timedelta(days=1)))
+
+    def test_rename_follows_the_entry(self):
+        from scheduling.five9_primary import refresh_username_snapshots
+        self._period(self.a, None, None, 'initial')
+        self.a.five9_username = 'hist_a_renamed'
+        self.a.save()
+        refresh_username_snapshots(self.a)
+        counts = self._counts()
+        self.assertTrue(counts(self.agent.pk, 'hist_a_renamed', self.d1))
+        self.assertFalse(counts(self.agent.pk, 'hist_a', self.d1))
+
+    def test_deleted_account_entries_still_count_their_past_days(self):
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, self.d1, None, 'switch')
+        self.a.delete()
+        counts = self._counts()
+        self.assertTrue(counts(self.agent.pk, 'hist_a', self.d1 - timedelta(days=1)),
+                        'a deleted account must keep counting the days it was primary')
+        self.assertTrue(counts(self.agent.pk, 'hist_b', self.d1))
+
+    def test_resolver_stays_two_queries_regardless_of_agent_count(self):
+        self._period(self.a, None, None, 'initial')
+        from wfm.utils import get_adherence_primary_resolver
+        others = []
+        for i in range(12):
+            other = _make_agent(f'histq_{i}')
+            Five9Profile.objects.create(agent=other, five9_username=f'histq_{i}',
+                                        is_primary=True, billable=True)
+            others.append(other.pk)
+
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            counts = get_adherence_primary_resolver([self.agent.pk] + others)
+            for pk in [self.agent.pk] + others:
+                for offset in range(30):
+                    counts(pk, 'hist_a', self.d1 + timedelta(days=offset))
+        self.assertLessEqual(len(ctx), 2,
+                             'the resolver must stay bulk — never a query per agent or per day')
+
+
+class Five9PrimarySeedMigrationTests(TestCase):
+    """The seed must reproduce today's resolver answers exactly. Runs the real
+    migration function against the real models."""
+
+    def _seed(self):
+        import importlib
+        from django.apps import apps as global_apps
+        mod = importlib.import_module('scheduling.migrations.0055_five9primaryperiod')
+        mod.seed_primary_periods(global_apps, None)
+
+    def _answers(self, agents, usernames, dates):
+        from wfm.utils import get_adherence_primary_resolver
+        counts = get_adherence_primary_resolver([a.pk for a in agents])
+        return {(a.pk, u, d): counts(a.pk, u, d)
+                for a in agents for u in usernames for d in dates}
+
+    def test_seed_reproduces_todays_answers_for_every_agent_and_date(self):
+        with_primary = _make_agent('seed_with')
+        Five9Profile.objects.create(agent=with_primary, five9_username='seed_p',
+                                    is_primary=True, billable=True)
+        Five9Profile.objects.create(agent=with_primary, five9_username='seed_x',
+                                    is_primary=False, billable=False)
+        without = _make_agent('seed_without')
+        Five9Profile.objects.create(agent=without, five9_username='seed_none',
+                                    is_primary=False, billable=True)
+        no_accounts = _make_agent('seed_bare')
+
+        agents = [with_primary, without, no_accounts]
+        usernames = ['seed_p', 'seed_x', 'seed_none', 'nobody']
+        dates = [date(2025, 1, 1), date(2026, 6, 15), timezone.localdate(),
+                 timezone.localdate() + timedelta(days=30)]
+
+        before = self._answers(agents, usernames, dates)
+        Five9PrimaryPeriod.objects.all().delete()
+        self._seed()
+        after = self._answers(agents, usernames, dates)
+
+        self.assertEqual(before, after)
+        self.assertTrue(Five9PrimaryPeriod.objects.filter(agent=with_primary).exists())
+        self.assertFalse(Five9PrimaryPeriod.objects.filter(agent=without).exists(),
+                         'an agent with no primary account gets no entry')
+        self.assertFalse(Five9PrimaryPeriod.objects.filter(agent=no_accounts).exists())
+
+    def test_seed_writes_no_activity_log_entries(self):
+        agent = _make_agent('seed_quiet')
+        Five9Profile.objects.create(agent=agent, five9_username='seed_q', is_primary=True, billable=True)
+        Five9PrimaryPeriod.objects.all().delete()
+        before = AuditLog.objects.count()
+        self._seed()
+        self.assertEqual(AuditLog.objects.count(), before,
+                         'the seed changes nothing observable, so it logs nothing')
+
+    def test_two_accounts_marked_primary_collapse_to_the_lowest_id(self):
+        """Stated behavior change, in this one shape only: both used to count.
+        five9_account_setup_report found 0 agents like this in production."""
+        agent = _make_agent('seed_dupe')
+        first = Five9Profile.objects.create(agent=agent, five9_username='dupe_1',
+                                            is_primary=True, billable=True)
+        second = Five9Profile.objects.create(agent=agent, five9_username='dupe_2',
+                                             is_primary=True, billable=True)
+        Five9PrimaryPeriod.objects.all().delete()
+        self._seed()
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertTrue(first.is_primary)
+        self.assertFalse(second.is_primary, 'the flag must agree with the single seeded entry')
+        self.assertEqual(Five9PrimaryPeriod.objects.filter(agent=agent).count(), 1)
+
+
+class Five9PrimarySyncAndRecalcTests(TestCase):
+    """is_primary always equals whatever the history says is primary today, and a
+    saved entry recalculates exactly the days it covers — no more, no fewer."""
+
+    def setUp(self):
+        _settings(nr_ratio=Decimal('0.125'))
+        self.today = timezone.localdate()
+
+    def _fake_request(self, post_data):
+        # A super admin, because removing a saved account is super-admin-only.
+        # This class is about the is_primary sync and the recalculation; the
+        # refusal below must fire for the missing-replacement reason, not for a
+        # permission reason, or it would pass without testing anything.
+        return SimpleNamespace(POST=post_data, has_finance_access=True)
+
+    def _post_all(self, agent, primary=None, delete=()):
+        post = {'five9_primary': str(primary.pk) if primary else ''}
+        for p in agent.five9_profiles.all():
+            if p.pk in delete:
+                post[f'five9_{p.pk}_delete'] = 'on'
+                continue
+            post[f'five9_{p.pk}_username'] = p.five9_username
+            post[f'five9_{p.pk}_label'] = p.label
+            post[f'five9_{p.pk}_billable'] = 'on' if p.billable else ''
+        return post
+
+    def _save(self, agent, primary=None, delete=()):
+        from scheduling.views import _save_five9_profiles
+        _save_five9_profiles(self._fake_request(self._post_all(agent, primary, delete)), agent)
+
+    def _two_account_agent(self, name):
+        agent = _make_agent(name)
+        a = Five9Profile.objects.create(agent=agent, five9_username=f'{name}_a',
+                                        is_primary=True, billable=True)
+        b = Five9Profile.objects.create(agent=agent, five9_username=f'{name}_b',
+                                        is_primary=False, billable=True)
+        return agent, a, b
+
+    def test_is_primary_equals_todays_winner_after_a_switch(self):
+        from scheduling.five9_primary import current_primary_profile
+        agent, a, b = self._two_account_agent('sync1')
+        self._save(agent, primary=b)
+        a.refresh_from_db()
+        b.refresh_from_db()
+        self.assertFalse(a.is_primary)
+        self.assertTrue(b.is_primary)
+        self.assertEqual(current_primary_profile(agent).pk, b.pk)
+
+    def test_is_primary_equals_todays_winner_after_an_always_entry(self):
+        from scheduling.five9_primary import record_primary_period
+        agent, a, b = self._two_account_agent('sync2')
+        self._save(agent, primary=b)
+        record_primary_period(agent, a, None, None, 'always', None)
+        a.refresh_from_db()
+        b.refresh_from_db()
+        self.assertTrue(a.is_primary)
+        self.assertFalse(b.is_primary)
+
+    def test_a_past_period_never_changes_who_is_primary_today(self):
+        from scheduling.five9_primary import record_primary_period
+        agent, a, b = self._two_account_agent('sync3')
+        self._save(agent, primary=b)
+        record_primary_period(agent, a, self.today - timedelta(days=10),
+                              self.today - timedelta(days=5), 'past_period', None)
+        a.refresh_from_db()
+        b.refresh_from_db()
+        self.assertFalse(a.is_primary)
+        self.assertTrue(b.is_primary, "today's primary is untouched by a past period")
+
+    def test_removing_todays_primary_without_a_replacement_is_refused(self):
+        from scheduling.views import _save_five9_profiles, Five9SaveError
+        agent, a, b = self._two_account_agent('sync4')
+        self._save(agent)   # seed the history
+        with self.assertRaises(Five9SaveError):
+            _save_five9_profiles(
+                self._fake_request(self._post_all(agent, primary=None, delete={a.pk})), agent)
+
+    def test_refused_removal_through_the_real_view_saves_nothing(self):
+        """The refusal is raised inside agent_edit's transaction.atomic() and
+        caught outside it, so the rollback is what guarantees nothing was saved --
+        not just the account, but every other edit on that form too."""
+        staff = User.objects.create_user('sync7staff', password='x')
+        Agent.objects.create(user=staff, role='admin', role_type='supervisor',
+                             agent_name='Sync7 Staff', status='active', is_super_admin=True)
+        self.client.login(username='sync7staff', password='x')
+
+        agent, a, b = self._two_account_agent('sync7')
+        self._save(agent)
+        agent.user.email = 'original@example.com'
+        agent.user.save()
+
+        payload = {
+            'username': agent.user.username, 'email': 'changed@example.com',
+            'legal_name': agent.agent_name, 'password': '', 'agent_name': agent.agent_name,
+            'employee_id': '', 'role': 'agent', 'role_type': 'regular_agent',
+            'status': 'active', 'employer': 'Infinity', 'billing_status': 'Not Billed',
+            'phone_country_code': '+1', 'phone_number': '', 'teams_password': '',
+            'hourly_rate': '62.50', 'billing_rate_usd': '', 'admin_bonus_mxn': '', 'notes': '',
+            'five9_primary': '',
+            f'five9_{a.pk}_delete': 'on',
+            f'five9_{b.pk}_username': b.five9_username,
+            f'five9_{b.pk}_label': '', f'five9_{b.pk}_billable': 'on',
+        }
+        resp = self.client.post(reverse('agent_edit', args=[agent.pk]), payload)
+
+        self.assertEqual(resp.status_code, 200, 'refused, not redirected')
+        self.assertTrue(Five9Profile.objects.filter(pk=a.pk).exists(),
+                        'the primary account must not have been removed')
+        agent.user.refresh_from_db()
+        self.assertEqual(agent.user.email, 'original@example.com',
+                         'the whole save rolled back, not only the Five9 part')
+
+    def test_removing_todays_primary_with_a_replacement_is_allowed(self):
+        agent, a, b = self._two_account_agent('sync5')
+        self._save(agent)
+        self._save(agent, primary=b, delete={a.pk})
+        b.refresh_from_db()
+        self.assertTrue(b.is_primary)
+        self.assertFalse(Five9Profile.objects.filter(pk=a.pk).exists())
+
+    def test_removing_a_non_primary_account_is_untouched(self):
+        agent, a, b = self._two_account_agent('sync6')
+        self._save(agent)
+        self._save(agent, primary=a, delete={b.pk})
+        a.refresh_from_db()
+        self.assertTrue(a.is_primary)
+
+    def _day(self, agent, d, a_secs, b_secs, name):
+        upload, _ = DailyUpload.objects.get_or_create(
+            date=d, defaults={'filename': 'x.csv', 'row_count': 2})
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'{name}_a',
+                                       login_seconds=a_secs, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'{name}_b',
+                                       login_seconds=b_secs, not_ready_seconds=0)
+        return AdherenceRecord.objects.create(agent=agent, date=d, status='P',
+                                              actual_hours=Decimal('8'))
+
+    def test_recalculation_creates_no_rows(self):
+        agent, a, b = self._two_account_agent('recalc1')
+        d = self.today - timedelta(days=2)
+        upload, _ = DailyUpload.objects.get_or_create(
+            date=d, defaults={'filename': 'x.csv', 'row_count': 1})
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username='recalc1_b',
+                                       login_seconds=5 * 3600, not_ready_seconds=0)
+        before = AdherenceRecord.objects.count()
+        self._save(agent, primary=b)
+        self.assertEqual(AdherenceRecord.objects.count(), before,
+                         'the recalculation is update-only and must never create a row')
+
+    def test_recalculation_never_touches_an_official_admin(self):
+        from scheduling.five9_primary import record_primary_period
+        user = User.objects.create_user('recalc_admin', password='x')
+        admin = Agent.objects.create(user=user, role='admin', role_type='qa',
+                                     agent_name='recalc_admin', status='active',
+                                     is_official_admin=True)
+        a = Five9Profile.objects.create(agent=admin, five9_username='radm_a',
+                                        is_primary=True, billable=True)
+        b = Five9Profile.objects.create(agent=admin, five9_username='radm_b',
+                                        is_primary=False, billable=True)
+        d = self.today - timedelta(days=2)
+        rec = self._day(admin, d, 8 * 3600, 5 * 3600, 'radm')
+        record_primary_period(admin, b, d, None, 'switch', None)
+        rec.refresh_from_db()
+        self.assertEqual(rec.actual_hours, Decimal('8'),
+                         'an Official Admin\'s stored hours are never recalculated')
+
+    def test_recalculation_covers_only_the_days_the_entry_covers(self):
+        from scheduling.five9_primary import record_primary_period
+        agent, a, b = self._two_account_agent('recalc3')
+        before_range = self.today - timedelta(days=12)
+        inside_one = self.today - timedelta(days=9)
+        inside_two = self.today - timedelta(days=7)
+        after_range = self.today - timedelta(days=3)
+        recs = {d: self._day(agent, d, 8 * 3600, 5 * 3600, 'recalc3')
+                for d in (before_range, inside_one, inside_two, after_range)}
+
+        record_primary_period(agent, b, inside_one, inside_two, 'past_period', None)
+
+        for d, rec in recs.items():
+            rec.refresh_from_db()
+        self.assertEqual(recs[before_range].actual_hours, Decimal('8'))
+        self.assertEqual(recs[inside_one].actual_hours, Decimal('5'))
+        self.assertEqual(recs[inside_two].actual_hours, Decimal('5'))
+        self.assertEqual(recs[after_range].actual_hours, Decimal('8'))
+
+    def test_every_entry_writes_exactly_one_activity_log_entry(self):
+        agent, a, b = self._two_account_agent('log1')
+        self._save(agent)                       # backfill only — silent by design
+        before = AuditLog.objects.count()
+        self._save(agent, primary=b)
+        self.assertEqual(AuditLog.objects.count(), before + 1)
+        entry = AuditLog.objects.latest('id')
+        self.assertEqual(entry.action, 'Changed Five9 primary account')
+        self.assertIn('log1_b', entry.detail)
+        self.assertIn('Switched', entry.detail)
+        self.assertEqual(entry.agent_id, agent.pk)
+
+    def test_backfilling_an_existing_primary_logs_nothing(self):
+        agent, a, b = self._two_account_agent('log2')
+        before = AuditLog.objects.count()
+        self._save(agent, primary=a)
+        self.assertEqual(AuditLog.objects.count(), before,
+                         'recording what is_primary already said is not a change')
+
+
+class Five9PrimaryTimelineTests(TestCase):
+    """The user detail page shows one muted line, and only when more than one
+    account has actually been primary for that agent."""
+
+    def setUp(self):
+        self.agent = _make_agent('tlagent')
+        self.a = Five9Profile.objects.create(agent=self.agent, five9_username='tl_a',
+                                             is_primary=True, billable=True)
+        self.b = Five9Profile.objects.create(agent=self.agent, five9_username='tl_b',
+                                             is_primary=False, billable=True)
+
+    def _period(self, profile, start, end, kind):
+        Five9PrimaryPeriod.objects.create(
+            agent=self.agent, profile=profile, five9_username=profile.five9_username,
+            start_date=start, end_date=end, kind=kind)
+
+    def test_no_line_when_one_account_has_always_been_primary(self):
+        from scheduling.five9_primary import format_primary_timeline
+        self._period(self.a, None, None, 'initial')
+        self.assertEqual(format_primary_timeline(self.agent), '')
+
+    def test_no_line_when_there_is_no_history_at_all(self):
+        from scheduling.five9_primary import format_primary_timeline
+        self.assertEqual(format_primary_timeline(self.agent), '')
+
+    def test_line_appears_once_a_second_account_has_been_primary(self):
+        from scheduling.five9_primary import format_primary_timeline
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, date(2026, 10, 5), None, 'switch')
+        line = format_primary_timeline(self.agent)
+        self.assertEqual(line, 'Primary: tl_a until Oct 4, 2026 · tl_b from Oct 5, 2026 (current)')
+
+    def test_line_reads_a_past_period_as_a_closed_range(self):
+        from scheduling.five9_primary import format_primary_timeline
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, date(2026, 10, 5), date(2026, 10, 7), 'past_period')
+        line = format_primary_timeline(self.agent)
+        self.assertEqual(
+            line,
+            'Primary: tl_a until Oct 4, 2026 · tl_b Oct 5, 2026 – Oct 7, 2026 '
+            '· tl_a from Oct 8, 2026 (current)')
+
+    def test_an_always_entry_collapses_the_line_back_to_one_account(self):
+        from scheduling.five9_primary import format_primary_timeline
+        self._period(self.a, None, None, 'initial')
+        self._period(self.b, date(2026, 10, 5), None, 'switch')
+        self._period(self.a, None, None, 'always')
+        self.assertEqual(format_primary_timeline(self.agent), '',
+                         'once "always" supersedes everything, only one account was ever primary')
+
+    def test_detail_page_renders_the_line_only_when_there_is_one(self):
+        staff = User.objects.create_user('tlstaff', password='x')
+        Agent.objects.create(user=staff, role='admin', role_type='supervisor',
+                             agent_name='TL Staff', status='active')
+        self.client.login(username='tlstaff', password='x')
+
+        self._period(self.a, None, None, 'initial')
+        html = self.client.get(reverse('agent_detail', args=[self.agent.pk])).content.decode()
+        self.assertNotIn('Primary: ', html)
+
+        self._period(self.b, date(2026, 10, 5), None, 'switch')
+        html = self.client.get(reverse('agent_detail', args=[self.agent.pk])).content.decode()
+        self.assertIn('Primary: tl_a until Oct 4, 2026', html)
+
+
+class Five9PrimaryMoneyIsUntouchedTests(TestCase):
+    """Pinned: no kind of primary-account history entry can move a money figure.
+    Billing and payroll select usernames on `billable`, never on the history."""
+
+    def setUp(self):
+        self.settings = _settings()
+        self.agent = _make_agent('moneyagent')
+        self.a = Five9Profile.objects.create(agent=self.agent, five9_username='money_a',
+                                             is_primary=True, billable=True)
+        self.b = Five9Profile.objects.create(agent=self.agent, five9_username='money_b',
+                                             is_primary=False, billable=True)
+        upload, _ = DailyUpload.objects.get_or_create(
+            date=_WEEK[0], defaults={'filename': 'd.csv', 'row_count': 2})
+        DailyAgentHours.objects.create(upload=upload, agent=self.agent, five9_username='money_a',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=self.agent, five9_username='money_b',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)
+
+    def _money(self):
+        from finance.views import _get_billable_weekly_data
+        data = _get_billable_weekly_data([self.agent], _WEEK, self.settings)
+        return {k: v for k, v in data[self.agent.pk].items() if k != 'agent'}
+
+    def test_output_identical_after_every_kind_of_history_entry(self):
+        baseline = self._money()
+        entries = [
+            (self.a, None, None, 'initial'),
+            (self.b, _WEEK[0], None, 'switch'),
+            (self.a, _WEEK[1], _WEEK[3], 'past_period'),
+            (self.b, None, None, 'always'),
+        ]
+        for profile, start, end, kind in entries:
+            Five9PrimaryPeriod.objects.create(
+                agent=self.agent, profile=profile, five9_username=profile.five9_username,
+                start_date=start, end_date=end, kind=kind)
+            self.assertEqual(self._money(), baseline,
+                             f'a "{kind}" history entry moved a money figure')
+
+
+class Five9PrimaryQueryCountWithHistoryTests(TestCase):
+    """Query counts stay flat with history present — the resolver's cost does not
+    grow with the roster, the number of days, or the number of entries."""
+
+    def setUp(self):
+        _settings()
+        staff = User.objects.create_user('qhstaff', password='x')
+        Agent.objects.create(user=staff, role='admin', role_type='supervisor',
+                             agent_name='QH Staff', status='active')
+        self.client.login(username='qhstaff', password='x')
+
+    def _agent_with_history(self, n):
+        agent = _make_agent(f'qh_{n}')
+        a = Five9Profile.objects.create(agent=agent, five9_username=f'qh_{n}_a',
+                                        is_primary=True, billable=True)
+        b = Five9Profile.objects.create(agent=agent, five9_username=f'qh_{n}_b',
+                                        is_primary=False, billable=False)
+        for profile, start, kind in ((a, None, 'initial'), (b, _WEEK[2], 'switch'),
+                                     (a, _WEEK[4], 'switch')):
+            Five9PrimaryPeriod.objects.create(
+                agent=agent, profile=profile, five9_username=profile.five9_username,
+                start_date=start, end_date=None, kind=kind)
+        upload, _ = DailyUpload.objects.get_or_create(
+            date=_WEEK[0], defaults={'filename': 'd.csv', 'row_count': 1})
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'qh_{n}_a',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        DailyAgentHours.objects.create(upload=upload, agent=agent, five9_username=f'qh_{n}_b',
+                                       login_seconds=3 * 3600, not_ready_seconds=0)
+        ShiftTemplate.objects.create(agent=agent, day_of_week=_WEEK[0].weekday(),
+                                     start_time=time(9, 0), end_time=time(17, 0), is_off=False)
+        return agent
+
+    def _count(self, url):
+        self.client.get(url)  # warm up
+        ctx = CaptureQueriesContext(connection)
+        with ctx:
+            self.client.get(url)
+        return len(ctx)
+
+    def _assert_flat(self, url):
+        for i in range(2):
+            self._agent_with_history(i)
+        small = self._count(url)
+        for i in range(2, 12):
+            self._agent_with_history(i)
+        self.assertEqual(self._count(url), small,
+                         'the primary-period resolver must stay bulk with history present')
+
+    def test_daily_hours_stays_flat(self):
+        self._assert_flat(reverse('daily_hours') + f'?week_start={_WEEK[0].isoformat()}')
+
+    def test_adherence_rows_stays_flat(self):
+        self._assert_flat(reverse('adherence_rows_fragment') + f'?week_start={_WEEK[0].isoformat()}')
+
+
+class Five9AccountPermissionTests(TestCase):
+    """On a SAVED Five9 account, deleting it, changing its username and changing
+    its Billable box are super-admin-only. Everything else a user-editor could do
+    before, they can still do: add a new account (username and Billable included),
+    change label, password and role type, and switch the primary starting today.
+
+    Enforced on the server on every save, so hiding the controls is not what stops
+    a crafted request — a refusal rolls the whole save back with nothing written."""
+
+    def setUp(self):
+        _settings()
+        self.agent = _make_agent('permtarget')
+        self.acct = Five9Profile.objects.create(agent=self.agent, five9_username='perm_main',
+                                                label='Main', five9_password='pw',
+                                                is_primary=True, billable=True)
+        self.other = Five9Profile.objects.create(agent=self.agent, five9_username='perm_other',
+                                                 label='Other', is_primary=False, billable=False)
+
+    def _request(self, post, super_admin):
+        user = User.objects.create_user(f'permuser_{super_admin}_{len(post)}', password='x')
+        return SimpleNamespace(POST=post, user=user, has_finance_access=super_admin)
+
+    def _base_post(self, **overrides):
+        post = {
+            'five9_primary': str(self.acct.pk),
+            f'five9_{self.acct.pk}_username': self.acct.five9_username,
+            f'five9_{self.acct.pk}_label': self.acct.label,
+            f'five9_{self.acct.pk}_password': self.acct.five9_password,
+            f'five9_{self.acct.pk}_billable': 'on',
+            f'five9_{self.other.pk}_username': self.other.five9_username,
+            f'five9_{self.other.pk}_label': self.other.label,
+        }
+        post.update(overrides)
+        return post
+
+    def _save(self, post, super_admin):
+        from scheduling.views import _save_five9_profiles
+        _save_five9_profiles(self._request(post, super_admin), self.agent)
+
+    # ── refused for a supervisor ──────────────────────────────────────────────
+
+    def test_supervisor_cannot_delete_a_saved_account(self):
+        from scheduling.views import Five9SaveError
+        post = self._base_post(**{f'five9_{self.other.pk}_delete': 'on'})
+        with self.assertRaises(Five9SaveError):
+            self._save(post, super_admin=False)
+        self.assertTrue(Five9Profile.objects.filter(pk=self.other.pk).exists())
+
+    def test_supervisor_cannot_rename_a_saved_account(self):
+        from scheduling.views import Five9SaveError
+        post = self._base_post(**{f'five9_{self.acct.pk}_username': 'perm_hijacked'})
+        with self.assertRaises(Five9SaveError):
+            self._save(post, super_admin=False)
+        self.acct.refresh_from_db()
+        self.assertEqual(self.acct.five9_username, 'perm_main')
+
+    def test_supervisor_cannot_turn_billable_on(self):
+        from scheduling.views import Five9SaveError
+        post = self._base_post(**{f'five9_{self.other.pk}_billable': 'on'})
+        with self.assertRaises(Five9SaveError):
+            self._save(post, super_admin=False)
+        self.other.refresh_from_db()
+        self.assertFalse(self.other.billable)
+
+    def test_supervisor_cannot_turn_billable_off_by_omitting_the_checkbox(self):
+        """An omitted checkbox is indistinguishable from a field that was never
+        rendered, so it is treated as unchanged rather than refused. The account
+        stays billable either way — the hole closes without a spurious error."""
+        post = self._base_post()
+        post.pop(f'five9_{self.acct.pk}_billable')
+        self._save(post, super_admin=False)
+        self.acct.refresh_from_db()
+        self.assertTrue(self.acct.billable)
+
+    # ── still allowed for a supervisor ────────────────────────────────────────
+
+    def test_supervisor_can_still_edit_label_password_and_role_type(self):
+        post = self._base_post(**{
+            f'five9_{self.acct.pk}_label': 'Renamed label',
+            f'five9_{self.acct.pk}_password': 'newpw',
+            f'five9_{self.acct.pk}_role_type': 'regular_agent',
+        })
+        self._save(post, super_admin=False)
+        self.acct.refresh_from_db()
+        self.assertEqual(self.acct.label, 'Renamed label')
+        self.assertEqual(self.acct.five9_password, 'newpw')
+        self.assertEqual(self.acct.role_type, 'regular_agent')
+        self.assertEqual(self.acct.five9_username, 'perm_main')
+        self.assertTrue(self.acct.billable)
+
+    def test_supervisor_can_still_add_a_new_account_with_username_and_billable(self):
+        post = self._base_post(**{
+            'new_five9_0_username': 'perm_added',
+            'new_five9_0_label': 'Added',
+            'new_five9_0_billable': 'on',
+        })
+        self._save(post, super_admin=False)
+        added = Five9Profile.objects.get(agent=self.agent, five9_username='perm_added')
+        self.assertTrue(added.billable)
+
+    def test_supervisor_can_still_add_a_non_billable_new_account(self):
+        post = self._base_post(**{
+            'new_five9_0_username': 'perm_added_nb',
+            'new_five9_0_label': 'Added',
+        })
+        self._save(post, super_admin=False)
+        added = Five9Profile.objects.get(agent=self.agent, five9_username='perm_added_nb')
+        self.assertFalse(added.billable)
+
+    def test_supervisor_can_still_switch_the_primary_starting_today(self):
+        post = self._base_post(**{'five9_primary': str(self.other.pk)})
+        self._save(post, super_admin=False)
+        self.acct.refresh_from_db()
+        self.other.refresh_from_db()
+        self.assertFalse(self.acct.is_primary)
+        self.assertTrue(self.other.is_primary)
+        entry = Five9PrimaryPeriod.objects.filter(agent=self.agent).latest('id')
+        self.assertEqual(entry.kind, 'switch')
+        self.assertEqual(entry.start_date, timezone.localdate())
+
+    # ── allowed for a super admin ─────────────────────────────────────────────
+
+    def test_super_admin_can_delete_a_saved_account(self):
+        post = self._base_post(**{f'five9_{self.other.pk}_delete': 'on'})
+        self._save(post, super_admin=True)
+        self.assertFalse(Five9Profile.objects.filter(pk=self.other.pk).exists())
+
+    def test_super_admin_can_rename_a_saved_account(self):
+        post = self._base_post(**{f'five9_{self.acct.pk}_username': 'perm_renamed'})
+        self._save(post, super_admin=True)
+        self.acct.refresh_from_db()
+        self.assertEqual(self.acct.five9_username, 'perm_renamed')
+
+    def test_super_admin_can_change_billable(self):
+        post = self._base_post(**{f'five9_{self.other.pk}_billable': 'on'})
+        self._save(post, super_admin=True)
+        self.other.refresh_from_db()
+        self.assertTrue(self.other.billable)
+
+    def test_a_django_superuser_counts_as_a_super_admin(self):
+        from scheduling.views import _save_five9_profiles
+        user = User.objects.create_superuser('permroot', 'r@example.com', 'x')
+        post = self._base_post(**{f'five9_{self.acct.pk}_username': 'perm_root_renamed'})
+        _save_five9_profiles(SimpleNamespace(POST=post, user=user), self.agent)
+        self.acct.refresh_from_db()
+        self.assertEqual(self.acct.five9_username, 'perm_root_renamed')
+
+    def test_a_missing_finance_attribute_denies_rather_than_raises(self):
+        """AgentAccessMiddleware swallows its own exceptions, so the attribute can
+        be missing entirely. Fail closed, the same way skill_list does."""
+        from scheduling.views import _save_five9_profiles, Five9SaveError
+        user = User.objects.create_user('permbare', password='x')
+        post = self._base_post(**{f'five9_{self.acct.pk}_username': 'perm_bare_renamed'})
+        with self.assertRaises(Five9SaveError):
+            _save_five9_profiles(SimpleNamespace(POST=post, user=user), self.agent)
+
+
+class Five9AccountPermissionViewTests(TestCase):
+    """The same three locks through the real Edit User view: a crafted POST is
+    refused with nothing saved, and the screen itself offers a supervisor no
+    control it is not allowed to use."""
+
+    def setUp(self):
+        _settings()
+        self.target = _make_agent('vperm_target')
+        self.target.role_type = 'regular_agent'
+        self.target.save()
+        self.acct = Five9Profile.objects.create(agent=self.target, five9_username='vperm_main',
+                                                label='Main', is_primary=True, billable=True)
+        self.extra = Five9Profile.objects.create(agent=self.target, five9_username='vperm_extra',
+                                                 label='Extra', is_primary=False, billable=False)
+
+    def _login(self, name, super_admin):
+        user = User.objects.create_user(name, password='x')
+        Agent.objects.create(user=user, role='admin', role_type='supervisor',
+                             agent_name=name, status='active', is_super_admin=super_admin)
+        self.client.login(username=name, password='x')
+
+    def _payload(self, **overrides):
+        post = {
+            'username': self.target.user.username, 'email': 'vperm@example.com',
+            'legal_name': self.target.agent_name, 'password': '',
+            'agent_name': self.target.agent_name, 'employee_id': '',
+            'role': 'agent', 'role_type': 'regular_agent', 'status': 'active',
+            'employer': 'Infinity', 'billing_status': 'Not Billed',
+            'phone_country_code': '+1', 'phone_number': '', 'teams_password': '',
+            'hourly_rate': '62.50', 'billing_rate_usd': '', 'admin_bonus_mxn': '', 'notes': '',
+            'five9_primary': str(self.acct.pk),
+            f'five9_{self.acct.pk}_username': self.acct.five9_username,
+            f'five9_{self.acct.pk}_label': self.acct.label,
+            f'five9_{self.acct.pk}_billable': 'on',
+            f'five9_{self.extra.pk}_username': self.extra.five9_username,
+            f'five9_{self.extra.pk}_label': self.extra.label,
+        }
+        post.update(overrides)
+        return post
+
+    def test_crafted_delete_is_refused_and_saves_nothing(self):
+        self._login('vperm_sup1', super_admin=False)
+        self.target.user.email = 'untouched@example.com'
+        self.target.user.save()
+        payload = self._payload(email='changed@example.com',
+                                **{f'five9_{self.extra.pk}_delete': 'on'})
+        resp = self.client.post(reverse('agent_edit', args=[self.target.pk]), payload)
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Five9Profile.objects.filter(pk=self.extra.pk).exists())
+        self.target.user.refresh_from_db()
+        self.assertEqual(self.target.user.email, 'untouched@example.com',
+                         'the whole save rolled back, not only the Five9 part')
+
+    def test_crafted_rename_is_refused_and_saves_nothing(self):
+        self._login('vperm_sup2', super_admin=False)
+        payload = self._payload(**{f'five9_{self.acct.pk}_username': 'vperm_hijacked'})
+        resp = self.client.post(reverse('agent_edit', args=[self.target.pk]), payload)
+
+        self.assertEqual(resp.status_code, 200)
+        self.acct.refresh_from_db()
+        self.assertEqual(self.acct.five9_username, 'vperm_main')
+
+    def test_crafted_billable_change_is_refused_and_saves_nothing(self):
+        self._login('vperm_sup3', super_admin=False)
+        payload = self._payload(**{f'five9_{self.extra.pk}_billable': 'on'})
+        resp = self.client.post(reverse('agent_edit', args=[self.target.pk]), payload)
+
+        self.assertEqual(resp.status_code, 200)
+        self.extra.refresh_from_db()
+        self.assertFalse(self.extra.billable)
+
+    def test_a_super_admin_posting_the_same_change_succeeds(self):
+        self._login('vperm_root', super_admin=True)
+        payload = self._payload(**{f'five9_{self.acct.pk}_username': 'vperm_renamed'})
+        resp = self.client.post(reverse('agent_edit', args=[self.target.pk]), payload)
+
+        self.assertRedirects(resp, reverse('agent_detail', args=[self.target.pk]))
+        self.acct.refresh_from_db()
+        self.assertEqual(self.acct.five9_username, 'vperm_renamed')
+
+    # ── what each role is offered on screen ───────────────────────────────────
+
+    def _form_html(self):
+        return self.client.get(reverse('agent_edit', args=[self.target.pk])).content.decode()
+
+    def test_supervisor_sees_no_editable_username_no_billable_box_and_no_remove(self):
+        self._login('vperm_sup4', super_admin=False)
+        html = self._form_html()
+        self.assertNotIn(f'type="text" name="five9_{self.acct.pk}_username"', html)
+        self.assertNotIn(f'name="five9_{self.acct.pk}_billable"', html)
+        self.assertNotIn(f"removeFive9('{self.acct.pk}')", html)
+        self.assertIn('vperm_main', html, 'the username is still shown, as plain text')
+
+    def test_supervisor_still_gets_the_add_account_button_and_the_primary_radio(self):
+        self._login('vperm_sup5', super_admin=False)
+        html = self._form_html()
+        self.assertIn('addFive9Row()', html)
+        self.assertIn(f'name="five9_primary" value="{self.acct.pk}"', html)
+        self.assertIn(f'name="five9_{self.acct.pk}_label"', html)
+
+    def test_super_admin_sees_every_control(self):
+        self._login('vperm_root2', super_admin=True)
+        html = self._form_html()
+        self.assertIn(f'type="text" name="five9_{self.acct.pk}_username"', html)
+        self.assertIn(f'name="five9_{self.acct.pk}_billable"', html)
+        self.assertIn(f"removeFive9('{self.acct.pk}')", html)
+
+
+class Five9BackDatedSwitchTests(TestCase):
+    """Super admins can date a primary switch in the past, or declare that an
+    account was always the primary to fix a setup mistake. Both are refused for
+    anyone else, and no date may be in the future."""
+
+    def setUp(self):
+        _settings()
+        self.agent = _make_agent('backdate')
+        self.a = Five9Profile.objects.create(agent=self.agent, five9_username='bd_a',
+                                             is_primary=True, billable=True)
+        self.b = Five9Profile.objects.create(agent=self.agent, five9_username='bd_b',
+                                             is_primary=False, billable=True)
+        self.today = timezone.localdate()
+
+    def _post(self, **overrides):
+        post = {
+            'five9_primary': str(self.b.pk),
+            f'five9_{self.a.pk}_username': self.a.five9_username,
+            f'five9_{self.a.pk}_label': '', f'five9_{self.a.pk}_billable': 'on',
+            f'five9_{self.b.pk}_username': self.b.five9_username,
+            f'five9_{self.b.pk}_label': '', f'five9_{self.b.pk}_billable': 'on',
+        }
+        post.update(overrides)
+        return post
+
+    def _save(self, post, super_admin):
+        from scheduling.views import _save_five9_profiles
+        user = User.objects.create_user(f'bd_{super_admin}_{len(post)}', password='x')
+        _save_five9_profiles(
+            SimpleNamespace(POST=post, user=user, has_finance_access=super_admin), self.agent)
+
+    def _latest(self):
+        return Five9PrimaryPeriod.objects.filter(agent=self.agent).latest('id')
+
+    def test_super_admin_can_back_date_the_switch(self):
+        past = self.today - timedelta(days=6)
+        self._save(self._post(five9_primary_start=past.isoformat()), super_admin=True)
+        entry = self._latest()
+        self.assertEqual(entry.kind, 'switch')
+        self.assertEqual(entry.start_date, past)
+        self.assertIsNone(entry.end_date)
+
+    def test_super_admin_always_records_a_from_the_beginning_entry(self):
+        self._save(self._post(five9_primary_always='on'), super_admin=True)
+        entry = self._latest()
+        self.assertEqual(entry.kind, 'always')
+        self.assertIsNone(entry.start_date)
+        self.assertIsNone(entry.end_date)
+
+    def test_always_wins_over_a_start_date_posted_alongside_it(self):
+        past = self.today - timedelta(days=6)
+        self._save(self._post(five9_primary_always='on', five9_primary_start=past.isoformat()),
+                   super_admin=True)
+        entry = self._latest()
+        self.assertEqual(entry.kind, 'always')
+        self.assertIsNone(entry.start_date)
+
+    def test_a_future_start_date_is_refused(self):
+        from scheduling.views import Five9SaveError
+        future = (self.today + timedelta(days=1)).isoformat()
+        with self.assertRaises(Five9SaveError) as ctx:
+            self._save(self._post(five9_primary_start=future), super_admin=True)
+        self.assertIn("future", str(ctx.exception).lower())
+        self.assertFalse(Five9PrimaryPeriod.objects.filter(agent=self.agent, kind='switch').exists())
+
+    def test_an_unparseable_start_date_is_refused(self):
+        from scheduling.views import Five9SaveError
+        with self.assertRaises(Five9SaveError):
+            self._save(self._post(five9_primary_start='not-a-date'), super_admin=True)
+
+    def test_a_start_date_of_today_is_the_ordinary_switch(self):
+        self._save(self._post(five9_primary_start=self.today.isoformat()), super_admin=True)
+        entry = self._latest()
+        self.assertEqual(entry.kind, 'switch')
+        self.assertEqual(entry.start_date, self.today)
+
+    def test_supervisor_cannot_back_date(self):
+        from scheduling.views import Five9SaveError
+        past = (self.today - timedelta(days=6)).isoformat()
+        with self.assertRaises(Five9SaveError):
+            self._save(self._post(five9_primary_start=past), super_admin=False)
+        self.b.refresh_from_db()
+        self.assertFalse(self.b.is_primary, 'nothing was saved')
+
+    def test_supervisor_cannot_use_always(self):
+        from scheduling.views import Five9SaveError
+        with self.assertRaises(Five9SaveError):
+            self._save(self._post(five9_primary_always='on'), super_admin=False)
+
+    def test_supervisor_posting_todays_date_is_allowed(self):
+        """The reveal line is only informational for a supervisor, but a form that
+        did post today's date must not be refused for it."""
+        self._save(self._post(five9_primary_start=self.today.isoformat()), super_admin=False)
+        entry = self._latest()
+        self.assertEqual(entry.start_date, self.today)
+
+
+class Five9PastPeriodEndpointTests(TestCase):
+    """The 'Add a past primary period' endpoint: four server-side gates before
+    anything is written, and plain validation messages."""
+
+    def setUp(self):
+        _settings()
+        self.agent = _make_agent('pp_target')
+        self.a = Five9Profile.objects.create(agent=self.agent, five9_username='pp_a',
+                                             is_primary=True, billable=True)
+        self.b = Five9Profile.objects.create(agent=self.agent, five9_username='pp_b',
+                                             is_primary=False, billable=True)
+        self.stranger = _make_agent('pp_stranger')
+        self.stranger_acct = Five9Profile.objects.create(
+            agent=self.stranger, five9_username='pp_stranger_acct', is_primary=True, billable=True)
+        self.today = timezone.localdate()
+
+    def _login(self, name, super_admin=True, portal=False):
+        user = User.objects.create_user(name, password='x')
+        Agent.objects.create(
+            user=user, role='agent' if portal else 'admin',
+            role_type='regular_agent' if portal else 'supervisor',
+            agent_name=name, status='active', is_super_admin=super_admin)
+        self.client.login(username=name, password='x')
+
+    def _url(self):
+        return reverse('five9_primary_period_add', args=[self.agent.pk])
+
+    def _post(self, profile=None, frm=None, to=None):
+        return self.client.post(self._url(), {
+            'profile': str((profile or self.b).pk),
+            'from': (frm or (self.today - timedelta(days=10))).isoformat(),
+            'to': (to or (self.today - timedelta(days=8))).isoformat(),
+        })
+
+    def test_super_admin_can_add_a_past_period(self):
+        self._login('pp_root')
+        resp = self._post()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'])
+        entry = Five9PrimaryPeriod.objects.filter(agent=self.agent).latest('id')
+        self.assertEqual(entry.kind, 'past_period')
+        self.assertEqual(entry.start_date, self.today - timedelta(days=10))
+        self.assertEqual(entry.end_date, self.today - timedelta(days=8))
+
+    def test_supervisor_is_refused(self):
+        self._login('pp_sup', super_admin=False)
+        before = Five9PrimaryPeriod.objects.count()
+        resp = self._post()
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(resp.json()['ok'])
+        self.assertEqual(Five9PrimaryPeriod.objects.count(), before)
+
+    def test_a_portal_user_never_reaches_the_endpoint(self):
+        self._login('pp_portal', super_admin=False, portal=True)
+        before = Five9PrimaryPeriod.objects.count()
+        resp = self._post()
+        self.assertEqual(resp.status_code, 302, 'portal users are redirected away')
+        self.assertEqual(Five9PrimaryPeriod.objects.count(), before)
+
+    def test_an_anonymous_request_is_refused(self):
+        before = Five9PrimaryPeriod.objects.count()
+        resp = self._post()
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(Five9PrimaryPeriod.objects.count(), before)
+
+    def test_another_agents_account_is_refused(self):
+        """A crafted request naming an account that belongs to someone else."""
+        self._login('pp_root2')
+        before = Five9PrimaryPeriod.objects.count()
+        resp = self._post(profile=self.stranger_acct)
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.json()['ok'])
+        self.assertEqual(Five9PrimaryPeriod.objects.count(), before)
+        self.assertEqual(
+            Five9PrimaryPeriod.objects.filter(profile=self.stranger_acct).count(), 0)
+
+    def test_future_dates_are_refused(self):
+        self._login('pp_root3')
+        resp = self._post(frm=self.today + timedelta(days=1), to=self.today + timedelta(days=2))
+        self.assertEqual(resp.json()['error'], "Dates can't be in the future.")
+
+    def test_a_to_date_of_today_is_refused(self):
+        self._login('pp_root4')
+        resp = self._post(frm=self.today - timedelta(days=2), to=self.today)
+        self.assertEqual(
+            resp.json()['error'],
+            'To must be before today. To change today’s primary, use the Primary button.')
+
+    def test_from_after_to_is_refused(self):
+        self._login('pp_root5')
+        resp = self._post(frm=self.today - timedelta(days=2), to=self.today - timedelta(days=5))
+        self.assertEqual(resp.json()['error'], 'From must be on or before To.')
+
+    def test_missing_input_is_refused(self):
+        self._login('pp_root6')
+        resp = self.client.post(self._url(), {'profile': '', 'from': '', 'to': ''})
+        self.assertFalse(resp.json()['ok'])
+        self.assertEqual(Five9PrimaryPeriod.objects.filter(kind='past_period').count(), 0)
+
+    def test_get_is_not_allowed(self):
+        self._login('pp_root7')
+        resp = self.client.get(self._url())
+        self.assertEqual(resp.status_code, 405)
+
+    def test_a_past_period_writes_one_activity_log_entry(self):
+        self._login('pp_root8')
+        before = AuditLog.objects.count()
+        self._post()
+        self.assertEqual(AuditLog.objects.count(), before + 1)
+        entry = AuditLog.objects.latest('id')
+        self.assertEqual(entry.action, 'Changed Five9 primary account')
+        self.assertIn('Past period', entry.detail)
+
+    def test_a_past_period_does_not_change_todays_primary(self):
+        self._login('pp_root9')
+        self._post()
+        self.a.refresh_from_db()
+        self.b.refresh_from_db()
+        self.assertTrue(self.a.is_primary)
+        self.assertFalse(self.b.is_primary)
+
+
+class Five9EditUserRevealTests(TestCase):
+    """The reveal line and the past-period form appear only where they should."""
+
+    def setUp(self):
+        _settings()
+        self.target = _make_agent('reveal_target')
+        self.target.role_type = 'regular_agent'
+        self.target.save()
+        self.acct = Five9Profile.objects.create(agent=self.target, five9_username='rv_a',
+                                                is_primary=True, billable=True)
+
+    def _login(self, name, super_admin):
+        user = User.objects.create_user(name, password='x')
+        Agent.objects.create(user=user, role='admin', role_type='supervisor',
+                             agent_name=name, status='active', is_super_admin=super_admin)
+        self.client.login(username=name, password='x')
+
+    def _html(self):
+        return self.client.get(reverse('agent_edit', args=[self.target.pk])).content.decode()
+
+    def test_supervisor_gets_the_plain_starting_today_line_and_no_date_controls(self):
+        self._login('rv_sup', super_admin=False)
+        html = self._html()
+        self.assertIn('New primary counts starting today', html)
+        self.assertNotIn('name="five9_primary_start"', html)
+        self.assertNotIn('name="five9_primary_always"', html)
+        self.assertNotIn('Add a past primary period', html)
+
+    def test_super_admin_gets_the_date_the_always_box_and_the_past_period_form(self):
+        self._login('rv_root', super_admin=True)
+        html = self._html()
+        self.assertIn('name="five9_primary_start"', html)
+        self.assertIn('name="five9_primary_always"', html)
+        self.assertIn('This account was always the primary', html)
+        self.assertIn('Add a past primary period', html)
+        self.assertNotIn('New primary counts starting today', html)
+
+    def test_the_date_input_cannot_offer_a_future_day(self):
+        self._login('rv_root2', super_admin=True)
+        html = self._html()
+        today = timezone.localdate().isoformat()
+        self.assertIn(f'max="{today}"', html)
+        self.assertIn(f'value="{today}"', html)
+
+    def test_the_reveal_starts_hidden(self):
+        """It only appears once the selected primary differs from the saved one."""
+        self._login('rv_root3', super_admin=True)
+        html = self._html()
+        self.assertIn('id="five9-primary-reveal"', html)
+        self.assertIn('data-saved-primary="', html)
+
+
+class Five9PastPeriodEndToEndTests(TestCase):
+    """The scenario this whole feature exists for: an agent worked on their second
+    account for three days in the past and back on the first one afterwards. A
+    super admin records that as ONE past primary period. The timeline reads
+    correctly and only those three days' stored hours change."""
+
+    def setUp(self):
+        _settings(nr_ratio=Decimal('0.125'))
+        self.agent = _make_agent('e2e_agent')
+        self.a = Five9Profile.objects.create(agent=self.agent, five9_username='e2e_a',
+                                             is_primary=True, billable=True)
+        self.b = Five9Profile.objects.create(agent=self.agent, five9_username='e2e_b',
+                                             is_primary=False, billable=True)
+        self.today = timezone.localdate()
+
+        # Ten consecutive days ending yesterday. Account A logs 8h, account B 5h,
+        # every day — so a day counted on B is worth 5h and on A 8h.
+        self.days = [self.today - timedelta(days=n) for n in range(10, 0, -1)]
+        self.records = {}
+        for d in self.days:
+            upload, _ = DailyUpload.objects.get_or_create(
+                date=d, defaults={'filename': 'e2e.csv', 'row_count': 2})
+            DailyAgentHours.objects.create(upload=upload, agent=self.agent,
+                                           five9_username='e2e_a',
+                                           login_seconds=8 * 3600, not_ready_seconds=0)
+            DailyAgentHours.objects.create(upload=upload, agent=self.agent,
+                                           five9_username='e2e_b',
+                                           login_seconds=5 * 3600, not_ready_seconds=0)
+            self.records[d] = AdherenceRecord.objects.create(
+                agent=self.agent, date=d, status='P', actual_hours=Decimal('8'))
+
+        user = User.objects.create_user('e2e_root', password='x')
+        Agent.objects.create(user=user, role='admin', role_type='supervisor',
+                             agent_name='E2E Root', status='active', is_super_admin=True)
+        self.client.login(username='e2e_root', password='x')
+
+    def test_three_past_days_on_the_second_account_and_back_again(self):
+        from scheduling.five9_primary import format_primary_timeline
+
+        # The agent has always been on A, so there is nothing to show yet.
+        self.client.post(reverse('agent_edit', args=[self.agent.pk]), {
+            'username': self.agent.user.username, 'email': 'e2e@example.com',
+            'legal_name': self.agent.agent_name, 'password': '',
+            'agent_name': self.agent.agent_name, 'employee_id': '',
+            'role': 'agent', 'role_type': 'regular_agent', 'status': 'active',
+            'employer': 'Infinity', 'billing_status': 'Not Billed',
+            'phone_country_code': '+1', 'phone_number': '', 'teams_password': '',
+            'hourly_rate': '62.50', 'billing_rate_usd': '', 'admin_bonus_mxn': '', 'notes': '',
+            'five9_primary': str(self.a.pk),
+            f'five9_{self.a.pk}_username': 'e2e_a', f'five9_{self.a.pk}_label': '',
+            f'five9_{self.a.pk}_billable': 'on',
+            f'five9_{self.b.pk}_username': 'e2e_b', f'five9_{self.b.pk}_label': '',
+            f'five9_{self.b.pk}_billable': 'on',
+        })
+        self.assertEqual(format_primary_timeline(self.agent), '')
+
+        frm, to = self.days[3], self.days[5]          # three days, mid-range
+        resp = self.client.post(
+            reverse('five9_primary_period_add', args=[self.agent.pk]),
+            {'profile': str(self.b.pk), 'from': frm.isoformat(), 'to': to.isoformat()})
+        self.assertTrue(resp.json()['ok'])
+
+        # Exactly one entry was written, and today's primary is untouched.
+        self.assertEqual(
+            Five9PrimaryPeriod.objects.filter(agent=self.agent, kind='past_period').count(), 1)
+        self.a.refresh_from_db()
+        self.b.refresh_from_db()
+        self.assertTrue(self.a.is_primary)
+        self.assertFalse(self.b.is_primary)
+
+        # Only those three days moved to the second account's hours.
+        for d, rec in self.records.items():
+            rec.refresh_from_db()
+            expected = Decimal('5') if frm <= d <= to else Decimal('8')
+            self.assertEqual(rec.actual_hours, expected,
+                             f'{d.isoformat()} should be {expected}h')
+
+        # And the timeline says so, in plain words.
+        line = format_primary_timeline(self.agent)
+        self.assertEqual(line, resp.json()['timeline'])
+        self.assertIn('e2e_a until ', line)
+        self.assertIn('e2e_b ', line)
+        self.assertIn('(current)', line)
+        self.assertTrue(line.rstrip().endswith('(current)'))

@@ -167,7 +167,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <div>
                 <h2 style="margin:0;">Five9 Accounts</h2>
-                <p style="margin:4px 0 0;font-size:12px;color:#888;">Billable accounts count toward hours, billing, and payroll. Primary account is used for attendance tracking.</p>
+                <p style="margin:4px 0 0;font-size:12px;color:#888;">Billable accounts count toward hours, billing, and payroll. Primary account is used for attendance tracking.{% if not can_manage_five9_accounts %} On a saved account, only a super admin can change the username or Billable, or remove it.{% endif %}</p>
             </div>
             <button type="button" onclick="addFive9Row()"
                 style="padding:6px 16px;background:#1a3a5c;color:white;border:none;border-radius:4px;font-size:13px;cursor:pointer;">
@@ -190,16 +190,23 @@
             <tbody id="five9-body">
                 {% for profile in five9_profiles %}
                 <tr id="five9-row-{{ profile.pk }}" style="border-bottom:1px solid #eee;">
+                    {% if can_manage_five9_accounts %}
                     <input type="hidden" name="five9_{{ profile.pk }}_delete" id="del-five9-{{ profile.pk }}" value="">
+                    {% endif %}
                     <td style="padding:6px 8px;">
                         <input type="text" name="five9_{{ profile.pk }}_label"
                             value="{{ profile.label }}" placeholder="e.g. Primary, Kill Team"
                             style="margin-bottom:0;width:130px;">
                     </td>
                     <td style="padding:6px 8px;">
+                        {% if can_manage_five9_accounts %}
                         <input type="text" name="five9_{{ profile.pk }}_username"
                             value="{{ profile.five9_username }}"
                             style="margin-bottom:0;width:180px;">
+                        {% else %}
+                        <input type="hidden" name="five9_{{ profile.pk }}_username" value="{{ profile.five9_username }}">
+                        <span style="color:#333;">{{ profile.five9_username }}</span>
+                        {% endif %}
                     </td>
                     <td style="padding:6px 8px;">
                         <input type="password" name="five9_{{ profile.pk }}_password"
@@ -215,9 +222,14 @@
                         </select>
                     </td>
                     <td style="padding:6px 8px;text-align:center;">
+                        {% if can_manage_five9_accounts %}
                         <input type="checkbox" name="five9_{{ profile.pk }}_billable" value="1"
                             {% if profile.billable %}checked{% endif %}
                             title="Check to count hours toward billing and payroll">
+                        {% else %}
+                        <span style="color:{% if profile.billable %}#333{% else %}#bbb{% endif %};"
+                            title="Only a super admin can change this">{% if profile.billable %}✓{% else %}—{% endif %}</span>
+                        {% endif %}
                     </td>
                     <td style="padding:6px 8px;text-align:center;">
                         <input type="radio" name="five9_primary" value="{{ profile.pk }}"
@@ -225,10 +237,12 @@
                             title="Primary user for attendance tracking">
                     </td>
                     <td style="padding:6px 8px;text-align:center;">
+                        {% if can_manage_five9_accounts %}
                         <button type="button" onclick="removeFive9('{{ profile.pk }}')"
                             style="background:#fee2e2;color:#dc2626;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;">
                             Remove
                         </button>
+                        {% endif %}
                     </td>
                 </tr>
                 {% empty %}
@@ -241,6 +255,49 @@
             </tbody>
         </table>
         </div>
+
+        {% if agent %}
+        <div id="five9-primary-reveal" data-saved-primary="{{ saved_primary_pk }}"
+            style="display:none;margin-top:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:12px;color:#555;">
+            {% if can_manage_five9_accounts %}
+            <label for="five9-primary-start" style="margin:0;">Primary starting</label>
+            <input type="date" name="five9_primary_start" id="five9-primary-start"
+                value="{{ today_iso }}" max="{{ today_iso }}"
+                style="margin:0 16px 0 6px;width:150px;">
+            <label style="margin:0;">
+                <input type="checkbox" name="five9_primary_always" id="five9-primary-always" value="1"
+                    style="margin:0 4px 0 0;vertical-align:middle;">
+                This account was always the primary (fixes a setup mistake)
+            </label>
+            {% else %}
+            New primary counts starting today
+            {% endif %}
+        </div>
+
+        {% if can_manage_five9_accounts %}
+        <div style="margin-top:12px;">
+            <a href="#" onclick="togglePastPeriod(event)"
+                style="font-size:12px;color:#1a3a5c;text-decoration:none;">+ Add a past primary period</a>
+            <div id="five9-past-period"
+                style="display:none;margin-top:10px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:12px;color:#555;">
+                <select id="pp-account" style="margin:0 16px 0 0;width:180px;">
+                    {% for profile in five9_profiles %}
+                    <option value="{{ profile.pk }}">{{ profile.five9_username }}</option>
+                    {% endfor %}
+                </select>
+                <label for="pp-from" style="margin:0;">From</label>
+                <input type="date" id="pp-from" max="{{ yesterday_iso }}" style="margin:0 16px 0 6px;width:150px;">
+                <label for="pp-to" style="margin:0;">To</label>
+                <input type="date" id="pp-to" max="{{ yesterday_iso }}" style="margin:0 16px 0 6px;width:150px;">
+                <button type="button" onclick="savePastPeriod({{ agent.pk }})"
+                    style="padding:5px 14px;background:#1a3a5c;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;">
+                    Save
+                </button>
+                <div id="pp-msg" style="margin-top:8px;"></div>
+            </div>
+        </div>
+        {% endif %}
+        {% endif %}
     </div>
 
     {% if agent %}
@@ -382,6 +439,65 @@ function addFive9Row() {
         </td>`;
     tbody.appendChild(tr);
     tr.querySelectorAll('input[type="password"]').forEach(applyPwToggle);
+}
+
+// The "Primary starting" / "always" line shows only once the picked primary
+// differs from the saved one — nothing to read on an ordinary save.
+(function initPrimaryReveal() {
+    const reveal = document.getElementById('five9-primary-reveal');
+    if (!reveal) return;
+    const saved = reveal.dataset.savedPrimary;
+    const startInput = document.getElementById('five9-primary-start');
+    const alwaysBox = document.getElementById('five9-primary-always');
+
+    function sync() {
+        const picked = document.querySelector('input[name="five9_primary"]:checked');
+        reveal.style.display = (picked && picked.value !== saved) ? '' : 'none';
+    }
+    // Delegated: rows added by "+ Add Account" carry a radio of their own.
+    document.addEventListener('change', function(e) {
+        if (e.target.name === 'five9_primary') sync();
+        if (alwaysBox && e.target === alwaysBox && startInput) {
+            startInput.disabled = alwaysBox.checked;
+        }
+    });
+    sync();
+})();
+
+function togglePastPeriod(e) {
+    e.preventDefault();
+    const box = document.getElementById('five9-past-period');
+    box.style.display = (box.style.display === 'none') ? '' : 'none';
+}
+
+async function savePastPeriod(agentPk) {
+    const msg = document.getElementById('pp-msg');
+    const body = new URLSearchParams({
+        profile: document.getElementById('pp-account').value,
+        from: document.getElementById('pp-from').value,
+        to: document.getElementById('pp-to').value,
+    });
+    msg.textContent = 'Saving…';
+    msg.style.color = '#b45309';
+    try {
+        const resp = await fetch('/agents/' + agentPk + '/five9-primary-period/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
+            },
+            body: body,
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || 'Could not save.');
+        msg.style.color = '#166534';
+        msg.textContent = '✓ Saved. ' + (data.timeline || '');
+        document.getElementById('pp-from').value = '';
+        document.getElementById('pp-to').value = '';
+    } catch (err) {
+        msg.style.color = '#991b1b';
+        msg.textContent = err.message || 'Could not save.';
+    }
 }
 
 function removeFive9(pk) {

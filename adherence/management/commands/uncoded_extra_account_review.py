@@ -2,11 +2,13 @@
 
 Some agents run a second Five9 account purely so their regular call-taking is
 counted in talk-time reports. Time on a non-primary account is never paid unless
-someone codes it for that agent -- and the Adherence tab currently shows that
-account's time on days the primary account has no login, which already led one
-supervisor to skip coding a day (Mark Reyes, Fri Sep 18 2026 went unpaid). Fixing
-the Adherence tab is a later phase; this command only reviews real production data
-so the size of the problem is known first.
+someone codes it for that agent.
+
+Which account was primary is resolved PER DAY, through
+wfm.utils.get_adherence_primary_resolver and the Five9PrimaryPeriod history -- the
+same resolver the Adherence tab uses -- so an account that was primary for part of
+the range and not the rest is judged correctly on each day rather than by today's
+flag alone.
 
 Opens no write transaction and never modifies a row. Not wired into any URL or
 view; run it by hand:
@@ -43,7 +45,7 @@ from adherence.models import Coding, DailyAgentHours
 from adherence.views import _build_maps, _build_rows
 from finance.models import BillingSettings, BillingSettingsHistory
 from scheduling.models import Agent, Five9Profile
-from wfm.utils import get_billable_username_map, get_week_start
+from wfm.utils import get_adherence_primary_resolver, get_billable_username_map, get_week_start
 
 DEFAULT_START = date(2026, 8, 24)
 DEFAULT_END = date(2026, 9, 27)
@@ -89,28 +91,40 @@ class Command(BaseCommand):
         )
         self.stdout.write('(no rows modified)\n')
 
-        # ── Which Five9 usernames are primary / non-primary, per agent ────────
-        primary_usernames = {}
-        nonprimary_usernames = {}
-        for p in Five9Profile.objects.all().values('agent_id', 'five9_username', 'is_primary'):
-            uname = p['five9_username'].strip().lower()
-            if not uname:
-                continue
-            bucket = primary_usernames if p['is_primary'] else nonprimary_usernames
-            bucket.setdefault(p['agent_id'], set()).add(uname)
-
         # ── Which (agent, date) pairs actually have non-primary login time ────
-        qualifying_days = {}  # agent_id -> set of dates
-        for row in DailyAgentHours.objects.filter(
+        # Date-aware: an account that was primary on one day and not on another is
+        # judged correctly on each, using the same resolver the Adherence tab uses.
+        rows_in_range = list(DailyAgentHours.objects.filter(
             upload__date__range=(start, end), agent__isnull=False, login_seconds__gt=0
-        ).values('agent_id', 'five9_username', 'upload__date'):
+        ).values('agent_id', 'five9_username', 'upload__date'))
+        counts_for_adherence = get_adherence_primary_resolver(
+            {r['agent_id'] for r in rows_in_range}
+        )
+
+        qualifying_days = {}  # agent_id -> set of dates
+        for row in rows_in_range:
             aid = row['agent_id']
-            uname = row['five9_username'].strip().lower()
-            if uname in nonprimary_usernames.get(aid, ()):
+            if not counts_for_adherence(aid, row['five9_username'], row['upload__date']):
                 qualifying_days.setdefault(aid, set()).add(row['upload__date'])
 
-        reviewed_ids = {aid for aid in qualifying_days if primary_usernames.get(aid)}
-        skipped_ids = {aid for aid in qualifying_days if not primary_usernames.get(aid)}
+        # An agent is reviewable only if one of their own accounts actually was
+        # the primary one on at least one of the days being reviewed -- otherwise
+        # there is no baseline to compare their extra-account time against.
+        own_usernames = {}
+        for p in Five9Profile.objects.filter(agent_id__in=qualifying_days).values(
+            'agent_id', 'five9_username'
+        ):
+            own_usernames.setdefault(p['agent_id'], []).append(p['five9_username'])
+
+        def _has_primary(aid):
+            return any(
+                counts_for_adherence(aid, uname, d)
+                for d in qualifying_days[aid]
+                for uname in own_usernames.get(aid, ())
+            )
+
+        reviewed_ids = {aid for aid in qualifying_days if _has_primary(aid)}
+        skipped_ids = {aid for aid in qualifying_days if not _has_primary(aid)}
 
         if not reviewed_ids and not skipped_ids:
             self.stdout.write('No agent has non-primary Five9 login time in this range.')
@@ -136,7 +150,7 @@ class Command(BaseCommand):
             if bnames is None or uname in bnames:
                 key = (aid, d)
                 billable_login_secs[key] = billable_login_secs.get(key, 0) + row['login_seconds']
-            if uname in nonprimary_usernames.get(aid, ()):
+            if not counts_for_adherence(aid, uname, d):
                 key = (aid, d)
                 nonprimary_login_secs[key] = nonprimary_login_secs.get(key, 0) + row['login_seconds']
 

@@ -75,6 +75,121 @@ def _hhmm(hours):
     return f'{h}:{m:02d}'
 
 
+def plan_display_hours(start, end, agent_pk=None):
+    """Read-only. Returns the list of agent-days whose stored actual_hours would
+    change, sorted by (date, agent name). The command's preview and --apply both
+    call exactly this, so the two runs can never disagree about what would change;
+    scheduling.five9_primary calls it too, so a primary-account change recalculates
+    by the identical rules with no second copy of the math.
+
+    `start` may be None for no lower bound -- an "always"/"from the beginning"
+    primary period covers every day the agent has ever worked. `end` is required.
+
+    Candidate rules (unchanged): within the range, an AdherenceRecord already
+    exists with actual_hours NOT NULL, the agent is not an Official Admin, and at
+    least one DailyAgentHours row exists for that agent on that date. Update-only
+    -- structurally it can never create a row.
+    """
+    candidates = AdherenceRecord.objects.filter(
+        date__lte=end,
+        actual_hours__isnull=False,
+        agent__is_official_admin=False,
+    ).select_related('agent__user')
+    if start is not None:
+        candidates = candidates.filter(date__gte=start)
+    if agent_pk:
+        candidates = candidates.filter(agent_id=agent_pk)
+    candidates = list(candidates)
+    if not candidates:
+        return []
+
+    agent_ids = {r.agent_id for r in candidates}
+    dates = {r.date for r in candidates}
+
+    # Only upload-owned days are candidates: at least one DailyAgentHours
+    # row for that agent on that date. Protects a supervisor's hand-typed
+    # actual_hours on a day with no upload behind it.
+    dah_rows = list(DailyAgentHours.objects.filter(
+        agent_id__in=agent_ids, upload__date__in=dates
+    ).values('agent_id', 'upload__date', 'five9_username', 'login_seconds', 'not_ready_seconds'))
+    days_with_rows = {(r['agent_id'], r['upload__date']) for r in dah_rows}
+
+    counts_for_adherence = get_adherence_primary_resolver(agent_ids)
+
+    login_secs_map = {}
+    nr_secs_map = {}
+    for r in dah_rows:
+        key = (r['agent_id'], r['upload__date'])
+        if counts_for_adherence(r['agent_id'], r['five9_username'], r['upload__date']):
+            login_secs_map[key] = login_secs_map.get(key, 0) + r['login_seconds']
+            nr_secs_map[key] = nr_secs_map.get(key, 0) + r['not_ready_seconds']
+
+    # Same Coding query shape upload_daily_file uses (no is_admin_coding
+    # filter) -- every candidate here is already restricted to non-admin
+    # agents, so this matches _refresh_actual_hours's is_admin_coding=False
+    # scan for any agent that has no stray admin coding.
+    coded_secs_map = {}
+    for c in Coding.objects.filter(agent_id__in=agent_ids, date__in=dates, is_admin_coding=False):
+        key = (c.agent_id, c.date)
+        coded_secs_map[key] = coded_secs_map.get(key, 0) + c.total_seconds_count()
+
+    # Read-only historical nr_ratio, one lookup per distinct week -- never
+    # BillingSettings.get_for_week's get_or_create(pk=1) fallback.
+    settings_cache = {}
+
+    plan = []
+    for rec in candidates:
+        key = (rec.agent_id, rec.date)
+        if key not in days_with_rows:
+            continue  # no Daily Hours row that day at all -- not in scope
+
+        week_start = get_week_start(rec.date)
+        if week_start not in settings_cache:
+            settings_cache[week_start] = _safe_billing_settings(week_start)
+        nr_ratio = settings_cache[week_start].nr_ratio
+
+        login_secs = login_secs_map.get(key, 0)
+        not_ready_secs = nr_secs_map.get(key, 0)
+        coded_secs = coded_secs_map.get(key, 0)
+
+        new_stored = _compute_display_hours(login_secs, not_ready_secs, coded_secs, nr_ratio)
+        old_stored = rec.actual_hours
+        if old_stored == new_stored:
+            continue
+
+        coded_hrs = Decimal(str(coded_secs)) / Decimal('3600')
+        plan.append({
+            'date': rec.date,
+            'agent_name': _display_name(rec.agent),
+            'record': rec,
+            'stored_before': old_stored,
+            'stored_after': new_stored,
+            'new_stored': new_stored,
+            'cell_before': _hhmm(old_stored + coded_hrs),
+            'cell_after': _hhmm(new_stored + coded_hrs),
+        })
+
+    plan.sort(key=lambda r: (r['date'], r['agent_name']))
+    return plan
+
+
+def apply_display_hours(plan):
+    """Write the planned rows. Update-only, one bulk_update, no Activity Log entry
+    of its own -- the caller owns what gets logged. Returns the number of rows
+    written. Callers run this inside their own transaction."""
+    if not plan:
+        return 0
+    now = timezone.now()
+    to_update = []
+    for row in plan:
+        rec = row['record']
+        rec.actual_hours = row['new_stored']
+        rec.updated_at = now
+        to_update.append(rec)
+    AdherenceRecord.objects.bulk_update(to_update, ['actual_hours', 'updated_at'])
+    return len(to_update)
+
+
 class Command(BaseCommand):
     help = ('Recalculate stored adherence display hours for a date range using the '
             'primary-account-only rule (preview by default; --apply to write).')
@@ -128,14 +243,7 @@ class Command(BaseCommand):
             return
 
         with transaction.atomic():
-            now = timezone.now()
-            to_update = []
-            for row in plan:
-                rec = row['record']
-                rec.actual_hours = row['new_stored']
-                rec.updated_at = now
-                to_update.append(rec)
-            AdherenceRecord.objects.bulk_update(to_update, ['actual_hours', 'updated_at'])
+            apply_display_hours(plan)
             log_action(
                 None,
                 'Recalculated adherence display hours',
@@ -148,86 +256,4 @@ class Command(BaseCommand):
         ))
 
     def _plan(self, start, end, agent_pk=None):
-        """Read-only. Returns the list of agent-days whose stored actual_hours
-        would change, sorted by (date, agent name). Preview and --apply both
-        call exactly this, so the two runs can never disagree about what
-        would change."""
-        candidates = AdherenceRecord.objects.filter(
-            date__gte=start, date__lte=end,
-            actual_hours__isnull=False,
-            agent__is_official_admin=False,
-        ).select_related('agent__user')
-        if agent_pk:
-            candidates = candidates.filter(agent_id=agent_pk)
-        candidates = list(candidates)
-        if not candidates:
-            return []
-
-        agent_ids = {r.agent_id for r in candidates}
-        dates = {r.date for r in candidates}
-
-        # Only upload-owned days are candidates: at least one DailyAgentHours
-        # row for that agent on that date. Protects a supervisor's hand-typed
-        # actual_hours on a day with no upload behind it.
-        dah_rows = list(DailyAgentHours.objects.filter(
-            agent_id__in=agent_ids, upload__date__in=dates
-        ).values('agent_id', 'upload__date', 'five9_username', 'login_seconds', 'not_ready_seconds'))
-        days_with_rows = {(r['agent_id'], r['upload__date']) for r in dah_rows}
-
-        counts_for_adherence = get_adherence_primary_resolver(agent_ids)
-
-        login_secs_map = {}
-        nr_secs_map = {}
-        for r in dah_rows:
-            key = (r['agent_id'], r['upload__date'])
-            if counts_for_adherence(r['agent_id'], r['five9_username'], r['upload__date']):
-                login_secs_map[key] = login_secs_map.get(key, 0) + r['login_seconds']
-                nr_secs_map[key] = nr_secs_map.get(key, 0) + r['not_ready_seconds']
-
-        # Same Coding query shape upload_daily_file uses (no is_admin_coding
-        # filter) -- every candidate here is already restricted to non-admin
-        # agents, so this matches _refresh_actual_hours's is_admin_coding=False
-        # scan for any agent that has no stray admin coding.
-        coded_secs_map = {}
-        for c in Coding.objects.filter(agent_id__in=agent_ids, date__in=dates, is_admin_coding=False):
-            key = (c.agent_id, c.date)
-            coded_secs_map[key] = coded_secs_map.get(key, 0) + c.total_seconds_count()
-
-        # Read-only historical nr_ratio, one lookup per distinct week -- never
-        # BillingSettings.get_for_week's get_or_create(pk=1) fallback.
-        settings_cache = {}
-
-        plan = []
-        for rec in candidates:
-            key = (rec.agent_id, rec.date)
-            if key not in days_with_rows:
-                continue  # no Daily Hours row that day at all -- not in scope
-
-            week_start = get_week_start(rec.date)
-            if week_start not in settings_cache:
-                settings_cache[week_start] = _safe_billing_settings(week_start)
-            nr_ratio = settings_cache[week_start].nr_ratio
-
-            login_secs = login_secs_map.get(key, 0)
-            not_ready_secs = nr_secs_map.get(key, 0)
-            coded_secs = coded_secs_map.get(key, 0)
-
-            new_stored = _compute_display_hours(login_secs, not_ready_secs, coded_secs, nr_ratio)
-            old_stored = rec.actual_hours
-            if old_stored == new_stored:
-                continue
-
-            coded_hrs = Decimal(str(coded_secs)) / Decimal('3600')
-            plan.append({
-                'date': rec.date,
-                'agent_name': _display_name(rec.agent),
-                'record': rec,
-                'stored_before': old_stored,
-                'stored_after': new_stored,
-                'new_stored': new_stored,
-                'cell_before': _hhmm(old_stored + coded_hrs),
-                'cell_after': _hhmm(new_stored + coded_hrs),
-            })
-
-        plan.sort(key=lambda r: (r['date'], r['agent_name']))
-        return plan
+        return plan_display_hours(start, end, agent_pk)

@@ -438,9 +438,12 @@ def agent_detail(request, pk):
             'absent_count': absent_count,
         }
 
+    from .five9_primary import format_primary_timeline
+
     return render(request, 'scheduling/agent_detail.html', {
         'agent': agent,
         'shifts': shifts,
+        'primary_timeline': format_primary_timeline(agent),
         'pending_role_change': pending_role_change,
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'day_choices': ShiftTemplate.DAY_CHOICES,
@@ -452,47 +455,191 @@ def agent_detail(request, pk):
     })
 
 
+class Five9SaveError(Exception):
+    """A Five9 Accounts change that has to be refused outright. Raised inside the
+    caller's transaction.atomic() block and caught outside it, so the rollback
+    guarantees nothing at all was saved."""
+
+
+def _is_super_admin(request):
+    """The app's super-admin gate, in the same fail-closed form skill_list uses:
+    getattr rather than a direct attribute read, because AgentAccessMiddleware
+    swallows its own exceptions and either attribute can be missing entirely — a
+    missing attribute must deny access, never raise."""
+    return bool(getattr(getattr(request, 'user', None), 'is_superuser', False)
+                or getattr(request, 'has_finance_access', False))
+
+
+def _explicit_primary_start(request, is_super):
+    """Resolve the 'Primary starting' date and the 'always' box into the
+    (start_date, kind) an entry should get, or None for "no explicit choice —
+    use the ordinary rule".
+
+    Both controls are super-admin-only and a supervisor's form renders neither,
+    so a POST carrying them is a crafted one and is refused. Posting today's own
+    date is not, since that is what the ordinary switch does anyway.
+    """
+    today = timezone.localdate()
+    always = bool(request.POST.get('five9_primary_always'))
+    raw_start = request.POST.get('five9_primary_start', '').strip()
+
+    if not is_super:
+        if always:
+            raise Five9SaveError(
+                "Only a super admin can mark an account as always having been the primary."
+            )
+        if raw_start and raw_start != today.isoformat():
+            raise Five9SaveError("Only a super admin can back-date a primary change.")
+        return None
+
+    if always:
+        # "Always" already covers every day, so a start date beside it is moot.
+        return (None, 'always')
+    if not raw_start:
+        return None
+    try:
+        start = date.fromisoformat(raw_start)
+    except ValueError:
+        raise Five9SaveError("Enter a valid date.")
+    if start > today:
+        raise Five9SaveError("Dates can't be in the future.")
+    return (start, 'switch')
+
+
+def _record_primary_choice(agent, profile, actor):
+    """Record `profile` as the agent's primary from today — or from the beginning
+    when this is the agent's very first entry, which is a bootstrap rather than a
+    change. An automatic rule must never rewrite an agent's past, so once any
+    history exists the entry always starts today."""
+    from .five9_primary import record_primary_period
+    if agent.five9_primary_periods.exists():
+        return record_primary_period(agent, profile, timezone.localdate(), None, 'switch', actor)
+    return record_primary_period(agent, profile, None, None, 'initial', actor)
+
+
 def _save_five9_profiles(request, agent):
-    """Process Five9Profile rows from POST: update existing, delete flagged, create new."""
+    """Process Five9Profile rows from POST: update existing, delete flagged, create new.
+
+    The primary radio no longer writes is_primary directly. It records an entry in
+    the agent's primary-account history, and Five9PrimaryPeriod is what sets
+    is_primary — so the flag and the history can never drift apart. See
+    scheduling/five9_primary.py.
+    """
+    from .five9_primary import (
+        current_primary_profile, ensure_seeded, refresh_username_snapshots,
+        sync_is_primary_from_history,
+    )
+
     primary_pk = request.POST.get('five9_primary', '')
+    actor = getattr(request, 'user', None)
+    is_super = _is_super_admin(request)
+
+    # An agent whose primary predates the history has it backfilled first, so
+    # everything below reads one source of truth. Changes nothing observable.
+    ensure_seeded(agent)
+
+    # Who is primary today, captured before anything on this form is applied.
+    before_primary = current_primary_profile(agent)
+    before_primary_pk = before_primary.pk if before_primary else None
+    deleted_pks = set()
 
     for profile in list(agent.five9_profiles.all()):
-        if request.POST.get(f'five9_{profile.pk}_delete'):
+        delete_key = f'five9_{profile.pk}_delete'
+        username_key = f'five9_{profile.pk}_username'
+        billable_key = f'five9_{profile.pk}_billable'
+        username = request.POST.get(username_key, '').strip()
+
+        # On a SAVED account, removing it, changing its username and changing its
+        # Billable box are super-admin-only. The form does not render those
+        # controls for anyone else, but that is presentation, not enforcement:
+        # a crafted POST is refused here and the caller's rollback means nothing
+        # at all was saved.
+        if not is_super:
+            if request.POST.get(delete_key):
+                raise Five9SaveError("Only a super admin can remove a Five9 account.")
+            if username and username != profile.five9_username:
+                raise Five9SaveError("Only a super admin can change a Five9 username.")
+            if billable_key in request.POST and not profile.billable:
+                raise Five9SaveError(
+                    "Only a super admin can change whether a Five9 account is billable."
+                )
+
+        if request.POST.get(delete_key):
+            deleted_pks.add(profile.pk)
             profile.delete()
             continue
-        username = request.POST.get(f'five9_{profile.pk}_username', '').strip()
         if username:
+            renamed = (username != profile.five9_username)
             profile.label = request.POST.get(f'five9_{profile.pk}_label', '').strip()
             profile.five9_username = username
             profile.five9_password = request.POST.get(f'five9_{profile.pk}_password', '').strip()
             profile.role_type = request.POST.get(f'five9_{profile.pk}_role_type', '')
-            profile.billable = bool(request.POST.get(f'five9_{profile.pk}_billable'))
-            profile.is_primary = (str(profile.pk) == primary_pk)
+            # An absent checkbox is indistinguishable from a field that was never
+            # rendered, so for a non-super-admin the stored value is used rather
+            # than the POST — which is what stops Billable being turned off by
+            # simply omitting the key. Turning it on is refused above.
+            profile.billable = (bool(request.POST.get(billable_key)) if is_super
+                                else profile.billable)
             profile.save()
+            if renamed:
+                # Keep the history's fallback username current, so it is still
+                # right if this account is deleted later.
+                refresh_username_snapshots(profile)
 
+    new_profiles = {}
     i = 0
     while f'new_five9_{i}_username' in request.POST:
         username = request.POST.get(f'new_five9_{i}_username', '').strip()
         if username:
-            Five9Profile.objects.create(
+            new_profiles[f'new_{i}'] = Five9Profile.objects.create(
                 agent=agent,
                 label=request.POST.get(f'new_five9_{i}_label', '').strip(),
                 five9_username=username,
                 five9_password=request.POST.get(f'new_five9_{i}_password', '').strip(),
                 role_type=request.POST.get(f'new_five9_{i}_role_type', ''),
                 billable=bool(request.POST.get(f'new_five9_{i}_billable')),
-                is_primary=(primary_pk == f'new_{i}'),
             )
         i += 1
 
+    selected = None
+    if primary_pk in new_profiles:
+        selected = new_profiles[primary_pk]
+    elif primary_pk.isdigit():
+        selected = agent.five9_profiles.filter(pk=int(primary_pk)).first()
+
+    # Removing the account that is primary today leaves the agent with no primary
+    # and so zero Five9 adherence login — the exact silent gap the primary-only
+    # rule exists to make visible. Refuse rather than let it happen unnoticed.
+    if before_primary_pk is not None and before_primary_pk in deleted_pks and selected is None:
+        raise Five9SaveError(
+            "That Five9 account is the primary one. Choose which account becomes "
+            "primary before removing it."
+        )
+
+    # Validated whether or not the primary actually changed, so a crafted
+    # back-date or "always" is refused even on a save that changes nothing else.
+    explicit = _explicit_primary_start(request, is_super)
+
+    if selected is not None and (
+        selected.pk != before_primary_pk or not agent.five9_primary_periods.exists()
+    ):
+        if explicit is None:
+            _record_primary_choice(agent, selected, actor)
+        else:
+            from .five9_primary import record_primary_period
+            start, kind = explicit
+            record_primary_period(agent, selected, start, None, kind, actor)
+
     # A lone Five9 account is always the primary one. Without this, leaving
-    # the radio unset yields an agent with no primary — which now means zero
+    # the radio unset yields an agent with no primary — which means zero
     # Five9 adherence login time. Re-queried, not the lists built above: the
     # delete/update/create logic above may have changed the row set.
     profiles = list(agent.five9_profiles.all())
-    if len(profiles) == 1 and not profiles[0].is_primary:
-        profiles[0].is_primary = True
-        profiles[0].save(update_fields=['is_primary'])
+    if len(profiles) == 1 and current_primary_profile(agent) is None:
+        _record_primary_choice(agent, profiles[0], actor)
+    elif agent.five9_primary_periods.exists():
+        # A delete can change who wins today without any entry being written.
+        sync_is_primary_from_history(agent)
 
 
 def _sync_agent_skills(request, agent, form, before):
@@ -534,46 +681,52 @@ def agent_create(request):
     agent_form = AgentForm(request.POST or None, can_grant_admin_tabs=request.has_finance_access)
     if request.method == 'POST' and user_form.is_valid() and agent_form.is_valid():
         from django.db import transaction
-        with transaction.atomic():
-            user = user_form.save(commit=False)
-            password = user_form.cleaned_data.get('password')
-            if password:
-                user.set_password(password)
-            else:
-                user.set_unusable_password()
-            user.save()
-            agent = agent_form.save(commit=False)
-            agent.user = user
-            agent.save()
-            _sync_agent_skills(request, agent, agent_form, set())
-            from django.utils import timezone as _tz
-            RoleHistory.objects.create(
-                agent=agent,
-                role=agent.role,
-                role_type=agent.role_type or '',
-                supervisor=agent.supervisor,
-                employer=agent.employer,
-                billing_status=agent.billing_status,
-                effective_from=agent.start_date or _tz.localdate(),
-                changed_by=request.user,
-            )
-            _save_five9_profiles(request, agent)
-            if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email', 'qa'):
-                user.set_unusable_password()
+        try:
+            with transaction.atomic():
+                user = user_form.save(commit=False)
+                password = user_form.cleaned_data.get('password')
+                if password:
+                    user.set_password(password)
+                else:
+                    user.set_unusable_password()
                 user.save()
-            start_date = request.POST.get('start_date', '').strip()
-            if start_date:
-                from .models import EmploymentPeriod
-                EmploymentPeriod.objects.create(agent=agent, start_date=start_date)
-        log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
-        messages.success(request, f"User {user.get_full_name()} created successfully.")
-        return redirect('agent_list')
+                agent = agent_form.save(commit=False)
+                agent.user = user
+                agent.save()
+                _sync_agent_skills(request, agent, agent_form, set())
+                from django.utils import timezone as _tz
+                RoleHistory.objects.create(
+                    agent=agent,
+                    role=agent.role,
+                    role_type=agent.role_type or '',
+                    supervisor=agent.supervisor,
+                    employer=agent.employer,
+                    billing_status=agent.billing_status,
+                    effective_from=agent.start_date or _tz.localdate(),
+                    changed_by=request.user,
+                )
+                _save_five9_profiles(request, agent)
+                if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email', 'qa'):
+                    user.set_unusable_password()
+                    user.save()
+                start_date = request.POST.get('start_date', '').strip()
+                if start_date:
+                    from .models import EmploymentPeriod
+                    EmploymentPeriod.objects.create(agent=agent, start_date=start_date)
+        except Five9SaveError as exc:
+            # Raised inside the atomic block, caught outside it: nothing was saved.
+            messages.error(request, str(exc))
+        else:
+            log_action(request.user, 'Created agent profile', f'Created {user.get_full_name()}', agent=agent)
+            messages.success(request, f"User {user.get_full_name()} created successfully.")
+            return redirect('agent_list')
     from finance.models import BillingSettings as _BS
     return render(request, 'scheduling/agent_form.html', {
         'user_form': user_form,
         'agent_form': agent_form,
         'title': 'Add User',
         'five9_profiles': [],
+        'can_manage_five9_accounts': _is_super_admin(request),
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'is_own_profile': False,
         'default_admin_bonus_mxn': str(_BS.get().default_admin_bonus_mxn),
@@ -599,126 +752,131 @@ def agent_edit(request, pk):
         agent_form = AgentForm(request.POST, instance=agent, can_grant_admin_tabs=request.has_finance_access)
         if user_form.is_valid() and agent_form.is_valid():
             from django.db import transaction
-            with transaction.atomic():
-                # Capture user-level values before save
-                _old_user = {
-                    'username': agent.user.username,
-                    'legal_name': f"{agent.user.first_name} {agent.user.last_name}".strip(),
-                    'email': agent.user.email,
-                }
-                user = user_form.save(commit=False)
-                password = user_form.cleaned_data.get('password')
-                if password:
-                    user.set_password(password)
-                user.save()
-                # Capture before save
-                _old = {
-                    'role': agent.role, 'role_type': agent.role_type,
-                    'supervisor_id': agent.supervisor_id,
-                    'employer': agent.employer, 'billing_status': agent.billing_status,
-                    'agent_name': agent.agent_name,
-                }
-                # skills is Agent's only M2M field. agent_form.save() with the
-                # default commit=True would call Django's own save_m2m() and
-                # silently overwrite agent.skills from cleaned_data, bypassing
-                # _sync_agent_skills entirely (no history row, no Activity Log
-                # entry, and a retired-but-assigned skill would be dropped) —
-                # so this saves the instance only and skills goes exclusively
-                # through _sync_agent_skills below, same as agent_create.
-                _old_skills = set(agent.skills.all())
-                agent = agent_form.save(commit=False)
-                agent.save()
-                # Record role history if tracked fields changed
-                _new = {
-                    'role': agent.role, 'role_type': agent.role_type,
-                    'supervisor_id': agent.supervisor_id,
-                    'employer': agent.employer, 'billing_status': agent.billing_status,
-                    'agent_name': agent.agent_name,
-                }
-                if _old['role_type'] != _new['role_type'] and _old['role_type']:
-                    agent.five9_profiles.filter(role_type=_old['role_type']).update(role_type=_new['role_type'])
-                if _old != _new:
-                    from django.utils import timezone as _tz
-                    today = _tz.localdate()
-                    if not agent.role_history.exists():
-                        # Seed initial entry from old values
-                        RoleHistory.objects.create(
-                            agent=agent, role=_old['role'], role_type=_old['role_type'] or '',
-                            supervisor_id=_old['supervisor_id'], employer=_old['employer'],
-                            billing_status=_old['billing_status'],
-                            effective_from=agent.start_date or today,
-                            effective_to=today, changed_by=request.user,
-                        )
-                    else:
-                        open_entry = agent.role_history.filter(effective_to__isnull=True).first()
-                        if open_entry:
-                            open_entry.effective_to = today
-                            open_entry.save(update_fields=['effective_to'])
-                    RoleHistory.objects.create(
-                        agent=agent, role=agent.role, role_type=agent.role_type or '',
-                        supervisor=agent.supervisor, employer=agent.employer,
-                        billing_status=agent.billing_status,
-                        effective_from=today, changed_by=request.user,
-                    )
-                if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email', 'qa'):
-                    user.set_unusable_password()
+            try:
+                with transaction.atomic():
+                    # Capture user-level values before save
+                    _old_user = {
+                        'username': agent.user.username,
+                        'legal_name': f"{agent.user.first_name} {agent.user.last_name}".strip(),
+                        'email': agent.user.email,
+                    }
+                    user = user_form.save(commit=False)
+                    password = user_form.cleaned_data.get('password')
+                    if password:
+                        user.set_password(password)
                     user.save()
-
-                # Update or delete existing periods
-                for period in list(agent.employment_periods.all()):
-                    if request.POST.get(f'period_{period.pk}_delete'):
-                        period.delete()
-                        continue
-                    start = request.POST.get(f'period_{period.pk}_start', '').strip()
-                    if start:
-                        period.start_date = start
-                        period.end_date = request.POST.get(f'period_{period.pk}_end', '').strip() or None
-                        period.reason_ended = request.POST.get(f'period_{period.pk}_reason', '')
-                        period.notes = request.POST.get(f'period_{period.pk}_notes', '')
-                        period.save()
-
-                # Create new periods (indexed rows added via JS)
-                i = 0
-                while f'new_{i}_start' in request.POST:
-                    start = request.POST.get(f'new_{i}_start', '').strip()
-                    if start:
-                        EmploymentPeriod.objects.create(
-                            agent=agent,
-                            start_date=start,
-                            end_date=request.POST.get(f'new_{i}_end', '').strip() or None,
-                            reason_ended=request.POST.get(f'new_{i}_reason', ''),
-                            notes=request.POST.get(f'new_{i}_notes', ''),
+                    # Capture before save
+                    _old = {
+                        'role': agent.role, 'role_type': agent.role_type,
+                        'supervisor_id': agent.supervisor_id,
+                        'employer': agent.employer, 'billing_status': agent.billing_status,
+                        'agent_name': agent.agent_name,
+                    }
+                    # skills is Agent's only M2M field. agent_form.save() with the
+                    # default commit=True would call Django's own save_m2m() and
+                    # silently overwrite agent.skills from cleaned_data, bypassing
+                    # _sync_agent_skills entirely (no history row, no Activity Log
+                    # entry, and a retired-but-assigned skill would be dropped) —
+                    # so this saves the instance only and skills goes exclusively
+                    # through _sync_agent_skills below, same as agent_create.
+                    _old_skills = set(agent.skills.all())
+                    agent = agent_form.save(commit=False)
+                    agent.save()
+                    # Record role history if tracked fields changed
+                    _new = {
+                        'role': agent.role, 'role_type': agent.role_type,
+                        'supervisor_id': agent.supervisor_id,
+                        'employer': agent.employer, 'billing_status': agent.billing_status,
+                        'agent_name': agent.agent_name,
+                    }
+                    if _old['role_type'] != _new['role_type'] and _old['role_type']:
+                        agent.five9_profiles.filter(role_type=_old['role_type']).update(role_type=_new['role_type'])
+                    if _old != _new:
+                        from django.utils import timezone as _tz
+                        today = _tz.localdate()
+                        if not agent.role_history.exists():
+                            # Seed initial entry from old values
+                            RoleHistory.objects.create(
+                                agent=agent, role=_old['role'], role_type=_old['role_type'] or '',
+                                supervisor_id=_old['supervisor_id'], employer=_old['employer'],
+                                billing_status=_old['billing_status'],
+                                effective_from=agent.start_date or today,
+                                effective_to=today, changed_by=request.user,
+                            )
+                        else:
+                            open_entry = agent.role_history.filter(effective_to__isnull=True).first()
+                            if open_entry:
+                                open_entry.effective_to = today
+                                open_entry.save(update_fields=['effective_to'])
+                        RoleHistory.objects.create(
+                            agent=agent, role=agent.role, role_type=agent.role_type or '',
+                            supervisor=agent.supervisor, employer=agent.employer,
+                            billing_status=agent.billing_status,
+                            effective_from=today, changed_by=request.user,
                         )
-                    i += 1
+                    if agent.role == 'admin' and agent.role_type not in ('supervisor', 'coordinator', 'cs', 'tester', 'sms_email', 'qa'):
+                        user.set_unusable_password()
+                        user.save()
 
-                _save_five9_profiles(request, agent)
-                _sync_agent_skills(request, agent, agent_form, _old_skills)
-            # Build detailed change description
-            _change_parts = []
-            _new_user = {
-                'username': user.username,
-                'legal_name': f"{user.first_name} {user.last_name}".strip(),
-                'email': user.email,
-            }
-            for _field, _old_val, _new_val in [
-                ('username', _old_user['username'], _new_user['username']),
-                ('legal name', _old_user['legal_name'], _new_user['legal_name']),
-                ('email', _old_user['email'], _new_user['email']),
-                ('display name', _old['agent_name'], _new['agent_name']),
-                ('role', _old['role'], _new['role']),
-                ('role type', _old['role_type'], _new['role_type']),
-                ('employer', _old['employer'], _new['employer']),
-                ('billing status', _old['billing_status'], _new['billing_status']),
-            ]:
-                if str(_old_val or '') != str(_new_val or ''):
-                    _change_parts.append(f'{_field}: "{_old_val}" → "{_new_val}"')
-            if password:
-                _change_parts.append('password changed')
-            _detail = '; '.join(_change_parts) if _change_parts else 'no tracked fields changed'
-            log_action(request.user, 'Edited agent profile',
-                       f'Edited {user.get_full_name()} — {_detail}', agent=agent)
-            messages.success(request, f"User {user.get_full_name()} updated successfully.")
-            return redirect('agent_detail', pk=agent.pk)
+                    # Update or delete existing periods
+                    for period in list(agent.employment_periods.all()):
+                        if request.POST.get(f'period_{period.pk}_delete'):
+                            period.delete()
+                            continue
+                        start = request.POST.get(f'period_{period.pk}_start', '').strip()
+                        if start:
+                            period.start_date = start
+                            period.end_date = request.POST.get(f'period_{period.pk}_end', '').strip() or None
+                            period.reason_ended = request.POST.get(f'period_{period.pk}_reason', '')
+                            period.notes = request.POST.get(f'period_{period.pk}_notes', '')
+                            period.save()
+
+                    # Create new periods (indexed rows added via JS)
+                    i = 0
+                    while f'new_{i}_start' in request.POST:
+                        start = request.POST.get(f'new_{i}_start', '').strip()
+                        if start:
+                            EmploymentPeriod.objects.create(
+                                agent=agent,
+                                start_date=start,
+                                end_date=request.POST.get(f'new_{i}_end', '').strip() or None,
+                                reason_ended=request.POST.get(f'new_{i}_reason', ''),
+                                notes=request.POST.get(f'new_{i}_notes', ''),
+                            )
+                        i += 1
+
+                    _save_five9_profiles(request, agent)
+                    _sync_agent_skills(request, agent, agent_form, _old_skills)
+            except Five9SaveError as exc:
+                # Raised inside the atomic block, caught outside it: nothing was saved.
+                messages.error(request, str(exc))
+            else:
+                # Build detailed change description
+                _change_parts = []
+                _new_user = {
+                    'username': user.username,
+                    'legal_name': f"{user.first_name} {user.last_name}".strip(),
+                    'email': user.email,
+                }
+                for _field, _old_val, _new_val in [
+                    ('username', _old_user['username'], _new_user['username']),
+                    ('legal name', _old_user['legal_name'], _new_user['legal_name']),
+                    ('email', _old_user['email'], _new_user['email']),
+                    ('display name', _old['agent_name'], _new['agent_name']),
+                    ('role', _old['role'], _new['role']),
+                    ('role type', _old['role_type'], _new['role_type']),
+                    ('employer', _old['employer'], _new['employer']),
+                    ('billing status', _old['billing_status'], _new['billing_status']),
+                ]:
+                    if str(_old_val or '') != str(_new_val or ''):
+                        _change_parts.append(f'{_field}: "{_old_val}" → "{_new_val}"')
+                if password:
+                    _change_parts.append('password changed')
+                _detail = '; '.join(_change_parts) if _change_parts else 'no tracked fields changed'
+                log_action(request.user, 'Edited agent profile',
+                           f'Edited {user.get_full_name()} — {_detail}', agent=agent)
+                messages.success(request, f"User {user.get_full_name()} updated successfully.")
+                return redirect('agent_detail', pk=agent.pk)
     else:
         user_form = AgentUserForm(instance=agent.user)
         agent_form = AgentForm(instance=agent, can_grant_admin_tabs=request.has_finance_access)
@@ -732,11 +890,84 @@ def agent_edit(request, pk):
         'periods': agent.employment_periods.all(),
         'reason_choices': EmploymentPeriod.REASON_CHOICES,
         'five9_profiles': agent.five9_profiles.all(),
+        'can_manage_five9_accounts': _is_super_admin(request),
+        'saved_primary_pk': (agent.five9_profiles.filter(is_primary=True)
+                             .values_list('pk', flat=True).first() or ''),
+        'today_iso': timezone.localdate().isoformat(),
+        'yesterday_iso': (timezone.localdate() - timedelta(days=1)).isoformat(),
         'role_type_choices': Agent.ROLE_TYPE_CHOICES,
         'is_own_profile': (agent.user == request.user),
         'default_admin_bonus_mxn': str(_BS.get().default_admin_bonus_mxn),
         'default_adherence_bonus_max_mxn': str(_BS.get().adherence_bonus_max_mxn),
     })
+
+
+@login_required
+def five9_primary_period_add(request, pk):
+    """Record a past primary-account period for one agent, without reloading the
+    Edit User page.
+
+    Four gates, all before anything is written, because the link that reveals
+    this form is presentation and not security:
+      1. @login_required, and the path sits under /agents/ so AgentAccessMiddleware
+         already keeps portal users out for the same reason they cannot open
+         Edit User at all.
+      2. Super admin only.
+      3. Django's ordinary CSRF check — the page posts the csrf-token meta the
+         other JSON endpoints in this app use; nothing here is csrf_exempt.
+      4. The named account must belong to THIS agent. The queryset is scoped to
+         the agent, so another agent's account simply is not found.
+
+    A past period never changes who is primary today, but the is_primary sync
+    still runs inside record_primary_period, so the flag and the history cannot
+    drift apart whatever the dates say.
+    """
+    from django.http import JsonResponse
+    from django.db import transaction
+    from .five9_primary import format_primary_timeline, record_primary_period
+
+    if request.method != 'POST':
+        return JsonResponse({'ok': False, 'error': 'POST required'}, status=405)
+    if not _is_super_admin(request):
+        return JsonResponse(
+            {'ok': False, 'error': 'Only a super admin can add a past primary period.'},
+            status=403,
+        )
+
+    agent = get_object_or_404(Agent, pk=pk)
+    today = timezone.localdate()
+
+    raw_profile = (request.POST.get('profile') or '').strip()
+    profile = (agent.five9_profiles.filter(pk=raw_profile).first()
+               if raw_profile.isdigit() else None)
+    if profile is None:
+        return JsonResponse(
+            {'ok': False, 'error': 'Pick one of this user’s Five9 accounts.'}, status=400)
+
+    def _parse(raw):
+        try:
+            return date.fromisoformat((raw or '').strip())
+        except ValueError:
+            return None
+
+    frm, to = _parse(request.POST.get('from')), _parse(request.POST.get('to'))
+    if frm is None or to is None:
+        return JsonResponse({'ok': False, 'error': 'Enter both dates.'}, status=400)
+    if frm > today or to > today:
+        return JsonResponse({'ok': False, 'error': "Dates can't be in the future."}, status=400)
+    if to >= today:
+        return JsonResponse(
+            {'ok': False,
+             'error': 'To must be before today. To change today’s primary, '
+                      'use the Primary button.'},
+            status=400)
+    if frm > to:
+        return JsonResponse({'ok': False, 'error': 'From must be on or before To.'}, status=400)
+
+    with transaction.atomic():
+        record_primary_period(agent, profile, frm, to, 'past_period', request.user)
+
+    return JsonResponse({'ok': True, 'timeline': format_primary_timeline(agent)})
 
 
 @login_required

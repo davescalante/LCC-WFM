@@ -75,32 +75,73 @@ def get_adherence_primary_resolver(agent_ids):
     """
     Return counts_for_adherence(agent_id, five9_username, on_date) -> bool.
 
-    True only when that username belongs to a Five9Profile of that agent marked
-    is_primary. ADHERENCE DISPLAY ONLY — no fallback: an agent with no primary
-    account counts zero Five9 login/not-ready time (their codings still count
-    separately). Billing, payroll and nomina keep using get_billable_username_map
-    (the billable flag) — the two pipelines are independent by design.
+    True only when that username was the agent's PRIMARY account ON THAT DATE,
+    according to their Five9PrimaryPeriod history. ADHERENCE DISPLAY ONLY — no
+    fallback: an agent with no primary account on a date counts zero Five9
+    login/not-ready time that day (their codings still count separately).
+    Billing, payroll and nomina keep using get_billable_username_map (the
+    billable flag) — the two pipelines are independent by design.
 
-    One query up front, then any number of questions — never a query per agent.
+    For any date, the NEWEST period covering it wins (highest pk). A date no
+    period covers resolves to nobody, which is the same "no primary means zero"
+    answer the flag-only version gave.
+
+    Agents with no history at all bootstrap from today's is_primary flag, treated
+    as primary from the beginning. That is for write paths that have not recorded
+    a period yet — never a fallback to a non-primary account.
+
+    At most TWO queries up front, then any number of questions — never a query
+    per agent or per day. Answers are memoised per (agent_id, date).
+
     Both sides are compared .strip().lower()'d: DailyAgentHours.five9_username is
     stored lowercased, Five9Profile.five9_username with only .strip() applied.
-
-    on_date is required of every caller and deliberately ignored today. It is the
-    seam for a later phase that resolves which account was primary on a given
-    date — adding that becomes an internal change here and touches no caller.
     """
-    from scheduling.models import Five9Profile
+    from scheduling.models import Five9Profile, Five9PrimaryPeriod
 
-    primary_map = {}
-    for p in Five9Profile.objects.filter(
-        agent__in=agent_ids, is_primary=True
-    ).values('agent_id', 'five9_username'):
-        primary_map.setdefault(p['agent_id'], set()).add(p['five9_username'].strip().lower())
+    agent_ids = list(agent_ids)
+
+    # Periods, oldest first. profile__five9_username is a JOIN on the same query,
+    # so a rename follows the entry with no extra lookup; the stored snapshot is
+    # used only once the account itself has been deleted.
+    periods = {}
+    for p in Five9PrimaryPeriod.objects.filter(agent_id__in=agent_ids).values(
+        'agent_id', 'start_date', 'end_date', 'five9_username', 'profile__five9_username'
+    ).order_by('id'):
+        name = p['profile__five9_username'] or p['five9_username'] or ''
+        periods.setdefault(p['agent_id'], []).append(
+            (p['start_date'], p['end_date'], name.strip().lower())
+        )
+
+    # Bootstrap only for agents with no history at all.
+    bootstrap = {}
+    unseeded = [aid for aid in agent_ids if aid not in periods]
+    if unseeded:
+        for p in Five9Profile.objects.filter(
+            agent_id__in=unseeded, is_primary=True
+        ).values('agent_id', 'five9_username'):
+            bootstrap.setdefault(p['agent_id'], set()).add(p['five9_username'].strip().lower())
+
+    winner_cache = {}
+
+    def _winner(agent_id, on_date):
+        """The username primary for that agent on that date, or None."""
+        key = (agent_id, on_date)
+        if key in winner_cache:
+            return winner_cache[key]
+        result = None
+        for start, end, name in reversed(periods.get(agent_id, ())):   # newest first
+            if (start is None or on_date >= start) and (end is None or on_date <= end):
+                result = name
+                break
+        winner_cache[key] = result
+        return result
 
     def counts_for_adherence(agent_id, five9_username, on_date):
-        names = primary_map.get(agent_id)
-        if not names:
+        uname = (five9_username or '').strip().lower()
+        if not uname:
             return False
-        return (five9_username or '').strip().lower() in names
+        if agent_id not in periods:
+            return uname in bootstrap.get(agent_id, ())
+        return uname == _winner(agent_id, on_date)
 
     return counts_for_adherence

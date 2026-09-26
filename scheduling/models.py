@@ -127,6 +127,66 @@ class Five9Profile(models.Model):
         return f"{self.five9_username} ({tag})"
 
 
+class Five9PrimaryPeriod(models.Model):
+    """One entry in an agent's primary-Five9-account history: "this account was
+    the primary one over this range of days".
+
+    Append-only — entries are never edited or deleted. A correction is simply a
+    newer entry. For any date, the NEWEST entry covering it decides which account
+    is primary, where "newest" is the highest pk.
+
+        start_date NULL  ->  from the beginning
+        end_date   NULL  ->  open-ended
+
+    `profile` is SET_NULL so deleting a Five9 account never destroys its history:
+    `five9_username` is a snapshot kept current by scheduling.views._save_five9_profiles
+    and read only once the account link is gone. While the link is intact the live
+    username is read through it, so a rename follows the entry automatically.
+
+    ADHERENCE DISPLAY ONLY. Billing, payroll and nomina select usernames through
+    wfm.utils.get_billable_username_map on the `billable` flag and never read this.
+    """
+    KIND_CHOICES = [
+        ('initial', 'From the beginning'),
+        ('switch', 'Switched'),
+        ('always', 'Always the primary'),
+        ('past_period', 'Past period'),
+    ]
+
+    agent = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='five9_primary_periods')
+    profile = models.ForeignKey(
+        Five9Profile, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='primary_periods',
+    )
+    five9_username = models.CharField(
+        max_length=150,
+        help_text="Snapshot of the username; used only once the account itself is gone",
+    )
+    start_date = models.DateField(null=True, blank=True, help_text="Blank means from the beginning")
+    end_date = models.DateField(null=True, blank=True, help_text="Blank means open-ended")
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name='+')
+
+    class Meta:
+        ordering = ['id']
+        indexes = [
+            models.Index(fields=['agent']),
+        ]
+
+    def resolved_username(self):
+        """The account this entry names: live through the link, snapshot once it's gone."""
+        if self.profile_id and self.profile:
+            return self.profile.five9_username
+        return self.five9_username
+
+    def __str__(self):
+        start = self.start_date.isoformat() if self.start_date else 'beginning'
+        end = self.end_date.isoformat() if self.end_date else 'open'
+        return f"{self.resolved_username()} ({start} → {end})"
+
+
 class EmploymentPeriod(models.Model):
     REASON_CHOICES = [
         ('', '— Active / No reason —'),
