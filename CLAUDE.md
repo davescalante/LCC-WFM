@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **762**. The tests are the regression gate and double as executable specs for the
+Currently **801**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Five read-only management commands exist for diagnosis; none is reachable from a request
@@ -47,6 +47,9 @@ where paid time (billable login + coded time) falls more than 5 minutes short of
 hours, or non-primary login time exceeds coded time by more than 5 minutes (`--start`/`--end`,
 default 2026-08-24 to 2026-09-27); first production run (2026-09-25): 62 of 149 reviewed days
 flagged.
+
+A sixth command, `recalculate_display_hours` (`d0b6402`), is **not** read-only like the five
+above — see the Adherence primary-account section below for what it does and why.
 
 ## The rule that matters most: there are two separate hours pipelines
 
@@ -552,6 +555,79 @@ dropdown, that narrows the grid by skill.
 - **Known limitation: the skill column shows expected coverage, not live coverage.** It counts
   agents who are scheduled and hold the selected skill(s) in this app — it cannot know whether an
   agent is actually logged into that skill in Five9 at that moment. See SYSTEM-SUMMARY.md §14.7.
+
+## Adherence primary-account landmines
+
+Adherence display hours (`d0b6402`) and money are two genuinely separate flags on
+`Five9Profile` — never mix them, and never add a fallback between them.
+
+- **Adherence display uses `is_primary`; money uses `billable`.** The Adherence tab, Admin
+  Adherence, My Adherence, the Adherence exports and Records → Hours/Attendance all count Five9
+  login and not-ready time only from the account marked `is_primary`, via the shared
+  `wfm.utils.get_adherence_primary_resolver` — no fallback to any other account. An agent with
+  no account marked primary shows zero Five9 login (their codings still count). Billing,
+  payroll, Nómina and OT verification are completely unaffected: they keep selecting usernames
+  through `wfm.utils.get_billable_username_map`, keyed on `billable`. Do not add a fallback to
+  either resolver, and do not let one read the other's flag.
+- **The old fallback (a non-primary/non-billable account counted when the primary/billable one
+  had no row that day) is what caused the Sep 18, 2026 unpaid-day incident**, and it is gone —
+  `upload_daily_file`, `rematch_daily_upload` and `_refresh_actual_hours` no longer have one.
+  An agent worked a 9-hour OT day entirely on his non-primary account; the old fallback quietly
+  showed it as worked on the Adherence tab, the supervisor saw no gap, and nobody coded it, so
+  he went unpaid. Do not reintroduce a fallback here for any reason — an agent with no primary
+  row that day must show 0, so the gap is visible and gets coded.
+- **`adherence.views._compute_display_hours` is the one shared per-day NR-deduction function**,
+  called by `upload_daily_file`, `rematch_daily_upload`, `_refresh_actual_hours`, and the
+  `recalculate_display_hours` command. It is pure arithmetic only — each caller still runs its
+  own `Coding` query and keeps its own admin-coding inclusion rule (`upload_daily_file`/
+  `rematch_daily_upload` include admin codings in the allowance base; `_refresh_actual_hours`
+  excludes them). Do not fold the `Coding` query into this function — that would silently change
+  which codings count for one of the callers.
+- **Daily Hours page**: a matched row on a non-primary account keeps its Login Time visible and
+  shows "—" in every other number column (Not Ready, Coded Time, Total Worked, NR Allowance,
+  Excess NR, Final Hours) — it is not counted for adherence display, but the raw login still
+  shows so a supervisor can see it needs coding.
+- **A lone Five9 account is auto-marked primary on save**, in
+  `scheduling.views._save_five9_profiles` (the one Five9 write path) — an agent with exactly one
+  account and no primary chosen ends up primary automatically. Two or more accounts with none
+  marked primary are left alone (ambiguous, no guessing) and correctly show zero adherence login
+  until a supervisor picks one.
+- **Three supervisors — Jesus Urbina, Jose Aranda, Misael Martinez — intentionally have a
+  non-billable primary account plus a billable second account.** This is a deliberate setup, not
+  a data error: Admin Adherence now shows near-zero login for them by design, and their time
+  must be **coded manually** rather than "fixed" by switching which account is primary — see the
+  next bullet for why switching is dangerous. Billing and payroll are unaffected, since they keep
+  reading the billable account.
+- **Primary accounts have no start date yet, so switching one changes how *past* days are
+  counted, not just future ones — do not switch anyone's primary account.** `is_primary` is a
+  single flag with no history; `get_adherence_primary_resolver` reads today's flag for every
+  date, including historical weeks. Per-account primary start dates are planned (see
+  HANDOFF.md §8) but not built. Until then, when replacing a failed Five9 account, **add the new
+  one without deleting the old one or unchecking its Billable box** — billing and payroll read
+  today's `billable` flags for past weeks too (`get_billable_username_map` has no date awareness
+  either), so unchecking Billable on a still-relevant historical account understates past pay.
+- **`recalculate_actual_hours` must never be run again.** It still selects by `billable` with a
+  no-billable-means-count-everything fallback and hardcodes `nr_ratio=0.125` — running it after
+  `d0b6402` would put extra-account time straight back into stored `actual_hours`. Use
+  `recalculate_display_hours` instead (preview by default; `--apply` runs the whole write in one
+  transaction, update-only, and never touches an Official Admin). First production run
+  (2026-09-25, range 2026-08-24 to 2026-09-27): 11 agent-days updated.
+- **Two accepted, narrow side effects of the primary-only rule, deliberately not addressed
+  further — both confirmed before shipping:** (1) `erlang._build_quit_mark_map`'s Staffing
+  reinstatement check can miss an agent marked Quit/Baja whose only login that day is on a
+  non-primary account with no status typed — Staffing code itself was not touched for this.
+  (2) The "Scheduled Hours" column on Billing v2 and the combined Adherence export can change on
+  a partial-VTO day (`P+VTO`/`T+VTO`) for such an agent, since that column is capped at hours
+  actually worked; no money column moves.
+- **The Activity Log and Agent History pages now handle a log/separation entry with no user**
+  (`2b31326`) — `{% if entry.user %}...{% else %}System{% endif %}` on Activity Log,
+  `{% else %}—{% endif %}` on Agent History's Processed By. Any management command run from the
+  shell that calls `log_action(None, ...)` (as `recalculate_display_hours` does for its one
+  summary entry) used to 500 the whole Activity Log page — `entry.user.username` used as a
+  filter *argument* raises `VariableDoesNotExist` uncaught when `entry.user` is `None`; Django
+  only silences that for the primary piped value, not for a filter's argument. If a template
+  ever needs "name, else username, else dash" for a nullable user/FK again, use the `{% if %}`
+  guard, not `|default:`.
 
 ## Conventions
 
