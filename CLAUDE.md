@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **801**. The tests are the regression gate and double as executable specs for the
+Currently **885**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Five read-only management commands exist for diagnosis; none is reachable from a request
@@ -46,10 +46,16 @@ specific days an agent has Daily Hours login time on a non-primary Five9 account
 where paid time (billable login + coded time) falls more than 5 minutes short of scheduled
 hours, or non-primary login time exceeds coded time by more than 5 minutes (`--start`/`--end`,
 default 2026-08-24 to 2026-09-27); first production run (2026-09-25): 62 of 149 reviewed days
-flagged.
+flagged. As of `29203ec` it decides "primary" **per day** through the date-aware resolver, rather
+than reading today's flag for every day in the range.
 
 A sixth command, `recalculate_display_hours` (`d0b6402`), is **not** read-only like the five
-above — see the Adherence primary-account section below for what it does and why.
+above — see the Adherence primary-account section below for what it does and why. Its planning
+and writing now live in module-level `plan_display_hours(start, end, agent_pk)` and
+`apply_display_hours(plan)` (`29203ec`); `Command._plan` delegates to the first and `handle` calls
+the second, so the command behaves exactly as before, while the primary-account write path reuses
+the identical candidate rules instead of growing a second copy of them. `start=None` means no
+lower bound, for an entry that covers every day the agent has ever worked.
 
 ## The rule that matters most: there are two separate hours pipelines
 
@@ -558,17 +564,49 @@ dropdown, that narrows the grid by skill.
 
 ## Adherence primary-account landmines
 
-Adherence display hours (`d0b6402`) and money are two genuinely separate flags on
-`Five9Profile` — never mix them, and never add a fallback between them.
+Adherence display hours (`d0b6402`, made date-aware in `29203ec`) and money are two genuinely
+separate selectors on `Five9Profile` — never mix them, and never add a fallback between them.
 
-- **Adherence display uses `is_primary`; money uses `billable`.** The Adherence tab, Admin
-  Adherence, My Adherence, the Adherence exports and Records → Hours/Attendance all count Five9
-  login and not-ready time only from the account marked `is_primary`, via the shared
-  `wfm.utils.get_adherence_primary_resolver` — no fallback to any other account. An agent with
-  no account marked primary shows zero Five9 login (their codings still count). Billing,
-  payroll, Nómina and OT verification are completely unaffected: they keep selecting usernames
-  through `wfm.utils.get_billable_username_map`, keyed on `billable`. Do not add a fallback to
-  either resolver, and do not let one read the other's flag.
+- **Adherence display resolves the primary account PER DAY; money uses `billable`.** The
+  Adherence tab, Admin Adherence, My Adherence, the Adherence exports and Records →
+  Hours/Attendance all count Five9 login and not-ready time only from the account that was
+  primary **on that date**, via the shared `wfm.utils.get_adherence_primary_resolver` — no
+  fallback to any other account. An agent with no primary on a date shows zero Five9 login for
+  that day (their codings still count). Billing, payroll, Nómina and OT verification are
+  completely unaffected: they keep selecting usernames through
+  `wfm.utils.get_billable_username_map`, keyed on `billable`, which has no date awareness. Do not
+  add a fallback to either resolver, and do not let one read the other's flag.
+- **`Five9PrimaryPeriod` (`scheduling/models.py`) is the history, and it is append-only.** Each
+  row names one account and covers a range of days: `start_date` NULL means from the beginning,
+  `end_date` NULL means open-ended. **For any day, the NEWEST row covering it wins — newest
+  meaning highest `id`.** Kinds: `initial` (from the beginning — the seed, a brand-new agent, the
+  backfill), `switch` (from a date, open-ended), `always` (from the beginning, open-ended, so it
+  supersedes everything older), `past_period` (a closed range ending before today, after which
+  the older rows apply again). **Rows are never edited and never deleted; a correction is simply
+  a newer row.** The username is both read live through the `profile` FK and snapshotted on the
+  row, so a rename follows the entry automatically while a deleted account (FK is `SET_NULL`)
+  keeps counting the days it was primary. Do not add an edit or delete path.
+- **`is_primary` still exists and is still read all over the app, but nothing writes it directly
+  any more.** It is set only by `five9_primary.sync_is_primary_from_history`, and it always
+  equals whatever the history says is primary **today** — so every existing reader (exports,
+  sorts, the Users export, Billing v2 display, `agent_list`) keeps working unchanged. Never
+  assign `is_primary` by hand; record an entry and let the sync set it. `Five9Profile` is not
+  registered in any `admin.py`, so there is no second writer to guard.
+- **`five9_primary.record_primary_period` is the single write path**, and it does four things in
+  one call: create the row, sync `is_primary`, recalculate exactly the days the row covers, and
+  write one `log_action` entry. Callers supply the transaction.
+- **`ensure_seeded` runs FIRST inside `record_primary_period`, and it is load-bearing, not
+  tidy-up.** It backfills a from-the-beginning row for an agent whose primary predates the
+  history (the same bootstrap the resolver applies on read; no recalculation, no log entry,
+  because nothing observable changes). Without it, an entry that does not cover today — a past
+  period, say — would be an agent's only history, today's winner would resolve to nobody, and the
+  sync would clear `is_primary`, silently dropping that agent to zero Five9 adherence login.
+  Running it first is also what keeps the backfilled row's `id` below the new one.
+- **The resolver is still bulk: at most TWO queries** regardless of how many agents or days are
+  asked about (one for the periods, joining the live username; one bootstrap lookup only for
+  agents with no history at all), with answers memoised per agent-day. Its signature did not
+  change and **no caller changed** — the `on_date` argument every caller already passed was the
+  seam, and it is now honoured. Do not make this per-agent or per-day.
 - **The old fallback (a non-primary/non-billable account counted when the primary/billable one
   had no row that day) is what caused the Sep 18, 2026 unpaid-day incident**, and it is gone —
   `upload_daily_file`, `rematch_daily_upload` and `_refresh_actual_hours` no longer have one.
@@ -587,31 +625,72 @@ Adherence display hours (`d0b6402`) and money are two genuinely separate flags o
   shows "—" in every other number column (Not Ready, Coded Time, Total Worked, NR Allowance,
   Excess NR, Final Hours) — it is not counted for adherence display, but the raw login still
   shows so a supervisor can see it needs coding.
-- **A lone Five9 account is auto-marked primary on save**, in
-  `scheduling.views._save_five9_profiles` (the one Five9 write path) — an agent with exactly one
-  account and no primary chosen ends up primary automatically. Two or more accounts with none
-  marked primary are left alone (ambiguous, no guessing) and correctly show zero adherence login
-  until a supervisor picks one.
-- **Three supervisors — Jesus Urbina, Jose Aranda, Misael Martinez — intentionally have a
-  non-billable primary account plus a billable second account.** This is a deliberate setup, not
-  a data error: Admin Adherence now shows near-zero login for them by design, and their time
-  must be **coded manually** rather than "fixed" by switching which account is primary — see the
-  next bullet for why switching is dangerous. Billing and payroll are unaffected, since they keep
-  reading the billable account.
-- **Primary accounts have no start date yet, so switching one changes how *past* days are
-  counted, not just future ones — do not switch anyone's primary account.** `is_primary` is a
-  single flag with no history; `get_adherence_primary_resolver` reads today's flag for every
-  date, including historical weeks. Per-account primary start dates are planned (see
-  HANDOFF.md §8) but not built. Until then, when replacing a failed Five9 account, **add the new
-  one without deleting the old one or unchecking its Billable box** — billing and payroll read
-  today's `billable` flags for past weeks too (`get_billable_username_map` has no date awareness
-  either), so unchecking Billable on a still-relevant historical account understates past pay.
+- **Switching the primary is now safe, and it only ever moves days forward from the switch
+  date.** Picking a different account on the Edit User radio records a `switch` entry starting
+  **today** and recalculates only that agent's days from then on; every earlier day keeps
+  counting the account that was primary at the time. A super admin can back-date the start, or
+  tick "always the primary" to supersede the whole history when the original setup was wrong.
+- **Removing the account that is primary today requires naming a replacement.** The save is
+  refused (`Five9SaveError`, raised inside the caller's `transaction.atomic()` and caught outside
+  it, so nothing at all is saved) rather than leaving the agent with no primary and a silently
+  zeroed Adherence tab. Deleting a non-primary account is unaffected.
+- **Auto-primary writes a from-the-beginning entry ONLY when the agent has no history at all.**
+  The lone-account rule in `_save_five9_profiles` still fires, but once any history exists it
+  records a starts-today entry instead. An automatic rule must never rewrite an agent's past —
+  only an explicit super-admin "always" may do that. Two or more accounts with none marked
+  primary are still left alone (ambiguous, no guessing).
+- **Who may do what, all enforced server-side on every save — hiding a control is not access
+  control.** Anyone who can edit users may add a Five9 account (username and Billable on the new
+  row), change label, password and role type, and switch the primary **starting today**. Super
+  admins only: delete a **saved** account, change its username, change its Billable box,
+  back-date a switch, use "always the primary", and use "Add a past primary period". The gate is
+  `scheduling.views._is_super_admin`, the same fail-closed `getattr` idiom `skill_list` uses.
+  Note the asymmetry on Billable: turning it **on** is refused, while turning it **off** by
+  omitting the checkbox is *ignored* and the stored value used — an absent checkbox is
+  indistinguishable from a field that was never rendered, so a crafted request can move it in
+  neither direction without a spurious error on honest saves.
+- **"Add a past primary period" is a JSON endpoint (`five9_primary_period_add`) with four
+  server-side gates before any write:** `@login_required` plus `AgentAccessMiddleware` (the path
+  is under `/agents/`, which is not on the portal allowlist), super admin, ordinary Django CSRF
+  via the `csrf-token` meta the app's other JSON endpoints use (nothing is `csrf_exempt`), and an
+  account queryset scoped to that agent, so a crafted request naming **another agent's account**
+  finds nothing and writes nothing. A past period never changes who is primary today.
+- **"Today" is the app's New York date** (`timezone.localdate()`, `TIME_ZONE='America/New_York'`),
+  the same today every other date in the app uses. Hermosillo is UTC−7 year-round with no DST, so
+  the app's day rolls over at **9 PM Hermosillo in summer, 10 PM in winter** — an evening switch
+  after that starts on the next calendar day, and the date picker's `max` reads as tomorrow. This
+  is deliberate: a primary-account date that disagreed with the adherence grid's date would be
+  far worse. Do not introduce a second clock.
+- **The user detail page shows one muted timeline line** under Five9 Accounts
+  (`five9_primary.format_primary_timeline`), and only when more than one account has actually
+  been primary for that agent — e.g. "Primary: marreyes until Oct 4, 2026 · marreyes2 Oct 5, 2026
+  – Oct 7, 2026 · marreyes from Oct 8, 2026 (current)". There is deliberately no raw entry list on
+  screen; the full record is the Activity Log.
+- **Three supervisors — Jesus Urbina, Jose Aranda, Misael Martinez — have a non-billable primary
+  account plus a billable second account.** This is a deliberate setup and their time is entered
+  as manual codings by design, so Admin Adherence shows near-zero login for them as intended.
+  Billing and payroll are unaffected, since they keep reading the billable account. **Do not
+  change their data**, and do not treat their setup as something to repair.
+- **When replacing a failed Five9 account, still add the new one rather than renaming the old
+  one, and leave the old one's Billable box checked.** The adherence side is now date-aware, but
+  `get_billable_username_map` is **not** — billing and payroll read today's `billable` flags for
+  past weeks too, so unchecking Billable on a still-relevant historical account understates past
+  pay. Renaming is also worse than adding: a rename follows the account's history forward, so the
+  old name stops matching the `DailyAgentHours` rows already stored under it.
 - **`recalculate_actual_hours` must never be run again.** It still selects by `billable` with a
   no-billable-means-count-everything fallback and hardcodes `nr_ratio=0.125` — running it after
   `d0b6402` would put extra-account time straight back into stored `actual_hours`. Use
   `recalculate_display_hours` instead (preview by default; `--apply` runs the whole write in one
   transaction, update-only, and never touches an Official Admin). First production run
   (2026-09-25, range 2026-08-24 to 2026-09-27): 11 agent-days updated.
+- **Migration `0055_five9primaryperiod` created the table and seeded it**, one `initial`
+  from-the-beginning entry per agent who had a primary account at the time — **no display-hours
+  recalculation and no Activity Log entries**, because it reproduces the old resolver's answers
+  exactly for every agent and every date (pinned by tests). One shape would have changed: an
+  agent with **two or more** accounts marked primary used to have both counted, and a single
+  entry can only name one, so the seed keeps the lowest `id` and clears `is_primary` on the
+  others. `five9_account_setup_report`'s 2026-09-25 run found **0** such agents, so nobody in
+  production was affected. Do not re-run or hand-edit the seed.
 - **Two accepted, narrow side effects of the primary-only rule, deliberately not addressed
   further — both confirmed before shipping:** (1) `erlang._build_quit_mark_map`'s Staffing
   reinstatement check can miss an agent marked Quit/Baja whose only login that day is on a
