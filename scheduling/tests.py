@@ -3964,3 +3964,43 @@ class Five9AccountSetupReportTests(TestCase):
         self._run()
         self.assertEqual(Agent.objects.count(), agent_count)
         self.assertEqual(Five9Profile.objects.count(), profile_count)
+
+
+class ActivityLogNullUserRenderTests(TestCase):
+    """A log_action(None, ...) entry -- exactly what recalculate_display_hours
+    writes -- must not crash the Activity Log page (production regression,
+    2026-09-25: /activity/ 500'd unfiltered and when filtered to that date)."""
+
+    def setUp(self):
+        _make_agent('activitylogstaff', role='admin', role_type='supervisor')
+        self.client.login(username='activitylogstaff', password='pw')
+
+    def test_null_user_entry_renders_as_system(self):
+        from .models import log_action
+        log_action(
+            None, 'Recalculated adherence display hours',
+            'Step 2 primary-account recalculation 2026-08-24 to 2026-09-27 — 11 agent-day(s) updated',
+        )
+        resp = self.client.get(reverse('activity_log'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'System')
+
+
+class AgentHistoryNullProcessedByRenderTests(TestCase):
+    """A separation with no recorded processed_by must not crash the Agent
+    History page -- the same VariableDoesNotExist-as-filter-argument pattern
+    that broke the Activity Log, found while checking this page for it."""
+
+    def setUp(self):
+        _make_agent('sepnulluserstaff', role='admin', role_type='supervisor')
+        self.client.login(username='sepnulluserstaff', password='pw')
+
+    def test_null_processed_by_renders_as_dash(self):
+        target = _make_agent('sepnulltarget', role='agent', role_type='regular_agent')
+        AgentSeparation.objects.create(
+            agent=target, status='finalized', separation_type='quit',
+            last_day_worked=date(2026, 9, 1), processed_by=None,
+        )
+        resp = self.client.get(reverse('agent_history', args=[target.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, '—')

@@ -69,7 +69,7 @@
             </tr>
             <tr>
                 <td style="font-size:13px;"><strong>Processed By</strong></td>
-                <td style="font-size:13px;">{{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username|default:"—" }}</td>
+                <td style="font-size:13px;">{% if agent.separation.processed_by %}{{ agent.separation.processed_by.get_full_name|default:agent.separation.processed_by.username }}{% else %}—{% endif %}</td>
             </tr>
             <tr>
                 <td style="font-size:13px;"><strong>Processed On</strong></td>
