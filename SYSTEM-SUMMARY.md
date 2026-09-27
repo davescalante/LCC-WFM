@@ -13,7 +13,7 @@
 - **Key deps** (`requirements.txt`): Django 4.2.30, gunicorn 23, whitenoise 6.11, psycopg2-binary, dj-database-url, openpyxl 3.1.5 (all Excel exports).
 - **Frontend**: server-rendered Django templates, inline CSS, vanilla JS. No SPA framework, no build step. Small AJAX/JSON endpoints handle in-place updates (status pills, cell edits, live-poll badges via `/poll/` and `/adherence/poll/`).
 - **Auth**: stock `django.contrib.auth`, login at `/accounts/login/`. Custom `SessionTimeoutMiddleware` (4h inactivity / 16h absolute) and `AgentAccessMiddleware` (role-based routing + badge counts) in `wfm/middleware.py`.
-- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 762/762 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
+- **Tests**: `scheduling/tests.py`, `erlang/tests.py`, `adherence/tests.py`, `finance/tests.py`, `nomina/tests.py` — run with `python3 manage.py test`. As of the last commit: 885/885 passing. Tests double as executable specs for the trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 - **Diagnostics**: five read-only management commands, none reachable from a request path and none writing anything — `verify_adherence_roster` (roster pk-set parity, `--weeks` default 8, exits 1 on a mismatch), `verify_ot_topups` (OT incentive top-up parity — the frozen pre-dedupe plain-`+=` summation against the current deduped one, `--weeks` default 12, exits 1 on any difference), `schedule_data_inventory` (row counts, date ranges, future-dated counts for the schedule/adherence tables, plus exact-duplicate OT slots, their priced money exposure per week, and the write path that created them), `five9_account_setup_report` (active agents' Five9Profile setups, flagging 2+ accounts with none primary, a lone non-primary account, a non-billable primary alongside a billable account, more than one billable account, and more than one primary account; first production run 2026-09-25: 3 active agents in the non-billable-primary section, 0 elsewhere) and `uncoded_extra_account_review` (reviews only the specific days an agent has Daily Hours login on a non-primary Five9 account and flags ones where paid time undershoots scheduled hours or non-primary login outpaces coded time by more than 5 minutes, `--start`/`--end` default 2026-08-24 to 2026-09-27; first production run 2026-09-25: 62 of 149 reviewed days flagged; decides "primary" per day through the date-aware resolver as of `29203ec`). See §10's `e2509eb` (roster parity), `1874540`/`370a2de` (OT top-up parity), `6877c40`/`ccb64cf` (data inventory, including the OT-duplicate sections) and `38e8b3c` (Five9 setup report + uncoded extra-account review) — cited by hash now, since two rounds of ordinal renumbering had already broken this reference when it pointed at items by number.
 - **URL mounts** (`wfm/urls.py`): scheduling at site root (duplicated at `/scheduling/`), `/adherence/`, `/erlang/`, `/finance/`, plus `admin-codings/` and `admin-adherence/` mounted directly off the **root** urlconf (not under `/finance/` — see §4), Django admin at `/admin/`, auth at `/accounts/`.
 
@@ -44,6 +44,11 @@
   - `can_access_admin_tabs` — access to Admin Codings/Admin Adherence *without* full Finance access. A non-super-admin holder is **team-scoped**: sees only their own direct reports (+ self) among Official Admins; a super admin/superuser sees everyone. Added via migration `0046_agent_can_access_admin_tabs`.
   - `can_auto_code_requests` — super-admin-only. When set, approving this agent's **coding request** creates the `Coding` automatically instead of a supervisor entering it by hand (see §6 and §10). Default `False`; added via migration `0050_agent_can_auto_code_requests`. Stripped server-side for non-super-admins by the same `AgentForm` `can_grant_admin_tabs` pop() that gates `can_access_admin_tabs` — a crafted POST is discarded at save, and editing as a non-super-admin preserves an existing `True` rather than resetting it.
   - `admin_bonus_mxn` — per-agent override of the global default admin bonus.
+  - `adherence_bonus_max_mxn` (migration `0051`) — per-agent override of the global adherence-bonus
+    cap (`BillingSettings.adherence_bonus_max_mxn`, 400 MXN default); blank uses the global value.
+    Read at both `finance._get_billable_weekly_data` and `adherence._build_rows` so the Adherence
+    tab and payroll agree. Erick (`erickv`) is currently set to 1,000 MXN (migration `0052`) — see
+    CLAUDE.md's Nómina landmines.
 - **Property**: `separation` — the latest non-cancelled `AgentSeparation` for this agent, or `None`. `current_separation` is the same, except a `finalized` separation stops counting once the agent is active again (a rehire) — see §10 `219efca`.
 
 ### `Coding` (adherence/models.py)
@@ -142,7 +147,7 @@ Payroll (MXN): base = `final_hours × hourly_rate` (per-agent MXN), plus OT ince
 Core functions: **`adherence.views._build_maps(agents, week_dates)`** and **`adherence.views._build_rows(agents, week_dates, shift_map, record_map, coded_map, ot_map=None, extra_hrs_map=None, split_labels_map=None, tmpl_by_agent_dow=None, billing_settings=None)`**.
 
 - `_build_maps` gathers, per agent per day: the resolved shift (override-beats-template lookup), the `AdherenceRecord` status, coded hours (non-admin), OT shifts, and template lookups needed for scheduled-hours computation. **Scheduled hours are computed on the fly from these maps — never stored** on a model.
-- `_build_rows` turns those maps into the actual per-agent weekly display/report rows: it zeroes scheduled hours for `SCHED_HOURS_ZEROING_STATUSES = {VTO, LOA, V}` (per §1's rule: an agent isn't expected to work that day even though a shift exists), computes green/red met-vs-shortfall variance against scheduled hours, determines bonus qualification from `BONUS_QUALIFYING`/`BONUS_DISQUALIFYING` (`wfm/constants.py`), and re-applies the weekly NR cap on top of the daily-adjusted hours for display. Note: this "Scheduled Hours" total **includes overtime** (`cal_sched = sched_hrs + ot_hrs + spill_hrs`) — a day whose only schedule is an OT shift still counts toward it; pinned by `test_shift_hours_excludes_overtime` in `finance/tests.py`.
+- `_build_rows` turns those maps into the actual per-agent weekly display/report rows: it zeroes scheduled hours for `SCHED_HOURS_ZEROING_STATUSES = {VTO, LOA, V}` (per §1's rule: an agent isn't expected to work that day even though a shift exists), computes green/red met-vs-shortfall variance against scheduled hours, determines bonus qualification from `BONUS_QUALIFYING`/`BONUS_DISQUALIFYING` (`wfm/constants.py`), and re-applies the weekly NR cap on top of the daily-adjusted hours for display. Note: this "Scheduled Hours" total **includes overtime** (`cal_sched = sched_hrs + ot_hrs + spill_hrs`) — a day whose only schedule is an OT shift still counts toward it; pinned by `test_shift_hours_excludes_overtime` in `finance/tests.py`. As of `1c1ca5d` (2026-08-24), `ot_hrs` is no longer a blind sum of each OT slot's hours — it's `adherence.views._net_ot_evening_hours(ot_shifts, shift, prev_shift, prev_not_off, prev_ot_shifts)`, which unions overlapping OT intervals and drops OT time already covered by the regular shift or the previous day's overnight spillover, so a day's expected hours can no longer be inflated by overlapping or shift-covered OT. This applies to `_build_rows` and `_compute_effective_scheduled_hours` (the Billing v2 "Effective Scheduled Hours" twin) — **not** to `_compute_shift_hours` (the Shift Hours column below), which never summed OT in the first place.
 - `_build_rows` also returns a `shift_hours` key per row: the raw weekly total from the agent's regular schedule only, gated by the same `is_scheduled_day` condition as `sched_hours` (so both totals always cover the same set of days) — but never zeroed by `SCHED_HOURS_ZEROING_STATUSES` and excluding all overtime. Powers the "Shift Hours" column on `finance.views.adherence_export`.
 - **As of `577774e`, this sum is no longer accumulated inline.** `_build_rows` delegates to a new module-level `adherence.views._compute_shift_hours(agent_pk, week_dates, shift_map, ot_map, extra_hrs_map, tmpl_by_agent_dow)` — the single implementation of this calculation. Overtime (including OT spillover from the previous day) still determines the `is_scheduled_day` gate; it just never contributes to the summed hours — that distinction is preserved exactly from the original inline logic and is easy to break if this function is ever "simplified." `_effective_template` (the previous-day template lookup this needs) was promoted in the same commit from a closure nested inside `_build_rows` to a module-level function taking `tmpl_by_agent_dow` explicitly, so the new function could reuse it instead of writing a seventh copy of best-template resolution (see §3).
 - `finance.views.billing_export_v2` reuses `_build_maps` + `_compute_shift_hours` directly for its own "Shift Hours" column — never `_build_rows`, which also carries bonus eligibility, NR re-capping, and variance math that has no business in a money export. Because both the combined Adherence export and Billing v2 now call the exact same `_compute_shift_hours` on the exact same maps, the two reports are structurally incapable of disagreeing on this number.
@@ -187,7 +192,7 @@ All Excel (`.xlsx`, via openpyxl) unless noted. Every export below calls `log_ac
 | Combined Adherence export | `finance.views.adherence_export` | Regular Adherence roster + Official Admins from Admin Adherence, one workbook, sourced exactly from `_build_maps`/`_build_rows`. Both the "Adherence" and "VTO Agents" sheets include a **Shift Hours** column (position 8, immediately after Scheduled Hours) — raw regular-schedule hours Mon–Sun, excluding overtime, not zeroed by VTO/LOA/V |
 | Codings export | `finance.views.codings_export` | One-row-per-agent weekly coding matrix (regular + admin combined), Mon–Sun day totals + weekly total; read-only, excludes `employer='LCC'` agents |
 | User Setup Audit export | `finance.views.user_audit_export` | One row per Five9 account (or one zero-account row per person) for every active/inactive user — legal name, agent name, employee ID, contact, role/permission flags, effective billing/hourly rates + rate source, team password, all Five9 credentials. Super-admin, read-only |
-| Users export | `scheduling.views.agent_list` (`?export=1`) | **Column-picker popup** (added same-day, three commits: `faf1837`, `6bfe156`, `ba5eba8`) — 16 available fields (`USER_EXPORT_FIELDS`): Agent name, Legal name, Username, Email, Employee ID, Employer, Role, Role type, Status, Supervisor, Primary/All Five9 usernames, Start date, Years with us, Full phone number, Hourly rate (MXN). Defaults to the classic 8-field set (`USER_EXPORT_DEFAULTS`) if nothing is picked. **Financial columns gated to super admins**: `USER_EXPORT_FINANCIAL = {'hourly_rate'}` is hidden from the picker for non-super-admins and stripped server-side even if crafted into the query string. Respects current status/role/supervisor filters and the same active-OR-pay-window rule as Finance |
+| Users export | `scheduling.views.agent_list` (`?export=1`) | **Column-picker popup** (added same-day, three commits: `faf1837`, `6bfe156`, `ba5eba8`) — 17 available fields (`USER_EXPORT_FIELDS`): Agent name, Legal name, Username, Email, Employee ID, Employer, Role, Role type, **Official Admin** (`dff3e0c`, 2026-09-01 — "Yes"/"No", unchecked by default, not gated as financial), Status, Supervisor, Primary/All Five9 usernames, Start date, Years with us, Full phone number, Hourly rate (MXN). Defaults to the classic 8-field set (`USER_EXPORT_DEFAULTS`) if nothing is picked. **Financial columns gated to super admins**: `USER_EXPORT_FINANCIAL = {'hourly_rate'}` is hidden from the picker for non-super-admins and stripped server-side even if crafted into the query string. Respects current status/role/supervisor filters and the same active-OR-pay-window rule as Finance |
 | OT payroll export | `scheduling.views.overtime_export` | OT shift payroll CSV/export from the OT Shifts tab |
 | Records exports | `scheduling.views.records_*` | CSV exports from each Records sub-page (Attendance, Hours, Role Log, Separations) |
 | Staffing reports | `erlang.views.erlang_download` / `erlang_save_report` | Save/download Erlang-C calculator snapshots |
@@ -252,7 +257,17 @@ All Excel (`.xlsx`, via openpyxl) unless noted. Every export below calls `log_ac
 
     Two accepted, narrow side effects, both confirmed before shipping and neither addressed further: `erlang._build_quit_mark_map`'s Staffing reinstatement check (§6.11) can miss a Quit/Baja-marked agent whose only login that day is on a non-primary account with no status typed — Staffing code itself untouched; and the "Scheduled Hours" column on Billing v2 and the combined Adherence export, capped at hours worked on a partial-VTO day, can move for such an agent since it deliberately mirrors the same stored value the Adherence tab shows — no money column moves in either case. Nómina was independently verified clean (`actual_hours` appears nowhere in it). Tests: 762 → 799.
 
-4. **Fix the pay-window exclude fanning out across every separation row, in `billing_report`, `billing_export`, `payroll_report` and `payroll_export`** (`87fc00c`) — corrects and closes HANDOFF.md §7 item 39. The old three-condition `.exclude()` in all four views judged an agent on any separation row they had ever had, not the one governing their current employment. Django compiled the three conditions into **two independent EXISTS subqueries** — "has a finalized separation" and "has a passed remove date" could be satisfied by two different rows — and the date check carried no status filter at all. That made the real defect wider than item 39 originally stated: a rehired-then-reseparated agent (two finalized rows, the shape `219efca` made easier to hit — see entry 2 below) was one way to trigger it, but so was a single **cancelled** separation that still carried a past `remove_from_adherence_date`, since the cancel path saves only `status` — no rehire needed. Either shape could silently drop a currently separated agent's entire row from their real final pay week: no error, no zero-filled line, just a missing agent and quietly understated week totals. Each agent now resolves to their single latest non-cancelled separation via a new private helper, `_closed_pay_window_pks(week_start)` in `finance/views.py`, ordered the same way `Agent.separation` resolves latest (drop cancelled, newest `processed_at` first), and only that one row's status and date are tested. The helper exists only for these four exclude-shaped roster queries — it is deliberately **not** the general pay-window predicate, which stays duplicated inline per call site by convention, and the seven `Q()`-include call sites (correct as-is, matching on any separation row) are untouched. Built as a **positive filter** on purpose: annotating the subqueries and negating them in place returns `NULL` for an agent with no separation history, and `NOT(TRUE AND NULL)` is `NULL`, which would silently drop that agent from payroll — a positive filter simply fails to match a `NULL`, so they stay on the report as before. The new drop set is a provable **subset** of the old one (if the new condition fires, that single row satisfied both old EXISTS too), so this can only ever restore a missing row, never remove one; agents with exactly one separation record — everyone in production today — are unaffected. No hours, pay, billing rate, bonus or Cost of Schedule calculation changed — only which agents are in the queryset. The 4 rehire-repro tests and 2 stale-cancelled-row tests were written first and confirmed failing against the pre-fix code; the other 10 are regression guards. Tests: 602 → 618.
+4. **A second, distinct Adherence 502: duplicate `OvertimeShift` rows drove OT-hours math to O(N²)** (`aeee9b4`, 2026-09-01) — separate from the roster-query 502 fixed by `86ab564` below. One supervisor's group had an agent with thousands of duplicate `OvertimeShift` rows (no DB uniqueness guard on agent/date — see the Landmines section), and `_net_ot_evening_hours` subtracts each day's OT intervals against the previous day's, so N duplicate rows made that subtraction O(N²) per agent-day; at ~12k dup rows/day it crossed the gunicorn timeout and the worker was killed (502, not a caught 500). Fixed in two places: `_build_maps` now collapses exact-duplicate OT rows (same agent/date/times/status) when building `ot_map` — the same `(start_time, end_time, status)` key `370a2de` later reused for the finance dedupe, see the Landmines section — so every consumer sees one row per slot; and `_net_ot_evening_hours` merges/unions the OT and covered intervals before subtracting, which returns the identical result but can no longer go quadratic. Display-only path; no billing/payroll/bonus math touched, and the duplicate rows themselves remain in the database. Tests: 437 → 441.
+
+5. **New "Official Admin" export column; per-agent adherence-bonus cap; Scheduled Hours' OT component now net of overlap** (`dff3e0c`, `1306fc0`, `1c1ca5d`) — three independent items. `dff3e0c` (2026-09-01, PR #24) adds an optional Yes/No "Official Admin" column to the Users export (§7); unchecked by default, not financial. `1306fc0` (2026-08-18) adds `Agent.adherence_bonus_max_mxn` (§3) — see CLAUDE.md's Nómina landmines for the current value on file. `1c1ca5d` (2026-08-24) changes the Scheduled Hours OT term from a blind sum to `_net_ot_evening_hours` (§6) — display only, no pay or billing change.
+
+6. **Requests can now be archived; a null-time `ShiftTemplate` no longer crashes the Adherence tab** (`787bf55`, `6bece8b`) — `787bf55` (2026-08-24) adds `AgentRequest.archived`/`archived_at`/`archived_by` (migration `0053`) and `request_archive`/`request_unarchive` endpoints: a rejected request can be archived into a collapsed Archived section; see HANDOFF.md §7 item 89 for the guard asymmetry between the two endpoints. `6bece8b` (2026-08-31) guards `_hours_evening`/`_hours_morning` and `_net_ot_evening_hours` against a non-off `ShiftTemplate` saved with null start/end times, which previously raised `TypeError` and 500'd the Adherence rows endpoint; such a template now renders as zero scheduled hours.
+
+7. **QA role_type can now log in** (`5ecaae7`, 2026-08-27) — `agent_create`/`agent_edit` no longer call `set_unusable_password()` for `role_type='qa'`; `PORTAL_ADMIN_TYPES` (`wfm/constants.py`) was left unchanged, so QA still lands on staff navigation, not the portal. Trainer remains blocked. See the corrected access table in HANDOFF.md §4 and §7 item 6.
+
+8. **Three display-only Nómina UI changes, no pay or hours effect** (`12caa50`, `5efb914`, `4a73b87`) — the Break Abuse agent picker became a searchable type-ahead and the Agent Nómina vacation banner now names each person on vacation with their hours (`12caa50`, 2026-08-18); the Welcome Bonus page gained a "Weeks left" countdown column (`5efb914`, 2026-08-24); and that page's "This wk?" column was renamed "Earned?" and now requires that week's adherence bonus to be `> 0`, not just `covers_week()`, matching the payout rule the export already used (`4a73b87`, 2026-09-01) — §11.4's payout description was already correct and unchanged by this fix.
+
+9. **Fix the pay-window exclude fanning out across every separation row, in `billing_report`, `billing_export`, `payroll_report` and `payroll_export`** (`87fc00c`) — corrects and closes HANDOFF.md §7 item 39. The old three-condition `.exclude()` in all four views judged an agent on any separation row they had ever had, not the one governing their current employment. Django compiled the three conditions into **two independent EXISTS subqueries** — "has a finalized separation" and "has a passed remove date" could be satisfied by two different rows — and the date check carried no status filter at all. That made the real defect wider than item 39 originally stated: a rehired-then-reseparated agent (two finalized rows, the shape `219efca` made easier to hit — see entry 2 below) was one way to trigger it, but so was a single **cancelled** separation that still carried a past `remove_from_adherence_date`, since the cancel path saves only `status` — no rehire needed. Either shape could silently drop a currently separated agent's entire row from their real final pay week: no error, no zero-filled line, just a missing agent and quietly understated week totals. Each agent now resolves to their single latest non-cancelled separation via a new private helper, `_closed_pay_window_pks(week_start)` in `finance/views.py`, ordered the same way `Agent.separation` resolves latest (drop cancelled, newest `processed_at` first), and only that one row's status and date are tested. The helper exists only for these four exclude-shaped roster queries — it is deliberately **not** the general pay-window predicate, which stays duplicated inline per call site by convention, and the seven `Q()`-include call sites (correct as-is, matching on any separation row) are untouched. Built as a **positive filter** on purpose: annotating the subqueries and negating them in place returns `NULL` for an agent with no separation history, and `NOT(TRUE AND NULL)` is `NULL`, which would silently drop that agent from payroll — a positive filter simply fails to match a `NULL`, so they stay on the report as before. The new drop set is a provable **subset** of the old one (if the new condition fires, that single row satisfied both old EXISTS too), so this can only ever restore a missing row, never remove one; agents with exactly one separation record — everyone in production today — are unaffected. No hours, pay, billing rate, bonus or Cost of Schedule calculation changed — only which agents are in the queryset. The 4 rehire-repro tests and 2 stale-cancelled-row tests were written first and confirmed failing against the pre-fix code; the other 10 are regression guards. Tests: 602 → 618.
 
 2. **Allow processing a new separation for a rehired agent** (`219efca`) — a finalized separation used to block a new one forever, even after the agent came back. `process_separation`'s existing-separation check read `agent.separation` (the latest non-cancelled `AgentSeparation`), and finalizing never deletes that row — so a rehired agent, now `status='active'` again, still failed the check against their old finalized separation and got "This agent already has an active separation. Use Update to modify it," with no button on their profile to start a new one. New `Agent.current_separation` property, alongside the unchanged `Agent.separation`: identical, except a `finalized` separation stops counting once the agent is `active` again. The signal is exact rather than heuristic — finalizing always sets the agent inactive, so `finalized` + `active` can only be produced by a human setting the agent back to Active on the Edit User form, i.e. a rehire; no code path can reach that combination any other way. An `in_progress` separation is unaffected and always counts, which is what preserves "already has an active separation, use Update" for a genuine duplicate. `process_separation`'s blocking check and `agent_detail`'s template gating (the Process Separation button and the separated/in-progress banners) both switched from `agent.separation` to `current_separation`; the template half mattered more than the view half, since it was what a rehired agent's profile actually showed — a stale "Agent Separated" banner with no button underneath it, regardless of what the view would have allowed. One reference, the Finalize modal's JS date prefill (`agent_detail.html:487`), deliberately stays on `agent.separation`: it only renders when an `in_progress` separation exists, the one case where both properties agree. Old separation records are never deleted, modified, or hidden — a rehired agent ends up with both rows on file, and Records → Separations lists both since it queries `AgentSeparation` directly rather than through either property. `Agent.separation`, `_finalize_separation`, `update_separation`, and `agent_history.html` are all untouched. No payroll, billing, bonus, Cost of Schedule, or Staffing Calculator behavior changed. **Operational note, not a code detail: the correct way to rehire someone is to reactivate their existing agent record (Edit User → Status → Active) rather than create a new one, and add a new `EmploymentPeriod` row for the new stint at the same time** — that period row is what the Staffing Calculator's Quit/Baja rehire guard (`4092f1b`, entry 4 below) reads to tell a genuine rehire apart from an agent who was never properly re-onboarded. Tests: 594 → 602.
 
@@ -391,11 +406,12 @@ The bracketed terms apply in the corrected ("Mine") variant only.
 | Transportation | `WeeklyPayInput.transportation` (manual add-list) | — | deducted |
 | Prestamo | `Loan.installment_for_week(week_start)`, summed | — | deducted |
 
-**Holiday hours.** `_holiday_worked_hours` recomputes per holiday day from `DailyAgentHours`:
-`worked = login_h − max(0, nr_h − login_h × nr_ratio)`. A day already marked `'Holiday'` in
-adherence (scheduled, not worked) is excluded from the worked set and paid the 1× not-worked way
+**Holiday hours.** `_holiday_worked_hours_incl_coded` (§13.3) computes NR-adjusted connected
+(login) holiday hours plus coded hours on the holiday date; as of `b9229a0` the not-ready discount
+is a flat 1 hour/day (not `login_h × nr_ratio`). A day already marked `'Holiday'` in adherence
+(scheduled, not worked) is excluded from the worked login set and paid the 1× not-worked way
 instead. Because the engine's `final_hrs` already contains the 1× for a worked holiday, the +2×
-premium makes it triple.
+premium makes it triple. See §13.3 for the full current rule and its history.
 
 ### 11.5 "Yours" vs "Mine"
 
@@ -692,16 +708,29 @@ hand.
 ### 13.3 Holiday-worked pay
 
 Trigger: a `Holiday` row whose date falls inside the week, plus `DailyAgentHours` rows for that
-date. `nomina.views._holiday_worked_hours(agents, holiday_dates, nr_ratio)`:
+date. `nomina.views._holiday_worked_hours(agents, holiday_dates, nr_ratio=Decimal('0.125'))`
+computes NR-adjusted **connected (login)** holiday hours; `nr_ratio` is accepted for signature
+compatibility only and is no longer read anywhere in the function body (as of `b9229a0`,
+2026-09-21 — see below). `_holiday_worked_hours_incl_coded(agents, holiday_dates, nr_ratio,
+admin_coding)` wraps it to add coded hours on top and is what both nóminas actually call:
 
 - Any `(agent, date)` carrying `AdherenceRecord.status='Holiday'` is dropped from the worked set
   entirely, even if stray Five9 login exists for that day (`4f152b0`) — it is paid the
-  not-worked way instead, never both.
-- Rows are restricted to the agent's **billable** Five9 usernames. An agent with no billable
+  not-worked way instead, never both. (This exclusion lives only inside `_holiday_worked_hours`,
+  so it applies to the login portion; coded hours added by `_incl_coded` are not excluded by it.)
+- Login rows are restricted to the agent's **billable** Five9 usernames. An agent with no billable
   profile has no entry in `get_billable_username_map`, and the `bn is None` branch then counts
   **every** username on the row.
-- Per holiday day: `worked = max(0, login_h − max(0, nr_h − login_h × nr_ratio))`, summed across
-  the week's holiday days.
+- **As of `b9229a0` (2026-09-21), the not-ready discount is a flat 1-hour allowance per holiday
+  day**, not `login_h × nr_ratio` (that was the pre-`b9229a0` rule): `worked_login = max(0,
+  login_h − max(0, nr_h − 1))`, summed across the week's holiday days. The deduction reduces only
+  the connected/login portion, never coded time.
+- **As of `b9229a0`, the premium base is connected (login) + coded, not login alone.**
+  `_holiday_worked_hours_incl_coded` adds each person's own coded hours on the holiday date —
+  regular codings for agents (`admin_coding=False`), admin codings for official admins
+  (`admin_coding=True`, via the thin wrapper `_admin_holiday_worked_hours`, added `dbe806b`,
+  2026-09-19/21) — on top of `worked_login`. Coded time is off-Five9 work, so it adds to (never
+  overlaps) login hours, matching the billable engine's own `connected = login + coded`.
 
 Where it lands, on **both** nóminas and in **both** the Yours and Mine variants:
 
@@ -709,32 +738,38 @@ Where it lands, on **both** nóminas and in **both** the Yours and Mine variants
 holiday_pay = worked_hrs × rate × 2   +   not_worked_hrs × rate
 ```
 
-into Subtotal, overridable per agent-week by a `holiday` `NominaOverride` (the Overrides page
-exposes it for agents and for official admins). The engine's `final_hrs` already carries the
-holiday's hours at 1× through base pay, so the `+2×` makes it triple **when the two hour figures
-agree** — they are produced by different rules (13.4) and need not.
+into Subtotal, where `worked_hrs` is `_holiday_worked_hours_incl_coded`'s connected+coded total
+(overridable per agent-week by the **hours-based** `holiday_hrs` `NominaOverride` — see §11.4/§11.7;
+the old amount-based `holiday` field is no longer read on either sheet, as of `fac266c`/`51c2fb1`).
+The engine's `final_hrs` already carries the holiday's hours at 1× through base pay, so the `+2×`
+makes it triple **when the two hour figures agree** — they are produced by different rules (13.4)
+and need not.
 
 The not-worked case is `_holiday_not_worked_hours`: for holidays inside the week where the agent
 has `status='Holiday'`, the day's resolved scheduled hours (plus split-shift blocks) are paid at
-1× and add **nothing** to Hours Worked.
+1× and add **nothing** to Hours Worked — **capped at 8h/day** since `1555517` (2026-09-21; a day
+scheduled for more than 8h pays `rate × 8`, mirroring the vacation-day cap). The Agent Nómina's
+Holiday-hours column shows **worked** hours only (`hol_hrs`, not `hol_hrs + hol_nw_hrs`) — a
+not-worked holiday displays 0 hours even though it is still paid via Holiday Pay, as of `415fdad`
+(2026-09-21), which reverted the display half of `1555517`.
 
-### 13.4 The per-day 12.5% allowance is a third, separate NR rule
+### 13.4 The per-day not-ready allowance is a third, separate NR rule
 
-Three not-ready rules coexist. All three read the same `settings.nr_ratio`, and they genuinely
-disagree — deliberately.
+Three not-ready rules coexist. The money engine and the daily display rule read
+`settings.nr_ratio`; the holiday rule no longer does — it is a flat 1-hour allowance, changed from
+a ratio in `b9229a0` (2026-09-21). All three genuinely disagree — deliberately.
 
 | Rule | Allowance base | Scope | Cap |
 |---|---|---|---|
 | Money engine — `finance.views._get_billable_weekly_data` | `(login + coded) × nr_ratio` | the whole week, one bucket | yes: `nr_cap_regular_hours` 6 h / `nr_cap_kill_team_hours` 7 h; a VTO-type day substitutes the flat cap |
 | Daily display — `adherence.views._refresh_actual_hours` | `(login + coded) × nr_ratio` | one calendar day | none |
-| Holiday premium — `nomina.views._holiday_worked_hours` | **`login × nr_ratio`** (coded time excluded) | one holiday day | none |
+| Holiday premium — `nomina.views._holiday_worked_hours` | **flat 1 hour/day** (login portion only; coded time is never discounted) | one holiday day | none |
 
-The holiday rule is the only one that leaves coded time out of the allowance base, and the only
-per-day rule that feeds money. Two consequences follow directly: coded time on a holiday enlarges
-the allowance for base pay but not for the premium; and because the weekly rule is pooled across
-seven days and capped while the holiday rule is neither, the hours the premium is paid on can
-differ from that same day's contribution to `final_hrs`. This is the intended behavior from
-`d5ecf07` — the 2× premium is paid on the day's productive hours, not on raw login.
+The holiday rule is the only one on a flat allowance rather than a ratio, and the only per-day
+rule that feeds money. Because the weekly rule is pooled across seven days and capped while the
+holiday rule is neither, the hours the premium is paid on can differ from that same day's
+contribution to `final_hrs`; this is not a bug to reconcile — the premium is meant to be paid on
+the day's productive hours (`d5ecf07`, refined by `b9229a0`).
 
 ### 13.5 Holiday's place in the status sets
 

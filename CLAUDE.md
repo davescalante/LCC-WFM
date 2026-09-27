@@ -178,8 +178,14 @@ lower bound, for an entry that covers every day the agent has ever worked.
   used to loop every `status='completed'` `OvertimeShift` and do a plain `+= total_shift_hours()`
   per incentive type, so a slot recorded twice paid its premium twice through `ph_topup_mxn` /
   `ot_1_5_topup_mxn` and `total_pay_mxn`; `adherence.views._build_maps` already collapsed exact
-  duplicates on that key (and `_net_ot_evening_hours` unions intervals rather than summing). The
-  finance loop now uses the identical key. Four things about it are deliberate:
+  duplicates on that key — added in `aeee9b4` (2026-09-01) to stop a second, distinct Adherence
+  502, separate from the roster-query 502 fixed by `86ab564` above: thousands of duplicate
+  `OvertimeShift` rows for one agent drove `_net_ot_evening_hours`'s interval subtraction to
+  O(N²) per agent-day and crossed the gunicorn timeout on that one supervisor's group load. The
+  fix dedupes in `_build_maps` (the same `(start_time, end_time, status)` key) and merges/unions
+  the OT and covered intervals before subtracting, so the returned hours are unchanged and the
+  cost stops scaling with duplicate count (and `_net_ot_evening_hours` unions intervals rather
+  than summing). The finance loop now uses the identical key. Four things about it are deliberate:
   - **Split OT is untouched by construction.** Two rows on one day at *different* hours have
     different keys and both still count — which is what migration `0018` dropped
     `unique_together` for. Do not widen the key to `(agent, date)`.
@@ -250,6 +256,14 @@ lower bound, for an entry that covers every day the agent has ever worked.
   touched by `agent_my_requests`** — that flag belongs to `agent_available_ot`, the only view that
   mutates it, and marking it read from a second page the agent might glance at without noticing
   the OT row would clear the unread badge before they ever saw the outcome on its native page.
+- **Rejected requests can be archived, but the archive/unarchive pair is asymmetric.**
+  `scheduling.views.request_archive` (migration `0053`: `AgentRequest.archived`/`archived_at`/
+  `archived_by`) requires `status='rejected'` before archiving; `request_unarchive` has no status
+  check at all. Intent unconfirmed (question sent to Jhonatan 2026-09-27) whether
+  `request_unarchive` is meant to stay unguarded, or should also be restricted to rejected
+  requests for symmetry. Archived rejected requests move to a collapsed Archived section in the
+  Requests tab; Pending/Approved/Done and the underlying `AgentRequest` row are unaffected —
+  archiving never deletes anything.
 
 ## Nómina landmines
 
@@ -310,7 +324,27 @@ nothing in `nomina/` reads `AdherenceRecord.actual_hours`; all hours and base pa
   has no billable profile, so such an agent can still be paid a 2× holiday premium on non-billable
   hours. The guard's separated-agent carve-out uses only the inactive half of the pay-window
   predicate on purpose — `_pay_window()`'s `status='active'` branch would spare the very agents the
-  guard exists for (`4f23ec5`).
+  guard exists for (`4f23ec5`). Intent unconfirmed (question sent to Jhonatan 2026-09-27) whether
+  the holiday-premium exposure above is intended.
+- **The guard only ever fires when `track_attendance=False`.** Its condition is `not
+  track_attendance and not any(billable profiles) and not separated_with_codings` — all three.
+  An agent with `track_attendance=True` and **no** billable Five9 profile trips no guard at all:
+  base pay, hours and the adherence bonus come straight from `_get_billable_weekly_data`'s own
+  `bn is None → count everything` fallback, i.e. computed from **every** Five9 account the agent
+  has, billable-flagged or not, with no correction. No test in `nomina/tests.py` covers this
+  combination. Intent unconfirmed (question sent to Jhonatan 2026-09-27) whether the guard should
+  widen to catch it. **As of 2026-09-27, no agent with `track_attendance=True` has zero billable
+  Five9 accounts** — this is a live gap in the code, not a live discrepancy in anyone's pay.
+- **`Agent.adherence_bonus_max_mxn`** (migration `0051`) lets one agent's adherence-bonus cap
+  override the global `BillingSettings.adherence_bonus_max_mxn` (400 MXN) default; blank means use
+  the global value, an explicit `0` is honored as a zero cap. Read at both
+  `finance.views._get_billable_weekly_data` and `adherence.views._build_rows` so the Adherence tab
+  and payroll always agree; the proration rule below the full-hours threshold
+  (`min(cap, final_hrs / full_hours × cap)`) is unchanged either way. **Erick (`erickv`) is
+  currently set to 1,000 MXN** (migration `0052`, current data as of that migration — retroactive,
+  since no Nómina week for him has been finalized, so past weeks recompute at the higher cap too).
+  Intent unconfirmed (question sent to Jhonatan 2026-09-27) whether 1,000 MXN is meant to stay his
+  standing value or was a one-time correction.
 - **Net LPO is the one live consumer of `PayrollAdjustment.commission_deduction`.** Everywhere else
   that field is stored and displayed but never subtracted; in `_agent_nomina_data` the corrected
   ("Mine") LPO is `gross × (1 − commission_pct/100)`. Changing that field's meaning changes pay here.
