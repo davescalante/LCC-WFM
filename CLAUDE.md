@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **885**. The tests are the regression gate and double as executable specs for the
+Currently **887**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Five read-only management commands exist for diagnosis; none is reachable from a request
@@ -711,12 +711,13 @@ separate selectors on `Five9Profile` — never mix them, and never add a fallbac
   past weeks too, so unchecking Billable on a still-relevant historical account understates past
   pay. Renaming is also worse than adding: a rename follows the account's history forward, so the
   old name stops matching the `DailyAgentHours` rows already stored under it.
-- **`recalculate_actual_hours` must never be run again.** It still selects by `billable` with a
-  no-billable-means-count-everything fallback and hardcodes `nr_ratio=0.125` — running it after
-  `d0b6402` would put extra-account time straight back into stored `actual_hours`. Use
-  `recalculate_display_hours` instead (preview by default; `--apply` runs the whole write in one
-  transaction, update-only, and never touches an Official Admin). First production run
-  (2026-09-25, range 2026-08-24 to 2026-09-27): 11 agent-days updated.
+- **`recalculate_actual_hours` is retired (`4bb0142`).** It used to select by `billable` with a
+  no-billable-means-count-everything fallback and hardcode `nr_ratio=0.125` — running it after
+  `d0b6402` would have put extra-account time straight back into stored `actual_hours`. It now
+  refuses to run: writes nothing, ignores all arguments, prints a retirement message and exits
+  non-zero. Use `recalculate_display_hours` instead (preview by default; `--apply` runs the whole
+  write in one transaction, update-only, and never touches an Official Admin). First production
+  run (2026-09-25, range 2026-08-24 to 2026-09-27): 11 agent-days updated.
 - **Migration `0055_five9primaryperiod` created the table and seeded it**, one `initial`
   from-the-beginning entry per agent who had a primary account at the time — **no display-hours
   recalculation and no Activity Log entries**, because it reproduces the old resolver's answers
