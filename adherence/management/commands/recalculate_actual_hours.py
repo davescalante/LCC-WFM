@@ -1,72 +1,35 @@
-from decimal import Decimal
+"""RETIRED. Do not run.
+
+This command used to recompute AdherenceRecord.actual_hours by selecting
+Five9 hours through the `billable` flag, with a fallback that counted EVERY
+account when no billable profile was set, and a hardcoded nr_ratio of 0.125.
+That fallback is what caused the Sep 18, 2026 unpaid-day incident: an agent's
+9-hour OT day worked entirely on a non-primary account was counted as worked
+on the Adherence tab, so nobody coded it and he went unpaid.
+
+Kept as a stub (rather than deleted) so an old invocation -- cron, a stale
+runbook, muscle memory -- fails loudly instead of silently doing nothing or
+erroring on an import that no longer exists. It writes nothing and accepts
+no arguments (old or new); the signature swallows anything passed and never
+touches the database.
+
+Use adherence.management.commands.recalculate_display_hours instead --
+preview by default, --apply to write.
+"""
 from django.core.management.base import BaseCommand
-from adherence.models import DailyAgentHours, Coding, AdherenceRecord
-from scheduling.models import Five9Profile
+
+RETIREMENT_MESSAGE = (
+    "recalculate_actual_hours is retired. It selected hours by the billable "
+    "flag with a fallback that counted every account when none was billable, "
+    "and hardcoded a 0.125 NR ratio -- running it would put extra-account "
+    "time back into adherence display hours. Use recalculate_display_hours "
+    "instead (preview by default; --apply to write). Nothing was written."
+)
 
 
 class Command(BaseCommand):
-    help = 'Recalculate actual_hours for all agents on all uploaded dates using current codings'
+    help = 'RETIRED -- writes nothing. Use recalculate_display_hours instead.'
 
     def handle(self, *args, **options):
-        dahs = (
-            DailyAgentHours.objects
-            .filter(agent__isnull=False)
-            .select_related('upload', 'agent__user')
-            .order_by('upload__date', 'agent__user__last_name')
-        )
-
-        total = dahs.count()
-        corrected = 0
-        unchanged = 0
-        skipped = 0
-
-        self.stdout.write(f'Processing {total} agent-day upload records...')
-
-        billable_usernames_cache = {}
-
-        for dah in dahs:
-            agent_id = dah.agent_id
-            upload_date = dah.upload.date
-
-            # Only update actual_hours from billable profiles
-            if agent_id not in billable_usernames_cache:
-                billable_usernames_cache[agent_id] = set(
-                    Five9Profile.objects.filter(agent_id=agent_id, billable=True)
-                    .values_list('five9_username', flat=True)
-                )
-            billable_names = billable_usernames_cache[agent_id]
-            if billable_names and dah.five9_username not in billable_names:
-                skipped += 1
-                continue  # Skip non-billable profile rows
-
-            coded_secs = sum(
-                c.total_seconds_count()
-                for c in Coding.objects.filter(agent_id=agent_id, date=upload_date)
-            )
-            total_secs = dah.login_seconds + coded_secs
-            allowance_secs = int(total_secs * 0.125)
-            excess_secs = max(0, dah.not_ready_seconds - allowance_secs)
-            login_final_secs = max(0, dah.login_seconds - excess_secs)
-            new_hours = Decimal(str(round(login_final_secs / 3600, 6)))
-
-            record = AdherenceRecord.objects.filter(agent_id=agent_id, date=upload_date).first()
-            old_hours = record.actual_hours if record else None
-
-            if old_hours != new_hours:
-                AdherenceRecord.objects.update_or_create(
-                    agent_id=agent_id,
-                    date=upload_date,
-                    defaults={'actual_hours': new_hours},
-                )
-                agent_name = dah.agent.agent_name or dah.agent.user.get_full_name()
-                self.stdout.write(
-                    f'  UPDATED {agent_name} on {upload_date}: '
-                    f'{old_hours} → {new_hours}'
-                )
-                corrected += 1
-            else:
-                unchanged += 1
-
-        self.stdout.write(self.style.SUCCESS(
-            f'\nDone. {corrected} record(s) corrected, {unchanged} already correct, {skipped} non-billable rows skipped.'
-        ))
+        self.stdout.write(RETIREMENT_MESSAGE)
+        raise SystemExit(1)

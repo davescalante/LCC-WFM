@@ -2343,6 +2343,59 @@ class RecalculateDisplayHoursCommandTests(TestCase):
         self.assertEqual(AuditLog.objects.count(), log_count_before)
 
 
+class RecalculateActualHoursRetiredTests(TestCase):
+    """recalculate_actual_hours is retired: it must never write, regardless of
+    how it's invoked, and must always fail loudly rather than silently doing
+    nothing or succeeding. Seeds data in the exact shape the old (billable
+    flag + count-everything fallback) command used to rewrite, to prove the
+    stub leaves it untouched."""
+
+    def setUp(self):
+        _settings()
+        self.agent = _make_agent('retired_cmd_agent')
+        Five9Profile.objects.create(agent=self.agent, five9_username='retired_cmd_agent_primary',
+                                    is_primary=True, billable=True)
+        d = date(2026, 9, 14)
+        upload, _ = DailyUpload.objects.get_or_create(date=d, defaults={'filename': 'd.csv', 'row_count': 1})
+        DailyAgentHours.objects.create(upload=upload, agent=self.agent,
+                                       five9_username='retired_cmd_agent_extra',
+                                       login_seconds=8 * 3600, not_ready_seconds=0)
+        self.record = AdherenceRecord.objects.create(
+            agent=self.agent, date=d, status='P', actual_hours=Decimal('1.000000'))
+
+    def _snapshot(self):
+        return (
+            tuple(AdherenceRecord.objects.order_by('pk').values_list('agent_id', 'date', 'actual_hours')),
+            DailyAgentHours.objects.count(),
+        )
+
+    def test_bare_invocation_writes_nothing_and_exits_nonzero(self):
+        before = self._snapshot()
+        out = io.StringIO()
+        from django.core.management import call_command
+        with self.assertRaises(SystemExit) as ctx:
+            call_command('recalculate_actual_hours', stdout=out)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(self._snapshot(), before)
+        message = out.getvalue()
+        self.assertIn('retired', message.lower())
+        self.assertIn('recalculate_display_hours', message)
+
+    def test_old_style_arguments_are_ignored_and_still_write_nothing(self):
+        """The old command never defined any custom flags -- only Django's
+        built-in ones (e.g. --verbosity, --traceback) were ever valid on it.
+        Passing those through must still be a no-op rather than reviving the
+        old behavior."""
+        before = self._snapshot()
+        out = io.StringIO()
+        from django.core.management import call_command
+        with self.assertRaises(SystemExit) as ctx:
+            call_command('recalculate_actual_hours', stdout=out, verbosity=2, traceback=True)
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(self._snapshot(), before)
+
 
 class PrimaryPeriodDateAwarenessTests(TestCase):
     """Switching an agent's primary Five9 account must change which account counts
