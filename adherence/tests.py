@@ -1772,6 +1772,141 @@ class PrimaryAccountDisplayHoursTests(TestCase):
         self.assertEqual(rec.actual_hours, Decimal('8'))
 
 
+class CodingAfterUploadRefreshTests(TestCase):
+    """A coding added on the Codings tab AFTER that day's Daily Hours file was
+    uploaded must re-run the daily NR deduction and rewrite the stored
+    actual_hours.
+
+    These drive the real views the way the browser does. templates/adherence/
+    codings.html renders the pk inside quotes, so agent_id arrives as a JSON
+    STRING; _refresh_actual_hours passes it to get_adherence_primary_resolver,
+    which uses it as a dict key against int keys from the database. The lookup
+    missed, no row counted as primary, and the recompute returned without
+    writing — silently, with an ok:True response. Regression for the production
+    week of 2026-09-28 (Mark Reyes and three others).
+
+    Existing coverage all calls _refresh_actual_hours(agent.pk, d) with an int
+    and a date object, which is why the suite stayed green.
+    """
+
+    LOGIN_SECS = 11427                        # 3:10:27
+    NR_SECS = 3518                            # 0:58:38
+    CODED_SECS = 24885                        # 6:54:45
+    UPLOAD_TIME_HOURS = Decimal('2.593611')   # 2:35:37 — allowance on login only
+    WITH_CODING_HOURS = Decimal('3.174167')   # 3:10:27 — allowance includes coded time
+
+    def setUp(self):
+        _settings()
+        staff_user = User.objects.create_user('codingstaff', password='x')
+        Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='Coding Staff', status='active',
+        )
+        self.client.login(username='codingstaff', password='x')
+
+        self.agent = _make_agent('marreyes')
+        Five9Profile.objects.create(
+            agent=self.agent, five9_username='marreyes', is_primary=True, billable=True,
+        )
+        self.day = date(2026, 9, 28)
+        upload = DailyUpload.objects.create(date=self.day, filename='d.csv', row_count=1)
+        DailyAgentHours.objects.create(
+            upload=upload, agent=self.agent, five9_username='marreyes',
+            login_seconds=self.LOGIN_SECS, not_ready_seconds=self.NR_SECS,
+        )
+        # What the upload path stored the next morning, before any coding existed.
+        AdherenceRecord.objects.create(
+            agent=self.agent, date=self.day, actual_hours=self.UPLOAD_TIME_HOURS,
+        )
+
+    def _post_add(self, agent_id, start='05:00:00', end='11:54:45'):
+        """Exactly the payload templates/adherence/codings.html sends."""
+        return self.client.post(
+            reverse('add_coding_ajax'),
+            data=json.dumps({
+                'agent_id': agent_id, 'date': self.day.isoformat(),
+                'start_time': start, 'end_time': end, 'notes': '',
+            }),
+            content_type='application/json',
+        )
+
+    def _stored(self):
+        return AdherenceRecord.objects.get(agent=self.agent, date=self.day).actual_hours
+
+    # ── 1–3: the bug ──────────────────────────────────────────────────────────
+
+    def test_add_coding_via_view_updates_stored_hours_production_case(self):
+        """Mark Reyes, Monday 2026-09-28. Login 3:10:27, not-ready 0:58:38,
+        coding 6:54:45 added the next day. With the coded time in the allowance
+        base there is no excess NR at all, so the stored value must be the full
+        3:10:27 — which makes the Adherence cell 10:05:12, matching Daily Hours."""
+        resp = self._post_add(str(self.agent.pk))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        self.assertEqual(self._stored(), self.WITH_CODING_HOURS)
+
+    def test_refresh_actual_hours_accepts_string_agent_id(self):
+        from adherence.views import _refresh_actual_hours
+        Coding.objects.create(agent=self.agent, date=self.day, start_time=time(5, 0),
+                              end_time=time(11, 54, 45), is_admin_coding=False)
+        _refresh_actual_hours(str(self.agent.pk), self.day)
+        self.assertEqual(self._stored(), self.WITH_CODING_HOURS)
+
+    def test_refresh_actual_hours_accepts_string_date(self):
+        """The codings_week POST branch passes both values as raw POST strings."""
+        from adherence.views import _refresh_actual_hours
+        Coding.objects.create(agent=self.agent, date=self.day, start_time=time(5, 0),
+                              end_time=time(11, 54, 45), is_admin_coding=False)
+        _refresh_actual_hours(str(self.agent.pk), self.day.isoformat())
+        self.assertEqual(self._stored(), self.WITH_CODING_HOURS)
+
+    # ── 4–6: controls — these passed before the fix and must keep passing ─────
+
+    def test_add_coding_via_view_with_integer_agent_id_still_updates(self):
+        """The working shape. Pins that the argument type was the only
+        discriminator, and that the fix did not disturb it."""
+        resp = self._post_add(self.agent.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        self.assertEqual(self._stored(), self.WITH_CODING_HOURS)
+
+    def test_edit_coding_via_view_updates_stored_hours(self):
+        from adherence.views import create_coding
+        coding = create_coding(
+            agent_id=self.agent.pk, coding_date=self.day,
+            start_time='05:00:00', end_time='11:54:45',
+        )
+        self.assertEqual(self._stored(), self.WITH_CODING_HOURS)
+
+        resp = self.client.post(
+            reverse('edit_coding_ajax'),
+            data=json.dumps({'coding_id': coding.pk, 'start_time': '05:00:00',
+                             'end_time': '05:10:00', 'notes': ''}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        # 600s coded → allowance int(12027×.125)=1503, excess 2015, 11427−2015=9412s
+        self.assertEqual(self._stored(), Decimal('2.614444'))
+
+    def test_delete_coding_via_view_updates_stored_hours(self):
+        from adherence.views import create_coding
+        coding = create_coding(
+            agent_id=self.agent.pk, coding_date=self.day,
+            start_time='05:00:00', end_time='11:54:45',
+        )
+        self.assertEqual(self._stored(), self.WITH_CODING_HOURS)
+
+        resp = self.client.post(
+            reverse('delete_coding_ajax'),
+            data=json.dumps({'coding_id': coding.pk}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        self.assertEqual(self._stored(), self.UPLOAD_TIME_HOURS)
+
+
 class SupervisorNonBillablePrimaryTests(TestCase):
     """A primary account that is NOT billable, plus a second billable account —
     the three-supervisor production shape (Jesus Urbina, Jose Aranda, Misael

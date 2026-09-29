@@ -42,6 +42,12 @@ def _refresh_actual_hours(agent_id, coding_date):
     returns without writing (the display value for that day is whatever the
     upload/reconcile path already wrote — zero, if a Daily Hours row exists for
     that date at all)."""
+    # Normalised because agent_id is a DICT KEY inside the resolver, not just an
+    # ORM filter value: the Codings tab posts it as a string and an int-keyed
+    # lookup would miss, silently skipping the recompute.
+    agent_id = int(agent_id)
+    if isinstance(coding_date, str):
+        coding_date = date.fromisoformat(coding_date)
     counts_for_adherence = get_adherence_primary_resolver([agent_id])
     rows = list(DailyAgentHours.objects.filter(
         upload__date=coding_date, agent_id=agent_id
