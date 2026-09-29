@@ -112,8 +112,9 @@ Everyone has exactly one `User` + one `Agent`. Access is entirely by `role`/`rol
 | Staffing | `/erlang/` | Staff | `erlang.views.erlang_calculator` — upload, grid, save/download reports. Filters panel narrows by skill and adds a skill coverage column beside Scheduled Staff — see §14.7 |
 | Requests | `/requests/` , `/requests/mine/` | Staff | `requests_list` (Team Requests) / `staff_my_requests` (My Requests) |
 | My Requests | `/agent/my-requests/` | Portal | `agent_my_requests` |
+| Vacations / My Vacation | `/vacations/` (root-mounted) | Staff + portal (`/vacations/` is in `_AGENT_ALLOWED`) | `nomina.views.vacations` — `@login_required` only; `role='admin'` or super admin sees the whole active roster, anyone else only their own row; the adjustment POST is super-admin-gated. See §12 |
 | Records | `/records/`, `/records/hours/`, `/records/roles/`, `/records/separations/` | Staff | Read-only filtered lists + CSV export |
-| Activity | `/activity/` | Staff | `activity_log` — last 500 `AuditLog` entries |
+| Activity | `/activity/` | Staff | `activity_log` — last 500 `AuditLog` entries. Not linked from the main nav — reached from the four Records sub-pages (Attendance, Hours, Role Log, Separations) |
 | Finance | `/finance/` | **Super admins only** (`finance_access_required` — `is_super_admin` or Django `is_superuser`) | `finance_dashboard` |
 | Billing Report | `/finance/billing/`, export `/finance/billing/export/`, v2 export `/finance/billing/v2/export/` | Super admin | `billing_report` / `billing_export` / `billing_export_v2` |
 | Payroll Report | `/finance/payroll/`, export `/finance/payroll/export/` | Super admin | `payroll_report` / `payroll_export` |
@@ -121,8 +122,10 @@ Everyone has exactly one `User` + one `Agent`. Access is entirely by `role`/`rol
 | (Finance) Export Adherence | `/finance/adherence/export/` | Super admin | `finance.views.adherence_export` |
 | (Finance) User Setup Audit | `/finance/user-audit/export/` | Super admin | `finance.views.user_audit_export` |
 | (Finance) Codings export | `/finance/codings/export/` | Super admin | `finance.views.codings_export` |
+| Nómina | `/nomina/` (+ `inputs/`, `agents/`, `admins/`, `break-abuse/`, `welcome/`, `overrides/`, `holidays/`, `exports/`, `finalize/`) | **Super admins only** (`nomina_access_required` — `is_super_admin` or Django `is_superuser`) | `nomina.views` — weekly MXN payroll, Infinity employees only, two Excel files a week. See §11 |
+| (Nómina) Loans | `/nomina/loans/` | Super admin **or** `can_manage_loans` (`loan_access_required`) | `nomina.views.loans` — the one Nómina page outside the super-admin gate; a `can_manage_loans` holder who is not a super admin gets a standalone Loans nav link. See §11.9 |
 
-Access-control functions worth knowing: `finance._has_finance_access` / `finance_access_required` (is_super_admin or superuser); `finance._has_admin_tabs_access` / `admin_tabs_access_required` (is_super_admin, can_access_admin_tabs, or superuser); `finance._admin_tabs_access(user)` returns `(has_access, team_pks)` — `team_pks=None` means "see everyone," a set means "see only these agent pks" (own direct reports + self). OT posting/approval gating is `_is_ot_approver` (role_type supervisor/coordinator, super admins, superusers) in `scheduling/views.py`.
+Access-control functions worth knowing: `finance._has_finance_access` / `finance_access_required` (is_super_admin or superuser); `finance._has_admin_tabs_access` / `admin_tabs_access_required` (is_super_admin, can_access_admin_tabs, or superuser); `finance._admin_tabs_access(user)` returns `(has_access, team_pks)` — `team_pks=None` means "see everyone," a set means "see only these agent pks" (own direct reports + self). OT posting/approval gating is `_is_ot_approver` (role_type supervisor/coordinator, super admins, superusers) in `scheduling/views.py`. `nomina.access.nomina_access_required` (is_super_admin or superuser) gates the Nómina section; `loan_access_required` widens that to also admit a `can_manage_loans` holder, for `/nomina/loans/` only.
 
 ---
 
