@@ -16,6 +16,12 @@ Preview by default: writes nothing.
     python manage.py recalculate_display_hours
     python manage.py recalculate_display_hours --start 2026-08-24 --end 2026-09-27
     python manage.py recalculate_display_hours --agent 123
+    python manage.py recalculate_display_hours --coded-after-upload
+
+--coded-after-upload narrows the candidates above to only the agent-days the
+efccea9 regression (2026-09-25 to 2026-09-29) could have caused: a regular coding
+created after both that date's Daily Hours upload and the moment that bug went
+live. See _filter_coded_after_upload and BUG_LIVE_SINCE below.
 
 --apply writes the changed rows, ALL IN ONE TRANSACTION (all-or-nothing --
 a failure partway through leaves nothing written), then one summary
@@ -46,14 +52,14 @@ create one for an Official Admin either.
 Running --apply a second time changes nothing: every affected row is already
 correct, so the diff is empty and no Activity Log entry is written.
 """
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
-from adherence.models import AdherenceRecord, DailyAgentHours, Coding
+from adherence.models import AdherenceRecord, DailyAgentHours, Coding, DailyUpload
 from adherence.views import _compute_display_hours
 from adherence.management.commands.uncoded_extra_account_review import _safe_billing_settings
 from scheduling.models import log_action
@@ -61,6 +67,11 @@ from wfm.utils import get_adherence_primary_resolver, get_week_start
 
 DEFAULT_START = date(2026, 8, 24)
 DEFAULT_END = date(2026, 9, 27)
+
+# d0b6402 (2026-09-25 16:47:36 -07:00) introduced the primary-account resolver and,
+# with it, the agent_id-as-string bug efccea9 fixed. A coding created before this
+# moment cannot have hit that bug, regardless of which date it recomputes.
+BUG_LIVE_SINCE = datetime.fromisoformat('2026-09-25T16:47:36-07:00')
 
 
 def _display_name(agent):
@@ -190,6 +201,42 @@ def apply_display_hours(plan):
     return len(to_update)
 
 
+def _filter_coded_after_upload(plan):
+    """Narrow a plan_display_hours() result to agent-days where a regular
+    (is_admin_coding=False) Coding for that date was created after BOTH that date's
+    DailyUpload.uploaded_at AND BUG_LIVE_SINCE -- the exact window efccea9 closed (a
+    coding added after the day's upload, while the string-agent_id bug was live,
+    silently failed to refresh actual_hours). Pure filter: only removes rows
+    plan_display_hours already returned, never adds or recomputes one.
+
+    rematch_daily_upload's own save is scoped to update_fields=['unmatched_count']
+    (adherence/views.py, rematch_daily_upload), so a re-match never moves
+    uploaded_at -- DailyUpload.uploaded_at reflects only a real upload/replacement,
+    which is what "last Daily Hours recompute" means here.
+    """
+    if not plan:
+        return plan
+    dates = {row['date'] for row in plan}
+    upload_map = dict(DailyUpload.objects.filter(date__in=dates).values_list('date', 'uploaded_at'))
+    agent_ids = {row['record'].agent_id for row in plan}
+    latest_coding = {}
+    for agent_id, coding_date, created_at in Coding.objects.filter(
+        agent_id__in=agent_ids, date__in=dates, is_admin_coding=False
+    ).values_list('agent_id', 'date', 'created_at'):
+        key = (agent_id, coding_date)
+        if key not in latest_coding or created_at > latest_coding[key]:
+            latest_coding[key] = created_at
+
+    kept = []
+    for row in plan:
+        upload_time = upload_map.get(row['date'])
+        coding_time = latest_coding.get((row['record'].agent_id, row['date']))
+        if (upload_time is not None and coding_time is not None
+                and coding_time > upload_time and coding_time >= BUG_LIVE_SINCE):
+            kept.append(row)
+    return kept
+
+
 class Command(BaseCommand):
     help = ('Recalculate stored adherence display hours for a date range using the '
             'primary-account-only rule (preview by default; --apply to write).')
@@ -203,11 +250,15 @@ class Command(BaseCommand):
                             help='Write the changed rows. Without this flag, preview only.')
         parser.add_argument('--agent', type=int, default=None, dest='agent_pk',
                             help='Narrow to one agent pk, for spot-checking before a full apply.')
+        parser.add_argument('--coded-after-upload', action='store_true', dest='coded_after_upload',
+                            help="Narrow further to agent-days where a regular coding was created "
+                                 "after that date's Daily Hours upload — the efccea9 bug window.")
 
     def handle(self, *args, **options):
         start, end = options['start'], options['end']
         apply_changes = options['apply']
         agent_pk = options.get('agent_pk')
+        coded_after_upload = options.get('coded_after_upload', False)
 
         self.stdout.write(
             f'Adherence display-hours recalculation — {start.isoformat()} to {end.isoformat()}'
@@ -216,9 +267,13 @@ class Command(BaseCommand):
             'APPLY MODE — writing changed rows.' if apply_changes else
             'PREVIEW — nothing will be written. Re-run with --apply to write.'
         )
+        if coded_after_upload:
+            self.stdout.write(
+                "Narrowed to agent-days coded after that date's upload (the efccea9 bug window)."
+            )
         self.stdout.write('')
 
-        plan = self._plan(start, end, agent_pk)
+        plan = self._plan(start, end, agent_pk, coded_after_upload)
 
         if not plan:
             self.stdout.write('No agent-day would change.')
@@ -255,5 +310,8 @@ class Command(BaseCommand):
             f'{len(plan)} agent-day(s) updated. Activity Log entry written.'
         ))
 
-    def _plan(self, start, end, agent_pk=None):
-        return plan_display_hours(start, end, agent_pk)
+    def _plan(self, start, end, agent_pk=None, coded_after_upload=False):
+        plan = plan_display_hours(start, end, agent_pk)
+        if coded_after_upload:
+            plan = _filter_coded_after_upload(plan)
+        return plan

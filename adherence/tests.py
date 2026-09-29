@@ -2250,17 +2250,16 @@ class BillableWeeklyDataPrimaryIndependenceTests(TestCase):
                              f'is_primary permutation {combo} changed billable money figures')
 
 
-class RecalculateDisplayHoursCommandTests(TestCase):
-    """Step 2: the one-time recalculation command. Simulates the production
-    Mark Reyes week (Sep 14-20 2026) with stale actual_hours values written
-    the OLD way (falling back to the non-primary account) — exactly the
-    state Step 2 must repair. The command never touches DailyAgentHours,
-    Coding, status, finance or nomina, and can never create a row."""
+class _DisplayHoursPlanHelpers:
+    """Shared setup/helpers for recalculate_display_hours tests. Carries no
+    test_ methods itself -- mixed into TestCase subclasses so its helpers are
+    reused without also re-running another class's tests (a plain subclass of
+    a TestCase would inherit and re-run its test_ methods too)."""
 
     def setUp(self):
         _settings()
 
-    def _run(self, start, end, apply=False, agent_pk=None):
+    def _run(self, start, end, apply=False, agent_pk=None, coded_after_upload=False):
         out = io.StringIO()
         from django.core.management import call_command
         kwargs = {'stdout': out, 'start': start, 'end': end}
@@ -2268,6 +2267,8 @@ class RecalculateDisplayHoursCommandTests(TestCase):
             kwargs['apply'] = True
         if agent_pk is not None:
             kwargs['agent_pk'] = agent_pk
+        if coded_after_upload:
+            kwargs['coded_after_upload'] = True
         call_command('recalculate_display_hours', **kwargs)
         return out.getvalue()
 
@@ -2312,6 +2313,14 @@ class RecalculateDisplayHoursCommandTests(TestCase):
         AdherenceRecord.objects.create(agent=agent, date=sun, status='P', actual_hours=Decimal('3.933333'))
 
         return agent, mon, fri, sun
+
+
+class RecalculateDisplayHoursCommandTests(_DisplayHoursPlanHelpers, TestCase):
+    """Step 2: the one-time recalculation command. Simulates the production
+    Mark Reyes week (Sep 14-20 2026) with stale actual_hours values written
+    the OLD way (falling back to the non-primary account) — exactly the
+    state Step 2 must repair. The command never touches DailyAgentHours,
+    Coding, status, finance or nomina, and can never create a row."""
 
     def test_preview_writes_nothing(self):
         agent, mon, fri, sun = self._seed_mark_week()
@@ -2476,6 +2485,114 @@ class RecalculateDisplayHoursCommandTests(TestCase):
         after = tuple(AdherenceRecord.objects.order_by('pk').values_list('actual_hours', 'updated_at'))
         self.assertEqual(after, before)
         self.assertEqual(AuditLog.objects.count(), log_count_before)
+
+
+class CodedAfterUploadFlagTests(_DisplayHoursPlanHelpers, TestCase):
+    """--coded-after-upload narrows plan_display_hours's own output to agent-days
+    efccea9's bug could actually have caused: a regular (is_admin_coding=False)
+    Coding for that date created after BOTH that date's DailyUpload.uploaded_at AND
+    BUG_LIVE_SINCE (2026-09-25 16:47:36 -07:00 -- d0b6402's commit time, the moment
+    the string-agent_id bug went live). Reuses the shared mixin's setUp/_run/_upload/
+    _hours/_make_mark (mixed in directly, not inherited via
+    RecalculateDisplayHoursCommandTests, so that class's own tests don't run twice);
+    adds two small backdating helpers since DailyUpload.uploaded_at (auto_now) and
+    Coding.created_at (auto_now_add) can't be set through .create()."""
+
+    def _backdate_upload(self, d, when):
+        DailyUpload.objects.filter(date=d).update(uploaded_at=when)
+
+    def _backdate_coding(self, coding, when):
+        Coding.objects.filter(pk=coding.pk).update(created_at=when)
+
+    def _hours_with_nr(self, d, agent, username, login_seconds, not_ready_seconds):
+        DailyAgentHours.objects.create(
+            upload=self._upload(d), agent=agent, five9_username=username,
+            login_seconds=login_seconds, not_ready_seconds=not_ready_seconds,
+        )
+
+    def test_coding_after_upload_and_after_bug_window_is_listed_and_corrected(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 26)
+        # login 8h, NR 1h6m40s -- just past the no-coding allowance (1h), so the
+        # 2h coding (which widens the allowance past the NR) is what changes the answer.
+        self._hours_with_nr(d, agent, 'marreyes_s2', 8 * 3600, 4000)
+        self._backdate_upload(d, timezone.make_aware(timezone.datetime(2026, 9, 26, 9, 0)))
+        coding = Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(11, 0),
+                                        is_admin_coding=False)
+        self._backdate_coding(coding, timezone.make_aware(timezone.datetime(2026, 9, 26, 15, 0)))
+
+        # Stale, as the bug would have left it: computed as if the coding didn't exist.
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('7.888889'))
+
+        out = self._run(d, d, coded_after_upload=True)
+        self.assertIn(d.isoformat(), out)
+        self.assertIn('1 agent-day(s) would change.', out)
+
+        self._run(d, d, apply=True, coded_after_upload=True)
+        rec = AdherenceRecord.objects.get(agent=agent, date=d)
+        self.assertEqual(rec.actual_hours, Decimal('8'))
+
+    def test_coding_before_upload_is_not_listed(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 26)
+        self._hours_with_nr(d, agent, 'marreyes_s2', 8 * 3600, 4000)
+        self._backdate_upload(d, timezone.make_aware(timezone.datetime(2026, 9, 26, 15, 0)))
+        coding = Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(11, 0),
+                                        is_admin_coding=False)
+        self._backdate_coding(coding, timezone.make_aware(timezone.datetime(2026, 9, 26, 9, 0)))  # before upload
+
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('7.888889'))
+
+        out = self._run(d, d, coded_after_upload=True)
+        self.assertIn('No agent-day would change.', out)
+
+    def test_coding_after_upload_but_before_bug_window_is_not_listed(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 20)  # before the bug went live (2026-09-25 16:47:36 -07:00)
+        self._hours_with_nr(d, agent, 'marreyes_s2', 8 * 3600, 4000)
+        self._backdate_upload(d, timezone.make_aware(timezone.datetime(2026, 9, 20, 9, 0)))
+        coding = Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(11, 0),
+                                        is_admin_coding=False)
+        self._backdate_coding(coding, timezone.make_aware(timezone.datetime(2026, 9, 20, 15, 0)))  # after upload, before the bug window
+
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('7.888889'))
+
+        out = self._run(d, d, coded_after_upload=True)
+        self.assertIn('No agent-day would change.', out)
+
+    def test_hand_typed_value_with_no_coding_is_not_listed(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 26)
+        self._hours(d, agent, 'marreyes_s2', 8 * 3600)
+        self._backdate_upload(d, timezone.make_aware(timezone.datetime(2026, 9, 26, 9, 0)))
+        # No Coding at all -- a hand-typed value that diverges from a fresh recompute.
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('3'))
+
+        # Sanity check: without the flag this IS a real candidate.
+        self.assertIn('1 agent-day(s) would change.', self._run(d, d))
+
+        out = self._run(d, d, coded_after_upload=True)
+        self.assertIn('No agent-day would change.', out)
+
+    def test_coding_later_corrected_is_not_listed_either_way(self):
+        agent = self._make_mark()
+        d = date(2026, 9, 26)
+        self._hours_with_nr(d, agent, 'marreyes_s2', 8 * 3600, 4000)
+        self._backdate_upload(d, timezone.make_aware(timezone.datetime(2026, 9, 26, 9, 0)))
+        coding = Coding.objects.create(agent=agent, date=d, start_time=time(9, 0), end_time=time(11, 0),
+                                        is_admin_coding=False)
+        self._backdate_coding(coding, timezone.make_aware(timezone.datetime(2026, 9, 26, 15, 0)))
+        # Simulates an edit/delete that already refreshed actual_hours correctly.
+        AdherenceRecord.objects.create(agent=agent, date=d, status='P', actual_hours=Decimal('8'))
+
+        self.assertIn('No agent-day would change.', self._run(d, d))
+        out = self._run(d, d, coded_after_upload=True)
+        self.assertIn('No agent-day would change.', out)
+
+    def test_flag_off_behaves_exactly_as_before(self):
+        agent, mon, fri, sun = self._seed_mark_week()
+        out = self._run(mon, sun)
+        self.assertIn('2 agent-day(s) would change.', out)
 
 
 class RecalculateActualHoursRetiredTests(TestCase):
