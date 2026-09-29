@@ -1,7 +1,7 @@
 # LCC-WFM — Working Notes for Claude Code
 
-Django 4.2 workforce-management app for a legal-intake call center. Four apps: `scheduling`,
-`adherence`, `finance`, `erlang`. SQLite locally, Postgres on Render. Server-rendered Django
+Django 4.2 workforce-management app for a legal-intake call center. Five apps: `scheduling`,
+`adherence`, `finance`, `erlang`, `nomina`. SQLite locally, Postgres on Render. Server-rendered Django
 templates with vanilla JS and small AJAX endpoints. No SPA, no build step.
 
 Fuller detail lives in `SYSTEM-SUMMARY.md` and `HANDOFF.md`. **The live code wins over both
@@ -79,10 +79,14 @@ lower bound, for an entry that covers every day the agent has ever worked.
   `payroll_export`, and `codings_export` in `finance/views.py`, and `_pay_window` plus
   `_agent_nomina_data` in `nomina/views.py` (the latter deliberately uses only the
   inactive-separated half — see its comment). Four of these (`billing_report`,
-  `billing_export`, `payroll_report`, `payroll_export`) use an `.exclude()`-shaped form
-  rather than the `Q()` form — the same rule in two different shapes, so a change to this
-  predicate has to check both and can easily miss a site. Prefer additive changes; do not
-  consolidate it into one helper unless that is explicitly the task.
+  `billing_export`, `payroll_report`, `payroll_export`) apply this rule as an exclusion
+  through `.exclude(pk__in=_closed_pay_window_pks(week_start))` (finance/views.py), a
+  helper that is deliberately not the same rule: it tests only each agent's latest
+  non-cancelled separation (`87fc00c`, HANDOFF §7 item 39). `payroll_report` and
+  `payroll_export` also keep an inline `Q(status='inactive', ...)` branch in their include
+  filter. A change to this predicate has to check all 11 sites and that helper. Prefer
+  additive changes; do not consolidate it into one helper unless that is explicitly the
+  task.
 - **Best-template resolution.** A specific-date `Shift` override always beats a
   `ShiftTemplate`; among templates covering the date, the latest `effective_from` wins
   (`None` treated as earliest). A shared helper, `_best_shift_template` in
