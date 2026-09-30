@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **887**. The tests are the regression gate and double as executable specs for the
+Currently **899**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Five read-only management commands exist for diagnosis; none is reachable from a request
@@ -55,7 +55,11 @@ and writing now live in module-level `plan_display_hours(start, end, agent_pk)` 
 `apply_display_hours(plan)` (`29203ec`); `Command._plan` delegates to the first and `handle` calls
 the second, so the command behaves exactly as before, while the primary-account write path reuses
 the identical candidate rules instead of growing a second copy of them. `start=None` means no
-lower bound, for an entry that covers every day the agent has ever worked.
+lower bound, for an entry that covers every day the agent has ever worked. `--coded-after-upload`
+(`9c08e62`) narrows a run to only the agent-days the `efccea9` string-`agent_id` bug (below) could
+have caused: a regular coding whose `created_at` falls after both that date's
+`DailyUpload.uploaded_at` and `BUG_LIVE_SINCE` (2026-09-25 16:47:36 -07:00, `d0b6402`'s commit
+time). Pure filter over `plan_display_hours`'s own output — never adds or recomputes a row.
 
 ## The rule that matters most: there are two separate hours pipelines
 
@@ -659,6 +663,17 @@ separate selectors on `Five9Profile` — never mix them, and never add a fallbac
   `rematch_daily_upload` include admin codings in the allowance base; `_refresh_actual_hours`
   excludes them). Do not fold the `Coding` query into this function — that would silently change
   which codings count for one of the callers.
+- **`get_adherence_primary_resolver`'s lookups are keyed by INT agent ids, so never pass a
+  request value straight through.** `adherence.views._refresh_actual_hours(agent_id, coding_date)`
+  passes `agent_id` into the resolver as a dict key, not just an ORM filter value — a string key
+  (the shape `json.loads(request.body)` hands back) silently misses every entry instead of
+  raising. From `d0b6402` (2026-09-25) until `efccea9` (2026-09-29), the Codings tab's
+  `add_coding_ajax` posted exactly that string, so adding a coding after that day's Daily Hours
+  upload returned without writing — `ok: True`, `actual_hours` unchanged, nothing on screen
+  signaling it. Fixed by normalizing both arguments on entry: `agent_id = int(agent_id)`,
+  `coding_date = date.fromisoformat(coding_date)` when it arrives as a string. Any new caller of
+  `_refresh_actual_hours` or `get_adherence_primary_resolver` must convert a request-sourced
+  agent id/date before passing it in — do not rely on Django's usual string-to-int leniency here.
 - **Daily Hours page**: a matched row on a non-primary account keeps its Login Time visible and
   shows "—" in every other number column (Not Ready, Coded Time, Total Worked, NR Allowance,
   Excess NR, Final Hours) — it is not counted for adherence display, but the raw login still
