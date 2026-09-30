@@ -135,10 +135,12 @@ def plan_display_hours(start, end, agent_pk=None):
             login_secs_map[key] = login_secs_map.get(key, 0) + r['login_seconds']
             nr_secs_map[key] = nr_secs_map.get(key, 0) + r['not_ready_seconds']
 
-    # Same Coding query shape upload_daily_file uses (no is_admin_coding
-    # filter) -- every candidate here is already restricted to non-admin
-    # agents, so this matches _refresh_actual_hours's is_admin_coding=False
-    # scan for any agent that has no stray admin coding.
+    # Regular codings only. Candidates are already restricted to
+    # agent__is_official_admin=False above, so is_admin_coding=False IS the
+    # money engine's partition for this population -- the same rule
+    # _refresh_actual_hours, upload_daily_file and rematch_daily_upload apply.
+    # A stray admin coding on a regular agent belongs to the other side and is
+    # correctly skipped here.
     coded_secs_map = {}
     for c in Coding.objects.filter(agent_id__in=agent_ids, date__in=dates, is_admin_coding=False):
         key = (c.agent_id, c.date)

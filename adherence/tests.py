@@ -3929,3 +3929,245 @@ class Five9PastPeriodEndToEndTests(TestCase):
         self.assertIn('e2e_b ', line)
         self.assertIn('(current)', line)
         self.assertTrue(line.rstrip().endswith('(current)'))
+
+
+class UploadCodingPartitionTests(TestCase):
+    """The Daily Hours upload and re-match must feed the not-ready allowance from the
+    same coding partition the money engine uses (finance/views.py:229-234): Official
+    Admins from ADMIN codings, everyone else from REGULAR codings.
+
+    Before this fix, upload_daily_file and rematch_daily_upload counted EVERY coding,
+    while _refresh_actual_hours and recalculate_display_hours counted regular codings
+    only -- so a regular agent holding a stray admin coding had a stored value that
+    flipped depending on which path ran last.
+
+    Fixture is one 8h login day with 2h not-ready (so there IS excess NR and the
+    allowance base actually matters), a 1h regular coding and a 2h admin coding, at
+    the default nr_ratio of 0.125. Every expected value below comes straight from
+    _compute_display_hours:
+
+        both (3600+7200): total 39600 -> allowance 4950 -> excess 2250 -> 7.375
+        regular (3600):   total 32400 -> allowance 4050 -> excess 3150 -> 7.125
+        admin   (7200):   total 36000 -> allowance 4500 -> excess 2700 -> 7.25
+
+    Each case drives the REAL view with the REAL request shape -- a posted CSV, a JSON
+    POST -- rather than calling the helper directly, per the lesson in HANDOFF.md
+    section 7 item 91.
+    """
+
+    LOGIN = '08:00:00'
+    NOT_READY = '02:00:00'
+    BOTH_CODINGS = Decimal('7.375')
+    REGULAR_ONLY = Decimal('7.125')
+    ADMIN_ONLY = Decimal('7.25')
+
+    def setUp(self):
+        _settings(nr_ratio=Decimal('0.125'))
+        staff_user = User.objects.create_user('partitionstaff', password='x')
+        Agent.objects.create(
+            user=staff_user, role='admin', role_type='supervisor',
+            agent_name='Partition Staff', status='active',
+        )
+        self.client.login(username='partitionstaff', password='x')
+        self.day = date(2026, 9, 14)
+
+    def _official_admin(self, username):
+        user = User.objects.create_user(username, password='x')
+        return Agent.objects.create(
+            user=user, role='admin', role_type='supervisor',
+            agent_name=username, status='active', is_official_admin=True,
+        )
+
+    def _primary(self, agent, username):
+        return Five9Profile.objects.create(
+            agent=agent, five9_username=username, is_primary=True, billable=True,
+        )
+
+    def _regular_coding(self, agent):
+        """1 hour, is_admin_coding=False."""
+        return Coding.objects.create(
+            agent=agent, date=self.day, start_time=time(9, 0), end_time=time(10, 0),
+            is_admin_coding=False,
+        )
+
+    def _admin_coding(self, agent):
+        """2 hours, is_admin_coding=True."""
+        return Coding.objects.create(
+            agent=agent, date=self.day, start_time=time(13, 0), end_time=time(15, 0),
+            is_admin_coding=True,
+        )
+
+    def _upload(self, username):
+        content = (
+            "AGENT,LOGIN TIME,NOT READY TIME\n"
+            f"{username},{self.LOGIN},{self.NOT_READY}\n"
+        )
+        resp = self.client.post(reverse('upload_daily_file'), {
+            'date': self.day.isoformat(),
+            'file': SimpleUploadedFile('daily.csv', content.encode('utf-8'), content_type='text/csv'),
+        })
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()['ok'], resp.json())
+        return resp
+
+    def _stored(self, agent):
+        return AdherenceRecord.objects.get(agent=agent, date=self.day).actual_hours
+
+    def test_upload_regular_agent_ignores_stray_admin_coding(self):
+        """A regular agent's admin coding must not pad the NR allowance base."""
+        agent = _make_agent('strayadmin')
+        self._primary(agent, 'strayadmin')
+        self._regular_coding(agent)
+        self._admin_coding(agent)
+
+        self._upload('strayadmin')
+
+        self.assertEqual(
+            self._stored(agent), self.REGULAR_ONLY,
+            'upload counted the stray admin coding into the allowance base',
+        )
+
+    def test_rematch_regular_agent_ignores_stray_admin_coding(self):
+        """Same rule on the re-match path, which had no test coverage at all before."""
+        agent = _make_agent('rematchagent')
+        self._regular_coding(agent)
+        self._admin_coding(agent)
+
+        # No Five9Profile yet, so the CSV row lands unmatched.
+        self._upload('rematchagent')
+        self.assertEqual(
+            DailyAgentHours.objects.filter(upload__date=self.day, agent__isnull=True).count(), 1)
+
+        self._primary(agent, 'rematchagent')
+        resp = self.client.post(
+            reverse('rematch_daily_upload'),
+            data=json.dumps({'date': self.day.isoformat()}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['newly_matched'], 1, resp.json())
+
+        self.assertEqual(
+            self._stored(agent), self.REGULAR_ONLY,
+            're-match counted the stray admin coding into the allowance base',
+        )
+
+    def test_upload_official_admin_counts_admin_codings(self):
+        """An Official Admin with only admin codings is unaffected by this change --
+        the same value before and after."""
+        admin = self._official_admin('admonly')
+        self._primary(admin, 'admonly')
+        self._admin_coding(admin)
+
+        self._upload('admonly')
+
+        self.assertEqual(self._stored(admin), self.ADMIN_ONLY)
+
+    def test_upload_official_admin_ignores_stray_regular_coding(self):
+        """The other half of the partition: an Official Admin's stray REGULAR coding
+        must not count either."""
+        admin = self._official_admin('admstray')
+        self._primary(admin, 'admstray')
+        self._admin_coding(admin)
+        self._regular_coding(admin)
+
+        self._upload('admstray')
+
+        self.assertEqual(
+            self._stored(admin), self.ADMIN_ONLY,
+            'upload counted the stray regular coding for an Official Admin',
+        )
+
+    def test_agent_with_no_codings_is_untouched_by_the_partition(self):
+        """Guard that the added filter did not change the plain, no-codings case."""
+        agent = _make_agent('nocodings')
+        self._primary(agent, 'nocodings')
+
+        self._upload('nocodings')
+
+        # login 28800, coded 0 -> allowance 3600 -> excess 3600 -> 25200s = 7h
+        self.assertEqual(self._stored(agent), Decimal('7'))
+
+
+class UploadPartitionPayIndependenceTests(TestCase):
+    """AdherenceRecord.actual_hours is DISPLAY ONLY. This pins that the number the
+    partition change moves cannot reach billing, payroll or either Nomina sheet.
+
+    Method: build a week holding exactly the cases the change affects (a regular agent
+    with a stray admin coding, an Official Admin with a stray regular coding), compute
+    the money engine and both Nomina sheets, then overwrite every stored actual_hours
+    with a different value and compute again. status is deliberately left untouched --
+    the engine DOES read AdherenceRecord.status for bonus qualification, and only
+    actual_hours is in scope here.
+    """
+
+    def setUp(self):
+        self.settings = _settings(nr_ratio=Decimal('0.125'))
+        self.day = _WEEK[0]
+
+        self.agent = _make_agent('payindep_agent')
+        self.agent.employer = 'Infinity'
+        self.agent.employee_id = 'E-900'
+        self.agent.hourly_rate = Decimal('62.50')
+        self.agent.save()
+        Five9Profile.objects.create(agent=self.agent, five9_username='payindep_agent',
+                                    is_primary=True, billable=True)
+
+        admin_user = User.objects.create_user('payindep_admin', password='x')
+        self.admin = Agent.objects.create(
+            user=admin_user, role='admin', role_type='supervisor',
+            agent_name='payindep_admin', status='active', is_official_admin=True,
+            employer='Infinity', employee_id='E-901', hourly_rate=Decimal('80'),
+        )
+        Five9Profile.objects.create(agent=self.admin, five9_username='payindep_admin',
+                                    is_primary=True, billable=True)
+
+        upload, _ = DailyUpload.objects.get_or_create(
+            date=self.day, defaults={'filename': 'd.csv', 'row_count': 2})
+        for a, uname in ((self.agent, 'payindep_agent'), (self.admin, 'payindep_admin')):
+            DailyAgentHours.objects.create(
+                upload=upload, agent=a, five9_username=uname,
+                login_seconds=8 * 3600, not_ready_seconds=2 * 3600,
+            )
+            # One coding on each side of the partition, for both people.
+            Coding.objects.create(agent=a, date=self.day, start_time=time(9, 0),
+                                  end_time=time(10, 0), is_admin_coding=False)
+            Coding.objects.create(agent=a, date=self.day, start_time=time(13, 0),
+                                  end_time=time(15, 0), is_admin_coding=True)
+            AdherenceRecord.objects.create(agent=a, date=self.day, status='P',
+                                           actual_hours=Decimal('7.375'))
+
+    def _money(self):
+        from finance.views import _get_billable_weekly_data
+        data = _get_billable_weekly_data([self.agent, self.admin], _WEEK, self.settings)
+        return {pk: {k: v for k, v in row.items() if k != 'agent'} for pk, row in data.items()}
+
+    def _nomina(self):
+        from nomina.views import _agent_nomina_data, _admin_nomina_data
+
+        def _strip(pair):
+            rows, totals = pair
+            return ([{k: v for k, v in r.items() if k != 'agent'} for r in rows], totals)
+
+        return (_strip(_agent_nomina_data(_WEEK_START, _WEEK)),
+                _strip(_admin_nomina_data(_WEEK_START, _WEEK)))
+
+    def test_money_and_nomina_are_identical_whatever_actual_hours_holds(self):
+        money_before = self._money()
+        nomina_before = self._nomina()
+
+        # Overwrite the display number with something obviously different. status,
+        # which the engine DOES read, is left exactly as it was.
+        changed = AdherenceRecord.objects.filter(date=self.day).update(
+            actual_hours=Decimal('1.5'))
+        self.assertEqual(changed, 2)
+        self.assertEqual(
+            set(AdherenceRecord.objects.filter(date=self.day)
+                .values_list('actual_hours', flat=True)),
+            {Decimal('1.500000')},
+        )
+
+        self.assertEqual(self._money(), money_before,
+                         'a money figure followed AdherenceRecord.actual_hours')
+        self.assertEqual(self._nomina(), nomina_before,
+                         'a Nomina figure followed AdherenceRecord.actual_hours')

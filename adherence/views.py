@@ -24,9 +24,21 @@ from wfm.utils import get_week_start, parse_week_param, get_billable_username_ma
 def _compute_display_hours(login_seconds, not_ready_seconds, coded_seconds, nr_ratio):
     """The daily NR deduction for ADHERENCE DISPLAY — pure arithmetic, no queries.
     Moved verbatim from the write paths that used to duplicate it inline; each
-    caller keeps its own Coding query and its own admin-coding inclusion rule,
-    since upload/rematch include admin codings in the allowance base while
-    _refresh_actual_hours deliberately excludes them."""
+    caller still runs its own Coding query rather than one folded in here.
+
+    The partition every caller aims at is the money engine's
+    (finance.views._get_billable_weekly_data): a person's coded time comes from
+    exactly one side — Official Admins from admin codings, everyone else from
+    regular codings. upload_daily_file and rematch_daily_upload read the agent's
+    is_official_admin, so they apply it for everyone. _refresh_actual_hours and
+    recalculate_display_hours instead hold is_admin_coding=False, which matches
+    the partition for regular agents — exactly so for recalculate_display_hours,
+    whose candidates are filtered to agent__is_official_admin=False.
+
+    One known exception, not fixed: _refresh_actual_hours is not restricted to
+    regular agents, so an Official Admin holding a stray REGULAR coding gets
+    their day recomputed from regular codings — the opposite side from the
+    admin-codings-only rule the upload paths apply to them."""
     total_secs = login_seconds + coded_seconds
     allowance_secs = int(total_secs * float(nr_ratio))
     excess_secs = max(0, not_ready_seconds - allowance_secs)
@@ -2033,9 +2045,14 @@ def upload_daily_file(request):
             if not counts_for_adherence(dah.agent_id, dah.five9_username, upload_date):
                 continue  # Skip non-primary account rows
 
+            # Same partition as the money engine (finance.views._get_billable_weekly_data):
+            # Official Admins count admin codings, everyone else regular codings.
             coded_secs = sum(
                 c.total_seconds_count()
-                for c in Coding.objects.filter(agent_id=dah.agent_id, date=upload_date)
+                for c in Coding.objects.filter(
+                    agent_id=dah.agent_id, date=upload_date,
+                    is_admin_coding=dah.agent.is_official_admin,
+                )
             )
             final_hours = _compute_display_hours(
                 dah.login_seconds, dah.not_ready_seconds, coded_secs, _upload_nr_ratio
@@ -2103,9 +2120,14 @@ def rematch_daily_upload(request):
             if not counts_for_adherence(agent.pk, dah.five9_username, upload_date):
                 continue  # Skip non-primary account rows
 
+            # Same partition as the money engine (finance.views._get_billable_weekly_data):
+            # Official Admins count admin codings, everyone else regular codings.
             coded_secs = sum(
                 c.total_seconds_count()
-                for c in Coding.objects.filter(agent=agent, date=upload_date)
+                for c in Coding.objects.filter(
+                    agent=agent, date=upload_date,
+                    is_admin_coding=agent.is_official_admin,
+                )
             )
             final_hours = _compute_display_hours(
                 dah.login_seconds, dah.not_ready_seconds, coded_secs, _rematch_nr_ratio
