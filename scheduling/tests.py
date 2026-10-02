@@ -705,6 +705,68 @@ class OpenOTShiftTests(TestCase):
         resp = self.client.get(reverse('agent_my_shifts'))
         self.assertEqual(resp.wsgi_request.agent_ot_claim_badge, 0)
 
+    # ── Part 4: overtime_set_status permission gate ──────────────────
+
+    def _set_status(self, shift, status, reason=''):
+        import json
+        body = {'status': status}
+        if reason:
+            body['cancellation_reason'] = reason
+        return self.client.post(
+            reverse('overtime_set_status', kwargs={'pk': shift.pk}),
+            data=json.dumps(body),
+            content_type='application/json',
+        )
+
+    def test_approver_can_set_ot_status(self):
+        shift = self._make_shift(self.agent)
+        self._login(self.sup)
+        for status, reason in [
+            ('completed', ''), ('no_show', ''), ('cancelled', 'No coverage needed'),
+            ('pending', ''),
+        ]:
+            resp = self._set_status(shift, status, reason)
+            self.assertEqual(resp.status_code, 200)
+            shift.refresh_from_db()
+            self.assertEqual(shift.status, status)
+
+    def test_super_admin_and_superuser_can_set_ot_status(self):
+        boss = _make_agent('boss3', role_type='qa')
+        boss.is_super_admin = True
+        boss.save()
+        shift = self._make_shift(self.agent)
+        self._login(boss)
+        resp = self._set_status(shift, 'completed')
+        self.assertEqual(resp.status_code, 200)
+        shift.refresh_from_db()
+        self.assertEqual(shift.status, 'completed')
+        self.client.logout()
+
+        User.objects.create_superuser('root2', 'root2@example.com', 'pw')
+        self.client.login(username='root2', password='pw')
+        resp = self._set_status(shift, 'no_show')
+        self.assertEqual(resp.status_code, 200)
+        shift.refresh_from_db()
+        self.assertEqual(shift.status, 'no_show')
+
+    def test_non_approver_cannot_set_ot_status(self):
+        shift = self._make_shift(self.agent)
+        self._login(self.qa)
+        resp = self._set_status(shift, 'completed')
+        self.assertEqual(resp.status_code, 403)
+        shift.refresh_from_db()
+        self.assertEqual(shift.status, 'pending')  # unchanged
+
+    def test_non_approver_refusal_matches_existing_json_convention(self):
+        shift = self._make_shift(self.agent)
+        self._login(self.qa)
+        resp = self._set_status(shift, 'completed')
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json(), {
+            'ok': False,
+            'error': 'Only supervisors and coordinators can update overtime status.',
+        })
+
 
 class AgentListRoleTypeFilterTests(TestCase):
     """Part 1: role_type filter on the Users page, combining with the

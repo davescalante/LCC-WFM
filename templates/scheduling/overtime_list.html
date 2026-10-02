@@ -370,20 +370,22 @@
                         {% endif %}
                         <!-- Status pill -->
                         <div id="ot-status-{{ ot.pk }}" style="position:relative;display:inline-block;margin-top:4px;">
-                            <button type="button" class="ot-pill" onclick="toggleOTDropdown({{ ot.pk }}, event)"
-                                style="font-size:10px;padding:2px 7px;border-radius:10px;cursor:pointer;border:1px solid;line-height:1.5;
+                            <button type="button" class="ot-pill" {% if is_ot_approver %}onclick="toggleOTDropdown({{ ot.pk }}, event)"{% endif %}
+                                style="font-size:10px;padding:2px 7px;border-radius:10px;{% if is_ot_approver %}cursor:pointer;{% else %}cursor:default;{% endif %}border:1px solid;line-height:1.5;
                                     {% if ot.status == 'completed' %}background:#dcfce7;color:#15803d;border-color:#86efac;
                                     {% elif ot.status == 'no_show' %}background:#fee2e2;color:#dc2626;border-color:#fca5a5;
                                     {% elif ot.status == 'cancelled' %}background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb;text-decoration:line-through;
                                     {% else %}background:#f3f4f6;color:#6b7280;border-color:#d1d5db;{% endif %}">
                                 {% if ot.status == 'completed' %}&#10003;{% elif ot.status == 'no_show' %}&#10007;{% elif ot.status == 'cancelled' %}Cancelled{% else %}Pending{% endif %}
                             </button>
+                            {% if is_ot_approver %}
                             <div class="ot-dropdown" style="display:none;position:absolute;left:0;top:calc(100% + 3px);z-index:200;background:white;border:1px solid #e5e7eb;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,0.12);min-width:110px;overflow:hidden;">
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'pending')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#374151;">Pending</button>
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'completed')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#15803d;">&#10003; Done</button>
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'no_show')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#dc2626;">&#10007; No Show</button>
                                 <button type="button" onclick="setOTStatus({{ ot.pk }}, 'cancelled')" style="display:block;width:100%;text-align:left;padding:6px 10px;font-size:11px;border:none;background:none;cursor:pointer;color:#6b7280;border-top:1px solid #f3f4f6;">&#215; Cancelled</button>
                             </div>
+                            {% endif %}
                         </div>
                         {% if ot.cancellation_reason %}
                         <div class="cancel-reason-text" style="font-size:10px;color:#9ca3af;margin-top:3px;font-style:italic;line-height:1.3;">{{ ot.cancellation_reason }}</div>

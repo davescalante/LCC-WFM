@@ -2405,6 +2405,11 @@ def overtime_set_status(request, pk):
     from django.http import JsonResponse
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
+    if not _is_ot_approver(_viewer_agent(request), request.user):
+        return JsonResponse(
+            {'ok': False, 'error': 'Only supervisors and coordinators can update overtime status.'},
+            status=403,
+        )
     import json as _json
     try:
         body = _json.loads(request.body)
