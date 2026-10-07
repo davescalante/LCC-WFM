@@ -23,7 +23,7 @@ documents** whenever they disagree — the app changes faster than the docs.
 ## Tests
 
 `python3 manage.py test` — the full suite must pass before any commit. Report the pass count.
-Currently **899**. The tests are the regression gate and double as executable specs for the
+Currently **909**. The tests are the regression gate and double as executable specs for the
 trickier rules (NR caps, bonus eligibility, request approvals, export field gating).
 
 Five read-only management commands exist for diagnosis; none is reachable from a request
@@ -659,10 +659,14 @@ separate selectors on `Five9Profile` — never mix them, and never add a fallbac
 - **`adherence.views._compute_display_hours` is the one shared per-day NR-deduction function**,
   called by `upload_daily_file`, `rematch_daily_upload`, `_refresh_actual_hours`, and the
   `recalculate_display_hours` command. It is pure arithmetic only — each caller still runs its
-  own `Coding` query and keeps its own admin-coding inclusion rule (`upload_daily_file`/
-  `rematch_daily_upload` include admin codings in the allowance base; `_refresh_actual_hours`
-  excludes them). Do not fold the `Coding` query into this function — that would silently change
-  which codings count for one of the callers.
+  own `Coding` query and keeps its own admin-coding inclusion rule. As of `36d673d`,
+  `upload_daily_file`/`rematch_daily_upload` apply the money engine's partition (Official Admins
+  from admin codings, everyone else from regular codings); `_refresh_actual_hours` still counts
+  regular codings only, with no check for `is_official_admin` — a known, unfixed gap: an Official
+  Admin with a stray regular coding can get a different stored number from a coding-change
+  refresh than from an upload. `recalculate_display_hours` cannot hit this gap — its candidate
+  query excludes Official Admins outright. Do not fold the `Coding` query into this function —
+  that would silently change which codings count for one of the callers.
 - **`get_adherence_primary_resolver`'s lookups are keyed by INT agent ids, so never pass a
   request value straight through.** `adherence.views._refresh_actual_hours(agent_id, coding_date)`
   passes `agent_id` into the resolver as a dict key, not just an ORM filter value — a string key
